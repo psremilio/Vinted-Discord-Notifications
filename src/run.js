@@ -2,7 +2,12 @@ import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { fetchCookies } from "./api/fetch-auth.js";
 
-const runSearch = async (client, processedArticleIds, channel) => {
+// Map to keep track of active searches so we don't schedule duplicates
+const activeSearches = new Map();
+// Will hold IDs of articles already processed across all searches
+let processedArticleIds = new Set();
+
+const runSearch = async (client, channel) => {
     try {
         process.stdout.write('.');
         const articles = await vintedSearch(channel, processedArticleIds);
@@ -19,27 +24,36 @@ const runSearch = async (client, processedArticleIds, channel) => {
 };
 
 //run the search and set a timeout to run it again   
-const runInterval = async (client, processedArticleIds, channel) => {
-    await runSearch(client, processedArticleIds, channel);
-    setTimeout(() => runInterval(client, processedArticleIds, channel), channel.frequency*1000);
+const runInterval = async (client, channel) => {
+    await runSearch(client, channel);
+    setTimeout(() => runInterval(client, channel), channel.frequency*1000);
+};
+
+// Attach a new search to the scheduler
+const addSearch = (client, search) => {
+    if (activeSearches.has(search.channelName)) return;
+    activeSearches.set(search.channelName, true);
+
+    (async () => {
+        try {
+            const initArticles = await vintedSearch(search, processedArticleIds);
+            initArticles.forEach(article => { processedArticleIds.add(article.id); });
+            // ersten Poll direkt losschicken, nicht erst nach timeout
+            await runSearch(client, search);
+        } catch (err) {
+            console.error('\nError in initializing articles:', err);
+        }
+        setTimeout(() => { runInterval(client, search); }, 1000);
+    })();
 };
 
 //first, get cookies, then init the article id set, then launch the simmultaneous searches
 export const run = async (client, mySearches) => {
-    let processedArticleIds = new Set();
     await fetchCookies();
- 
-    //stagger start time for searches to avoid too many simmultaneous requests
+
+    //stagger start time for searches to avoid too many simultaneous requests
     mySearches.forEach((channel, index) => {
-        setTimeout(async () => {
-            try {
-                const initArticles = await vintedSearch(channel, processedArticleIds);
-                initArticles.forEach(article => { processedArticleIds.add(article.id); });
-            } catch (err) {
-                console.error('\nError in initializing articles:', err);
-            }
-            setTimeout(() => {runInterval(client, processedArticleIds, channel);}, 1000);
-        }, index * 1000);
+        setTimeout(() => addSearch(client, channel), index * 1000);
     });
 
     //fetch new cookies and clean ProcessedArticleIDs at interval    
@@ -54,3 +68,5 @@ export const run = async (client, mySearches) => {
         }
     }, 1*60*60*1000); //set interval to 1h, after which session could be expired
 };
+
+export { addSearch };
