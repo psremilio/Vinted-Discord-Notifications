@@ -15,6 +15,9 @@ sleep "${WHITELIST_SLEEP:-30}"
 
 # Download proxy list
 curl -s "${PROXY_LIST_URL}" -o proxies.txt
+# Install https-proxy-agent runtime
+npm install https-proxy-agent@^7.0.6 --no-save
+
 
 # Start the bot
 node main.js
