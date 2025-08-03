@@ -5,8 +5,9 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { authManager } from './auth-manager.js';
 
 function getRandomProxy() {
-    const list = fs.readFileSync('proxies.txt', 'utf-8').trim().split('\n');
-    return list[Math.floor(Math.random() * list.length)].trim();
+    const list = fs.readFileSync('proxies.txt', 'utf-8')
+        .split('\n').map(l => l.trim()).filter(Boolean);
+    return list.length ? list[Math.floor(Math.random() * list.length)] : null;
 }
 
 //general fucntion to make an authorized request
@@ -46,13 +47,11 @@ export const authorizedRequest = async ({
         }
 
         const proxy = getRandomProxy();
-        const agent = new HttpsProxyAgent('http://' + proxy);
-
         const options = {
             method,
             headers,
-            agent,
         };
+        if (proxy) options.agent = new HttpsProxyAgent('http://' + proxy);
         if (oldUrl) {
             options.headers["Referer"] = oldUrl;
         }
