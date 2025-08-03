@@ -1,6 +1,14 @@
 import fetch from 'node-fetch';
+import fs from 'fs';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 import { authManager } from './auth-manager.js';
+
+function getRandomProxy() {
+    const list = fs.readFileSync('proxies.txt', 'utf-8')
+        .split('\n').map(l => l.trim()).filter(Boolean);
+    return list.length ? list[Math.floor(Math.random() * list.length)] : null;
+}
 
 //general fucntion to make an authorized request
 export const authorizedRequest = async ({
@@ -38,10 +46,9 @@ export const authorizedRequest = async ({
             console.log("making an authed request to " + url);
         }
 
-        const options = {
-            "method": method,
-            "headers": headers,
-        };
+        const proxy = getRandomProxy();
+        const options = { method, headers };
+        if (proxy) options.agent = new HttpsProxyAgent('http://' + proxy);
         if (oldUrl) {
             options.headers["Referer"] = oldUrl;
         }
