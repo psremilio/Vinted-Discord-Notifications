@@ -36,8 +36,6 @@ const addSearch = (client, search) => {
 
     (async () => {
         try {
-            const initArticles = await vintedSearch(search, processedArticleIds);
-            initArticles.forEach(article => { processedArticleIds.add(article.id); });
             // ersten Poll direkt losschicken, nicht erst nach timeout
             await runSearch(client, search);
         } catch (err) {

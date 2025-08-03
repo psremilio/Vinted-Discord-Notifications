@@ -1,15 +1,34 @@
 #!/bin/bash
 set -e
 
-# feste Default-URL, falls ENV leer
+MAX_PROXY_FAILS="${MAX_PROXY_FAILS:-5}"     # nach 5 Fehlversuchen kein Sofort-Retry mehr
+LIST_REFRESH_MIN="${LIST_REFRESH_MIN:-180}" # 3-stündiger Refresh, falls Env nicht gesetzt
 PROXY_LIST_URL="${PROXY_LIST_URL:-https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=5aoszl47m6cligu6eq87&type=getproxies&protocol=http&format=txt&status=all&country=all}"
 
-echo "[proxy] lade Liste …"
-if curl -fsSL "$PROXY_LIST_URL" -o proxies.txt && [ -s proxies.txt ]; then
-  echo "[proxy] $(wc -l < proxies.txt) Einträge gespeichert"
-else
-  echo "[proxy] kein Proxy – starte ohne" >&2
-  : > proxies.txt        # leere Datei anlegen
-fi
+proxy_fail_count=0
+download_proxies() {
+  echo "[proxy] lade Liste …"
+  if curl --retry 3 --retry-delay 10 -fsSL "$PROXY_LIST_URL" -o proxies.txt && [ -s proxies.txt ]; then
+    echo "[proxy] $(wc -l < proxies.txt) Einträge gespeichert"
+    proxy_fail_count=0
+  else
+    proxy_fail_count=$((proxy_fail_count+1))
+    echo "[proxy] Download FEHLER ($proxy_fail_count/$MAX_PROXY_FAILS)" >&2
+    : > proxies.txt            # leere Datei, Bot läuft ohne Proxy
+  fi
+}
+download_proxies
 
-node main.js  # launch via main entrypoint
+(
+  while true; do
+    sleep "$((LIST_REFRESH_MIN*60))"
+    if [ "$proxy_fail_count" -lt "$MAX_PROXY_FAILS" ]; then
+      download_proxies
+    else
+      echo "[proxy] Fehlversuchs-Limit erreicht – überspringe Refresh"
+    fi
+  done
+) &
+
+node main.js
+

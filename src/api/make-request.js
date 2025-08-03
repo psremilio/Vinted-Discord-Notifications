@@ -47,10 +47,7 @@ export const authorizedRequest = async ({
         }
 
         const proxy = getRandomProxy();
-        const options = {
-            method,
-            headers,
-        };
+        const options = { method, headers };
         if (proxy) options.agent = new HttpsProxyAgent('http://' + proxy);
         if (oldUrl) {
             options.headers["Referer"] = oldUrl;
