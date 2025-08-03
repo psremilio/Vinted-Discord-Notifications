@@ -1,6 +1,5 @@
 import fs from 'fs';
-import { HttpsProxyAgent } from 'https-proxy-agent';
-import { request } from 'undici';
+import { request, ProxyAgent } from 'undici';
 
 import { authManager } from './auth-manager.js';
 
@@ -70,7 +69,7 @@ export const authorizedRequest = async ({
             }
 
             const proxy = getProxy();
-            const dispatcher = proxy ? new HttpsProxyAgent('http://' + proxy) : undefined;
+            const dispatcher = proxy ? new ProxyAgent('http://' + proxy) : undefined;
             if (oldUrl) {
                 headers["Referer"] = oldUrl;
             }
