@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { request } from 'undici';
 
 import { authManager } from './auth-manager.js';
 
@@ -9,14 +10,25 @@ const UAS = [
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)'
 ];
 
+let proxyList = [];
+function loadProxyList() {
+    try {
+        proxyList = fs.readFileSync('proxies.txt', 'utf-8')
+            .split('\n').map(l => l.trim()).filter(Boolean);
+    } catch {
+        proxyList = [];
+    }
+}
+loadProxyList();
+fs.watchFile('proxies.txt', { interval: 60_000 }, loadProxyList);
+
 let stickyProxy = null, stickyUntil = 0;
 function getProxy() {
     const now = Date.now();
     if (stickyProxy && now < stickyUntil) return stickyProxy;
-    const list = fs.readFileSync('proxies.txt', 'utf-8').split('\n').map(l => l.trim()).filter(Boolean);
-    if (!list.length) return null;
-    stickyProxy = list[Math.random() * list.length | 0];
-    stickyUntil = now + 60_000; // 60s
+    if (!proxyList.length) return null;
+    stickyProxy = proxyList[Math.random() * proxyList.length | 0];
+    stickyUntil = now + 60_000; // 60s kleben
     return stickyProxy;
 }
 
@@ -58,28 +70,28 @@ export const authorizedRequest = async ({
             }
 
             const proxy = getProxy();
-            const options = { method, headers };
-            if (proxy) options.agent = new HttpsProxyAgent('http://' + proxy);
+            const dispatcher = proxy ? new HttpsProxyAgent('http://' + proxy) : undefined;
             if (oldUrl) {
-                options.headers["Referer"] = oldUrl;
+                headers["Referer"] = oldUrl;
             }
 
-            let response = await fetch(url, options);
+            let response = await request(url, { method, headers, dispatcher });
 
-            while ([301, 302, 303, 307, 308].includes(response.status)) {
-                const newUrl = response.headers.get('Location');
+            while ([301, 302, 303, 307, 308].includes(response.statusCode)) {
+                const newUrl = response.headers.location || response.headers.Location;
                 console.log(`redirected to ${newUrl}`);
-                response = await fetch(newUrl, options);
+                response = await request(newUrl, { method, headers, dispatcher });
             }
 
-            if (response.status === 403 || response.headers.get('Content-Type')?.includes('text/html')) {
+            const ctype = response.headers['content-type'] || '';
+            if (response.statusCode === 403 || ctype.includes('text/html')) {
                 stickyUntil = 0; // next attempt gets a new proxy
                 continue;
             }
-            if (!response.ok) {
-                throw `HTTP status: ${response.status}`;
+            if (response.statusCode < 200 || response.statusCode >= 300) {
+                throw `HTTP status: ${response.statusCode}`;
             }
-            return await response.json();
+            return response;
         }
         throw 'No proxy succeeded';
     } catch (error) {

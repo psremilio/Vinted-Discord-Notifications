@@ -9,6 +9,7 @@
         "discord.js": "^14.15.2",
         "fs": "^0.0.1-security",
         "dotenv": "^16.4.5",
-        "https-proxy-agent": "^7.0.6"
+        "https-proxy-agent": "^7.0.6",
+        "undici": "^6.18.1"
     }
 }

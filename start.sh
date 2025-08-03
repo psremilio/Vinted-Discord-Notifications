@@ -3,7 +3,8 @@ set -e
 
 MAX_PROXY_FAILS="${MAX_PROXY_FAILS:-5}"     # nach 5 Fehlversuchen kein Sofort-Retry mehr
 LIST_REFRESH_MIN="${LIST_REFRESH_MIN:-180}" # 3-stündiger Refresh, falls Env nicht gesetzt
-PROXY_LIST_URL="${PROXY_LIST_URL:-https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=5aoszl47m6cligu6eq87&type=getproxies&protocol=http&format=txt&status=all&country=all}"
+PS_API_KEY="${PS_API_KEY:-}"
+PROXY_LIST_URL="${PROXY_LIST_URL:-https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all}"
 
 proxy_fail_count=0
 download_proxies() {
@@ -26,6 +27,7 @@ download_proxies
       download_proxies
     else
       echo "[proxy] Fehlversuchs-Limit erreicht – überspringe Refresh"
+      proxy_fail_count=0
     fi
   done
 ) &
