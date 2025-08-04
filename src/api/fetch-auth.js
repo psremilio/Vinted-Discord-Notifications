@@ -2,7 +2,7 @@ import { request } from 'undici';
 import { authManager } from './auth-manager.js';
 
 export async function fetchCookies() {
-  const url = (process.env.BASE_URL || 'https://www.vinted.de').replace(/\/$/, '') + '/how_it_works';
+  const url = (process.env.BASE_URL || 'https://www.vinted.de').replace(/\/$/, '') + '/';
   let res;
   try {
     // Direktes GET, keine Proxies, damit wir auf jeden Fall die echten Set-Cookie-Header kriegen
