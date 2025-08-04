@@ -26,7 +26,8 @@ const runSearch = async (client, channel) => {
 //run the search and set a timeout to run it again   
 const runInterval = async (client, channel) => {
     await runSearch(client, channel);
-    setTimeout(() => runInterval(client, channel), channel.frequency*800 + Math.random()*channel.frequency*400);
+    const delay = channel.frequency * 1000 * (0.8 + Math.random() * 0.4);
+    setTimeout(() => runInterval(client, channel), delay);
 };
 
 // Attach a new search to the scheduler
@@ -47,6 +48,7 @@ const addSearch = (client, search) => {
 
 //first, get cookies, then init the article id set, then launch the simmultaneous searches
 export const run = async (client, mySearches) => {
+    processedArticleIds = new Set();
     await fetchCookies();
 
     //stagger start time for searches to avoid too many simultaneous requests

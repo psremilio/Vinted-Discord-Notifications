@@ -21,7 +21,13 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         color_ids: ids.colour,
         material_ids: ids.material,
     }).toString();
-    const res = await authorizedRequest({method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false});
+    let res;
+    try {
+        res = await authorizedRequest({method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false});
+    } catch (err) {
+        console.error('[search] Proxy-Request fehlgeschlagen:', err);
+        return [];
+    }
     const responseData = await res.body.json();
     const articles = selectNewArticles(responseData, processedArticleIds, channel);
     return articles;
