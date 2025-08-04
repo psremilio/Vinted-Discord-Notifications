@@ -2,25 +2,22 @@
 set -euo pipefail
 
 # — Konfiguration —
-PS_API_KEY="${PS_API_KEY:-}"
-SERVICE_ID="${SERVICE_ID:-}"
+PS_API_KEY="${PS_API_KEY:?Env PS_API_KEY fehlt}"
+
+WHITELIST_SLEEP="${WHITELIST_SLEEP:-60}"
 MAX_PROXY_FAILS="${MAX_PROXY_FAILS:-5}"
 LIST_REFRESH_MIN="${LIST_REFRESH_MIN:-180}"
-PROXY_LIST_URL="${PROXY_LIST_URL:-https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all}"
-WHITELIST_SLEEP="${WHITELIST_SLEEP:-60}"
+PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all"
 
 # — Railway-Whitelist —
-if [ -n "$PS_API_KEY" ] && [ -n "$SERVICE_ID" ]; then
-  MY_IP=$(curl -fsS https://api64.ipify.org)
-  curl -fsSL "https://api.proxyscrape.com/v2/account/datacenter_shared/whitelist" \
-       --data-urlencode "auth=${PS_API_KEY}" \
-       --data-urlencode "service=${SERVICE_ID}" \
-       --data-urlencode "ip[]=${MY_IP}"
-  echo "[proxy] IP $MY_IP whitelisted – warte ${WHITELIST_SLEEP}s"
-  sleep "$WHITELIST_SLEEP"
-else
-  echo "[proxy] WARN: PS_API_KEY oder SERVICE_ID fehlt – überspringe Whitelist" >&2
-fi
+MY_IP=$(curl -fsS https://api64.ipify.org)
+curl -sG "https://api.proxyscrape.com/v2/account/datacenter_shared/whitelist" \
+     --data-urlencode "auth=${PS_API_KEY}" \
+     --data-urlencode "type=set" \
+     --data-urlencode "ip[]=${MY_IP}"
+
+echo "[proxy] IP $MY_IP whitelisted – warte ${WHITELIST_SLEEP}s"
+sleep "$WHITELIST_SLEEP"
 
 # — Proxy-Download mit Backoff —
 proxy_fail_count=0
