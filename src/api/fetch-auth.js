@@ -11,12 +11,12 @@ const extractCookieValue = (header, name) => {
 //fetch cookies for the search session with no privileges
 export const fetchCookies = async () => {
     try{
-        const headers = await authorizedRequest({
-            method: "HEAD", 
+        const res = await authorizedRequest({
+            method: "HEAD",
             url: process.env.BASE_URL+"/how_it_works"
         });
-    
-        const setCookie = headers.raw()['set-cookie'];
+
+        const setCookie = res.headers['set-cookie'];
         const sessionCookiesArray = Array.isArray(setCookie) ? setCookie : (setCookie ? [setCookie] : []);
         if (!sessionCookiesArray || sessionCookiesArray.length === 0) {
             throw "Set-Cookie headers not found in the response";

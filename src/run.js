@@ -26,7 +26,7 @@ const runSearch = async (client, channel) => {
 //run the search and set a timeout to run it again   
 const runInterval = async (client, channel) => {
     await runSearch(client, channel);
-    setTimeout(() => runInterval(client, channel), channel.frequency*1000);
+    setTimeout(() => runInterval(client, channel), channel.frequency*800 + Math.random()*channel.frequency*400);
 };
 
 // Attach a new search to the scheduler

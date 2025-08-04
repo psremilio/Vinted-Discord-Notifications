@@ -21,7 +21,8 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         color_ids: ids.colour,
         material_ids: ids.material,
     }).toString();
-    const responseData = await authorizedRequest({method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false});
+    const res = await authorizedRequest({method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false});
+    const responseData = await res.body.json();
     const articles = selectNewArticles(responseData, processedArticleIds, channel);
     return articles;
 };
