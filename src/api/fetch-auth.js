@@ -11,10 +11,10 @@ export async function fetchCookies() {
     return;
   }
 
-  const url = base.replace(/\/$/, '') + '/how_it_works';
+  const url = base.replace(/\/$/, '') + '/';
 
   try {
-    const res = await authorizedRequest({ method: 'HEAD', url, search: true });
+    const res = await authorizedRequest({ method: 'GET', url, search: true });
     const raw = res.headers['set-cookie'] || [];
     const setCookie = Array.isArray(raw) ? raw : [raw];
     if (!setCookie.length) throw 'Keine Set-Cookie-Header';
