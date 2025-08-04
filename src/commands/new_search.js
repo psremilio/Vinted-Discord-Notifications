@@ -2,6 +2,7 @@ import { SlashCommandBuilder, EmbedBuilder } from '@discordjs/builders';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { addSearch } from '../run.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -90,9 +91,16 @@ export const execute = async (interaction) => {
             await interaction.followUp({ content: 'There was an error starting the monitoring.'});
         }
 
+        // schedule immediately
+        try {
+            addSearch(interaction.client, search);
+        } catch (err) {
+            console.error('Live scheduling failed:', err);
+        }
+
         const embed = new EmbedBuilder()
             .setTitle("Search saved!")
-            .setDescription("Monitoring for " + name + " will be started on next restart.")
+            .setDescription("Monitoring for " + name + " is now live!")
             .setColor(0x00FF00);
 
         await interaction.followUp({ embeds: [embed]});
