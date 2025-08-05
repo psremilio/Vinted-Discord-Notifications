@@ -54,15 +54,10 @@ export const authorizedRequest = async ({method,url,oldUrl=null,search=false,log
     }
     if (oldUrl) headers['Referer']=oldUrl;
 
-    const proxy = getProxy();
     let dispatcher;
-    if (proxy) {
-      try {
-        dispatcher = new ProxyAgent('http://'+proxy);
-      } catch {
-        console.warn('[req] Ungültiger Proxy übersprungen:', proxy);
-        dispatcher = undefined;
-      }
+    if (search) {
+      const p = getProxy();
+      if (p) dispatcher = new ProxyAgent('http://'+p);
     }
 
     let res = await request(url,{method,headers,dispatcher});
