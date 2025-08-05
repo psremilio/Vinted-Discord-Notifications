@@ -7,6 +7,14 @@ It's a feature that is truly missed in the Vinted app, you will never miss a goo
 > [!WARNING]
 >  Vinted uses Cloudflare to protect its API from scraping. A single IP is only allowed a limited number of calls before being blocked for 24h. If you want to have this bot running 24/7 you should consider adding rotating proxies.
 
+To supply proxies from ProxyScrape set the following environment variables before running `start.sh`:
+
+```
+export PS_API_KEY=your_key
+export SERVICE_ID=your_service_id
+export PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service_id=${SERVICE_ID}"
+```
+
 Functionalities:
 ----------------
 
