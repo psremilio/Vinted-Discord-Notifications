@@ -54,6 +54,7 @@ export const authorizedRequest = async ({method,url,oldUrl=null,search=false,log
     }
     if (oldUrl) headers['Referer']=oldUrl;
 
+    // nur für echte Such-Requests rotierende Proxys einsetzen
     let dispatcher;
     if (search) {
       const p = getProxy();

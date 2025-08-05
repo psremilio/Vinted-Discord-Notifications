@@ -23,9 +23,14 @@ export const vintedSearch = async (channel, processedArticleIds) => {
     }).toString();
     let res;
     try {
-        res = await authorizedRequest({method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false});
+        res = await authorizedRequest({ method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false });
     } catch (err) {
-        console.error('[search] Proxy-Request fehlgeschlagen:', err);
+        console.error('[search] Anfrage fehlgeschlagen:', err);
+        return [];
+    }
+
+    if (res.statusCode !== 200 || !res.headers['content-type']?.includes('application/json')) {
+        console.error('[search] Unerwarteter Response:', res.statusCode, res.headers['content-type']);
         return [];
     }
     const responseData = await res.body.json();
