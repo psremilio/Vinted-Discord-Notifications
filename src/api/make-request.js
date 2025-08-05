@@ -61,10 +61,18 @@ export const authorizedRequest = async ({method,url,oldUrl=null,search=false,log
       if (p) dispatcher = new ProxyAgent('http://'+p);
     }
 
-    let res = await request(url,{method,headers,dispatcher});
+    // undici: aktiviere automatische Dekompression
+    // (Standard ist off, weshalb wir rohe gzip/br Bytes kriegen)
+    let res = await request(url, {
+      method,
+      headers,
+      dispatcher,
+      decompress: true,
+    });
+
     while ([301,302,307,308].includes(res.statusCode)) {
       url = res.headers.location;
-      res = await request(url,{method,headers,dispatcher});
+      res = await request(url,{method,headers,dispatcher,decompress: true});
     }
     if (res.statusCode>=200 && res.statusCode<300) {
       return res;
