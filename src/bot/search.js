@@ -1,4 +1,5 @@
 import { authorizedRequest } from "../api/make-request.js";
+import { parseJsonBody } from '../utils/parse-json-body.js';
 
 //send the authenticated request
 export const vintedSearch = async (channel, processedArticleIds) => {
@@ -33,7 +34,7 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         console.error('[search] Unerwarteter Response:', res.statusCode, res.headers['content-type']);
         return [];
     }
-    const responseData = await res.body.json();
+    const responseData = await parseJsonBody(res);
     const articles = selectNewArticles(responseData, processedArticleIds, channel);
     return articles;
 };

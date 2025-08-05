@@ -75,6 +75,7 @@ export const authorizedRequest = async ({method,url,oldUrl=null,search=false,log
       res = await request(url,{method,headers,dispatcher,decompress: true});
     }
     if (res.statusCode>=200 && res.statusCode<300) {
+      console.log('[req] Content-Encoding:', res.headers['content-encoding']);
       return res;
     }
     console.warn(`[req] Status ${res.statusCode}, Retry #${attempt+1}`);
