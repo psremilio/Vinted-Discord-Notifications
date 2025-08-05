@@ -1,37 +1,37 @@
+// src/api/fetch-auth.js
 import { request } from 'undici';
 import { authManager } from './auth-manager.js';
 
 export async function fetchCookies() {
-  const url = (process.env.BASE_URL || 'https://www.vinted.de').replace(/\/$/, '') + '/';
-  let res;
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36'
-  };
+  const base = process.env.BASE_URL || 'https://www.vinted.de';
+  const url = base.replace(/\/$/, '') + '/how_it_works';
 
+  // 1) GET direkt
+  let res;
   try {
-    // Direktes GET, keine Proxies, damit wir auf jeden Fall die echten Set-Cookie-Header kriegen
-    res = await request(url, { method: 'GET', headers });
+    res = await request(url, { method: 'GET' });
   } catch {
-    // Fallback auf HEAD
-    res = await request(url, { method: 'HEAD', headers });
+    // 2) HEAD direkt
+    res = await request(url, { method: 'HEAD' });
   }
 
   const raw = res.headers['set-cookie'];
   const lines = Array.isArray(raw) ? raw : (raw ? [raw] : []);
   if (!lines.length) {
-    console.error('[auth] Keine Set-Cookie-Header bekommen – breche ab.');
+    console.error('[auth] Keine Set-Cookie-Header – breche ab');
     return;
   }
 
-  // Extrahiere gezielt die drei Token-Cookies
+  // nur die drei wichtigen Cookies extrahieren
   const cookieObj = {};
   for (const line of lines) {
     const [pair] = line.split(';');
-    const [key, val] = pair.split('=');
-    if (['access_token_web','refresh_token_web','_vinted_fr_session'].includes(key)) {
-      cookieObj[key] = val;
+    const [k, v] = pair.split('=');
+    if (['access_token_web','refresh_token_web','_vinted_fr_session'].includes(k)) {
+      cookieObj[k] = v;
     }
   }
+
   await authManager.setCookies(cookieObj);
   console.log('[auth] Session-Cookies aktualisiert:', Object.keys(cookieObj).join(', '));
 }
