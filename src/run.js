@@ -77,4 +77,4 @@ export const run = async (client, mySearches) => {
     }, 1*60*60*1000); //set interval to 1h, after which session could be expired
 };
 
-export { addSearch };
+export { addSearch, activeSearches };

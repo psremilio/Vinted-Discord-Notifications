@@ -5,6 +5,9 @@
     "description": "notifications for vinted!",
     "main": "main.js",
     "type": "module",
+    "scripts": {
+        "test": "node --test"
+    },
     "dependencies": {
         "discord.js": "^14.15.2",
         "dotenv": "^16.4.5",
