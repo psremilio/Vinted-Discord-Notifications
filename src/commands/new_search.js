@@ -91,7 +91,7 @@ export const execute = async (interaction) => {
             await interaction.followUp({ content: 'There was an error starting the monitoring.'});
         }
 
-        // schedule immediately
+        // schedule immediately using the in-memory scheduler
         try {
             addSearch(interaction.client, search);
         } catch (err) {
