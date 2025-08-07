@@ -14,10 +14,8 @@ mock.method(global, 'setTimeout', () => 0);
 
 const { execute } = await import('../src/commands/new_search.js');
 
-test('new search schedules immediately', async () => {
-  activeSearches.clear();
-
-  const interaction = {
+function buildInteraction() {
+  return {
     options: {
       getString: (name) => {
         switch (name) {
@@ -39,7 +37,21 @@ test('new search schedules immediately', async () => {
     deferReply: mock.fn(() => Promise.resolve()),
     followUp: mock.fn(() => Promise.resolve())
   };
+}
 
+test('new search schedules immediately', async () => {
+  activeSearches.clear();
+
+  const interaction = buildInteraction();
   await execute(interaction);
   assert.equal(activeSearches.has('test'), true);
+});
+
+test('existing search is not rescheduled', async () => {
+  activeSearches.clear();
+  activeSearches.set('test', true);
+
+  const interaction = buildInteraction();
+  await execute(interaction);
+  assert.equal(activeSearches.size, 1);
 });
