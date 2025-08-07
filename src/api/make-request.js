@@ -15,6 +15,10 @@ function isValidProxy(p) {
   return /^([0-9]{1,3}\.){3}[0-9]{1,3}:\d+$/.test(p) || /^[a-zA-Z0-9.-]+:\d+$/.test(p);
 }
 
+function maskProxy(p) {
+  return p.replace(/^(\d+\.\d+\.\d+)\.\d+/, '$1.*');
+}
+
 let proxyList = [], stickyProxy = null, stickyUntil = 0;
 
 function reloadProxies() {
@@ -62,10 +66,11 @@ export const authorizedRequest = async ({method,url,oldUrl=null,search=false,log
 
     const proxy = getProxy();
     let dispatcher;
+    const masked = proxy ? maskProxy(proxy) : 'direct';
     if (proxy) {
       try {
         dispatcher = new ProxyAgent('http://'+proxy);
-        if (logs) console.log('[req] using proxy:', proxy);
+        if (logs) console.log('[req] using proxy:', masked);
       } catch {
         console.warn('[req] Ungültiger Proxy übersprungen:', proxy);
         dispatcher = undefined;
@@ -83,10 +88,10 @@ export const authorizedRequest = async ({method,url,oldUrl=null,search=false,log
         return res;
       }
       if ([401,403,429].includes(res.statusCode) || res.statusCode >= 500) stickyUntil = 0;
-      console.warn(`[req] Status ${res.statusCode}, Retry #${attempt+1}`);
+      console.warn(`[req] Status ${res.statusCode} via ${masked}, Retry #${attempt+1}`);
     } catch (err) {
       stickyUntil = 0;
-      console.warn('[req] Request error:', err);
+      console.warn(`[req] Request error via ${masked}:`, err);
     }
     await new Promise(r => setTimeout(r, 500 + Math.random()*500));
   }

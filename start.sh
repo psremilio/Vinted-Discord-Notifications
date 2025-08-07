@@ -7,7 +7,7 @@ SERVICE_ID="${SERVICE_ID:?Env SERVICE_ID fehlt}"
 PROXY_LIST_URL="${PROXY_LIST_URL:-https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${SERVICE_ID}}"
 MAX_PROXY_FAILS="${MAX_PROXY_FAILS:-5}"
 LIST_REFRESH_MIN="${LIST_REFRESH_MIN:-180}"
-WHITELIST_SLEEP="${WHITELIST_SLEEP:-60}"
+WHITELIST_SLEEP="${WHITELIST_SLEEP:-300}"
 
 # — Railway-Whitelist —
 MY_IP=$(curl -fsS https://api64.ipify.org)
