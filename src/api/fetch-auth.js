@@ -17,11 +17,11 @@ export async function fetchCookies() {
   // Erst GET probieren, weil viele Hosts bei HEAD keine Cookies senden
   let res;
   try {
-    res = await authorizedRequest({ method: 'GET', url, search: true });
+    res = await authorizedRequest({ method: 'GET', url, search: false });
   } catch (err) {
     console.warn('[auth] GET auf how_it_works fehlgeschlagen, versuche HEAD…');
     try {
-      res = await authorizedRequest({ method: 'HEAD', url, search: true });
+      res = await authorizedRequest({ method: 'HEAD', url, search: false });
     } catch (err2) {
       console.error('[auth] HEAD auf how_it_works fehlgeschlagen:', err2);
       return false;

@@ -32,6 +32,7 @@ Prerequisites:
 
 - Need to be able to run JS code, preferably on a machine that is up 24/7 ( I use npm and node on a small raspberry pi, other options could be renting a VPS, or using services like Heroku)
 - Have a discord server you can invite the bot on
+- Node.js 20 or later
 
 Step 0: Download the code (git clone or download as zip)
 --------------------------------------------------------
