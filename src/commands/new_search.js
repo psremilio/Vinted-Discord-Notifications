@@ -10,7 +10,7 @@ const filePath = path.resolve(__dirname, '../../config/channels.json');
 
 export const data = new SlashCommandBuilder()
     .setName('new_search')
-    .setDescription('Start receiving notifications for this Vinted channel.')
+    .setDescription('Start receiving notifications for this Vinted channel. Duplicate names are ignored.')
     .addStringOption(option =>
         option.setName('name')
             .setDescription('The name of your new search.')

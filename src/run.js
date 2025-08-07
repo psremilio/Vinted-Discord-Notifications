@@ -2,7 +2,9 @@ import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { fetchCookies } from "./api/fetch-auth.js";
 
-// Map to keep track of active searches so we don't schedule duplicates
+// Map of channel names that are already scheduled.  addSearch() consults
+// this via `activeSearches.has(name)` so repeated /new_search commands don't
+// create duplicate timers.
 const activeSearches = new Map();
 // Will hold IDs of articles already processed across all searches
 let processedArticleIds = new Set();
