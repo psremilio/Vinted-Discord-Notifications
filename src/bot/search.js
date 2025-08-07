@@ -36,6 +36,9 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         return [];
     }
     const responseData = await parseJsonBody(res);
+    if (!responseData) {
+        return [];
+    }
     const articles = selectNewArticles(responseData, processedArticleIds, channel);
     return articles;
 };
