@@ -30,6 +30,11 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         console.error('[search] Proxy-Request fehlgeschlagen:', err);
         return [];
     }
+    const ct = (res.headers['content-type'] || '').toLowerCase();
+    if (!ct.includes('application/json')) {
+        console.warn('[search] Non-JSON response:', ct);
+        return [];
+    }
     const responseData = await parseJsonBody(res);
     const articles = selectNewArticles(responseData, processedArticleIds, channel);
     return articles;

@@ -58,7 +58,7 @@ export const run = async (client, mySearches) => {
 
     //stagger start time for searches to avoid too many simultaneous requests
     mySearches.forEach((channel, index) => {
-        setTimeout(() => addSearch(client, channel), index * 1000);
+        setTimeout(() => addSearch(client, channel), index * 1000 + 5000);
     });
 
     //fetch new cookies and clean ProcessedArticleIDs at interval

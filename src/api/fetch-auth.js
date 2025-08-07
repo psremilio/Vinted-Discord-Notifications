@@ -4,7 +4,7 @@ import { isWebUri } from 'valid-url';
 
 // fetch cookies for the search session with no privileges
 export async function fetchCookies() {
-  const base = process.env.LOGIN_URL || 'https://www.vinted.de';
+  const base = process.env.BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
 
   if (!isWebUri(base)) {
     console.error('[auth] Ungültige LOGIN_URL:', base);
@@ -12,6 +12,7 @@ export async function fetchCookies() {
   }
 
   const url = base.replace(/\/$/, '') + '/how_it_works';
+  console.log('[auth] requesting cookies from', url);
 
   // Erst GET probieren, weil viele Hosts bei HEAD keine Cookies senden
   let res;
@@ -29,6 +30,7 @@ export async function fetchCookies() {
 
   const raw = res.headers['set-cookie'] || [];
   const setCookie = Array.isArray(raw) ? raw : [raw];
+  console.log('[auth] got set-cookie:', setCookie.length > 0);
 
   if (!setCookie.length) {
     console.warn('[auth] Keine Set-Cookie-Header erhalten – überspringe Cookies-Refresh');

@@ -4,7 +4,7 @@ set -euo pipefail
 # — Konfiguration —
 PS_API_KEY="${PS_API_KEY:?Env PS_API_KEY fehlt}"
 SERVICE_ID="${SERVICE_ID:?Env SERVICE_ID fehlt}"
-PROXY_LIST_URL="${PROXY_LIST_URL:?Env PROXY_LIST_URL fehlt}"
+PROXY_LIST_URL="${PROXY_LIST_URL:-https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${SERVICE_ID}}"
 MAX_PROXY_FAILS="${MAX_PROXY_FAILS:-5}"
 LIST_REFRESH_MIN="${LIST_REFRESH_MIN:-180}"
 WHITELIST_SLEEP="${WHITELIST_SLEEP:-60}"
@@ -30,6 +30,7 @@ _download_proxies() {
     proxy_fail_count=$((proxy_fail_count+1))
     echo "[proxy] Download FEHLER ($proxy_fail_count/$MAX_PROXY_FAILS)" >&2
     rm -f proxies.tmp
+    : > proxies.txt
   fi
 }
 _download_proxies
