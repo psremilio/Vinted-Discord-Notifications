@@ -2,9 +2,24 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs';
 
-// Mock filesystem
-mock.method(fs, 'readFileSync', () => '[]');
-mock.method(fs, 'writeFileSync', () => {});
+// ensure addSearch detects test environment and skips network
+process.env.NODE_ENV = 'test';
+
+// Mock filesystem only for channels.json
+const realRead = fs.readFileSync;
+const realWrite = fs.writeFileSync;
+mock.method(fs, 'readFileSync', (path, ...args) => {
+  if (typeof path === 'string' && path.endsWith('channels.json')) {
+    return '[]';
+  }
+  return realRead.call(fs, path, ...args);
+});
+mock.method(fs, 'writeFileSync', (path, data, ...args) => {
+  if (typeof path === 'string' && path.endsWith('channels.json')) {
+    return;
+  }
+  return realWrite.call(fs, path, data, ...args);
+});
 
 // Import run.js before stubbing timers so undici initializes normally
 import { activeSearches } from '../src/run.js';

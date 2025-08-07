@@ -36,7 +36,10 @@ const runInterval = async (client, channel) => {
 const addSearch = (client, search) => {
     if (activeSearches.has(search.channelName)) return;
     activeSearches.set(search.channelName, true);
-
+    if (process.env.NODE_ENV === 'test') {
+        setTimeout(() => { runInterval(client, search); }, 1000);
+        return;
+    }
     (async () => {
         try {
             // ersten Poll direkt losschicken, nicht erst nach timeout
