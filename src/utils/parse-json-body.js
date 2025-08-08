@@ -1,20 +1,17 @@
+import { gunzipSync, brotliDecompressSync } from 'zlib';
+
 export async function parseJsonBody(res) {
-  const ct = (res.headers['content-type'] || '').toLowerCase();
-  if (!ct.includes('application/json')) return null;
-
-  let buffer;
   try {
-    buffer = Buffer.from(await res.body.arrayBuffer());
-  } catch {
-    return null;
-  }
-
-  if (buffer.length === 0) return null;
-
-  try {
-    return JSON.parse(buffer.toString('utf8'));
-  } catch (e) {
-    console.warn('[parse] invalid JSON, length=', buffer.length);
-    return null;
+    return await res.body.json();
+  } catch (err) {
+    const buf = Buffer.from(await res.body.arrayBuffer());
+    const enc = res.headers['content-encoding'];
+    let decoded = buf;
+    if (enc?.includes('gzip')) {
+      decoded = gunzipSync(buf);
+    } else if (enc?.includes('br')) {
+      decoded = brotliDecompressSync(buf);
+    }
+    return JSON.parse(decoded.toString('utf8'));
   }
 }

@@ -1,6 +1,5 @@
 import { authorizedRequest } from "../api/make-request.js";
-import { parseJsonBody } from "../utils/parse-json-body.js";
-import { handleParams } from "./handle-params.js";
+import { parseJsonBody } from '../utils/parse-json-body.js';
 
 //send the authenticated request
 export const vintedSearch = async (channel, processedArticleIds) => {
@@ -25,20 +24,17 @@ export const vintedSearch = async (channel, processedArticleIds) => {
     }).toString();
     let res;
     try {
-        res = await authorizedRequest({method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false});
+        res = await authorizedRequest({ method: "GET", url: apiUrl.href, oldUrl: channel.url, search: true, logs: false });
     } catch (err) {
-        console.error('[search] Proxy-Request fehlgeschlagen:', err);
+        console.error('[search] Anfrage fehlgeschlagen:', err);
         return [];
     }
-    const ct = (res.headers['content-type'] || '').toLowerCase();
-    if (!ct.includes('application/json')) {
-        console.warn('[search] Non-JSON response:', ct);
+
+    if (res.statusCode !== 200 || !res.headers['content-type']?.includes('application/json')) {
+        console.error('[search] Unerwarteter Response:', res.statusCode, res.headers['content-type']);
         return [];
     }
     const responseData = await parseJsonBody(res);
-    if (!responseData) {
-        return [];
-    }
     const articles = selectNewArticles(responseData, processedArticleIds, channel);
     return articles;
 };
@@ -55,3 +51,21 @@ const selectNewArticles = (articles, processedArticleIds, channel) => {
     );
     return filteredArticles;
   };
+
+const handleParams = (url) => {
+    const urlObj = new URL(url);
+    const params = new URLSearchParams(urlObj.search);
+    const idMap = {
+        text: params.get('search_text') || '',
+        catalog: params.getAll('catalog[]').join(',') || '',
+        min: params.get('price_from') || '',
+        max: params.get('price_to') || '',
+        currency: params.get('currency') || '',
+        size: params.getAll('size_ids[]').join(',') || '',
+        brand: params.getAll('brand_ids[]').join(',') || '',
+        status: params.getAll('status_ids[]').join(',') || '',
+        colour: params.getAll('color_ids[]').join(',') || '',
+        material: params.getAll('material_ids[]').join(',') || '',
+    };
+    return idMap;
+};

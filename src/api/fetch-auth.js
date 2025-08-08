@@ -1,57 +1,37 @@
-import { authorizedRequest } from './make-request.js';
+import { request } from 'undici';
 import { authManager } from './auth-manager.js';
-import { isWebUri } from 'valid-url';
+// keine ProxyAgent-Abhängigkeit hier
 
-// fetch cookies for the search session with no privileges
 export async function fetchCookies() {
-  const base = process.env.BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
+  const base = process.env.BASE_URL || 'https://www.vinted.de';
+  const url  = base.replace(/\/$/, '') + '/how_it_works';
 
-  if (!isWebUri(base)) {
-    console.error('[auth] Ungültige LOGIN_URL:', base);
-    return false;
-  }
-
-  const url = base.replace(/\/$/, '') + '/how_it_works';
-  console.log('[auth] requesting cookies from', url);
-
-  // Erst GET probieren, weil viele Hosts bei HEAD keine Cookies senden
+  // 1) Erst mal HEAD direkt
   let res;
   try {
-    res = await authorizedRequest({ method: 'GET', url, search: false });
-  } catch (err) {
-    console.warn('[auth] GET auf how_it_works fehlgeschlagen, versuche HEAD…');
-    try {
-      res = await authorizedRequest({ method: 'HEAD', url, search: false });
-    } catch (err2) {
-      console.error('[auth] HEAD auf how_it_works fehlgeschlagen:', err2);
-      return false;
+    res = await request(url, { method: 'HEAD' });
+  } catch {
+    // 2) Fallback auf GET, falls manche Hosts HEAD nicht unterstützen
+    res = await request(url, { method: 'GET' });
+  }
+
+  // Jetzt die Set-Cookie-Header rausholen
+  const raw = res.headers['set-cookie'];               // kann string oder array sein
+  const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+  if (!arr.length) {
+    console.error('[auth] Keine Set-Cookie-Header erhalten — breche ab');
+    return;
+  }
+
+  // Nur die für Vinted relevanten Cookies extrahieren
+  const cookieObj = {};
+  for (const line of arr) {
+    const [pair] = line.split(';');
+    const [k,v]    = pair.split('=');
+    if (['access_token_web','refresh_token_web','_vinted_fr_session'].includes(k)) {
+      cookieObj[k] = v;
     }
   }
-
-  const raw = res.headers['set-cookie'] || [];
-  const setCookie = Array.isArray(raw) ? raw : [raw];
-  console.log('[auth] got set-cookie:', setCookie.length > 0);
-
-  if (!setCookie.length) {
-    console.warn('[auth] Keine Set-Cookie-Header erhalten – überspringe Cookies-Refresh');
-    return false;
-  }
-
-  try {
-    const cookies = setCookie
-      .map(c => c.split(';')[0].trim())
-      .filter(Boolean);
-    const cookieObj = {};
-    cookies.forEach(c => {
-      const [k, v] = c.split('=');
-      cookieObj[k] = v;
-    });
-    await authManager.setCookies(cookieObj);
-    console.log('[auth] Cookies aktualisiert');
-    return true;
-  } catch (err) {
-    console.error('[auth] Fehler beim Fetching der Cookies:', err);
-    return false;
-  }
+  await authManager.setCookies(cookieObj);
+  console.log('[auth] Session-Cookies aktualisiert:', Object.keys(cookieObj).join(', '));
 }
-
