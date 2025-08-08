@@ -2,7 +2,9 @@ import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { fetchCookies } from "./api/fetch-auth.js";
 
-// Map to keep track of active searches so we don't schedule duplicates
+// Map of channel names that are already scheduled.  addSearch() consults
+// this via `activeSearches.has(name)` so repeated /new_search commands don't
+// create duplicate timers.
 const activeSearches = new Map();
 // Will hold IDs of articles already processed across all searches
 let processedArticleIds = new Set();
@@ -34,7 +36,10 @@ const runInterval = async (client, channel) => {
 const addSearch = (client, search) => {
     if (activeSearches.has(search.channelName)) return;
     activeSearches.set(search.channelName, true);
-
+    if (process.env.NODE_ENV === 'test') {
+        setTimeout(() => { runInterval(client, search); }, 1000);
+        return;
+    }
     (async () => {
         try {
             // ersten Poll direkt losschicken, nicht erst nach timeout
@@ -49,17 +54,25 @@ const addSearch = (client, search) => {
 //first, get cookies, then init the article id set, then launch the simmultaneous searches
 export const run = async (client, mySearches) => {
     processedArticleIds = new Set();
-    await fetchCookies();
+    const ok = await fetchCookies();
+    if (!ok) {
+        console.error('[run] Keine gültigen Cookies — Warte 10 Minuten bis nächstem Versuch');
+        setTimeout(() => run(client, mySearches), 10 * 60 * 1000);
+        return;
+    }
 
     //stagger start time for searches to avoid too many simultaneous requests
     mySearches.forEach((channel, index) => {
-        setTimeout(() => addSearch(client, channel), index * 1000);
+        setTimeout(() => addSearch(client, channel), index * 1000 + 5000);
     });
 
-    //fetch new cookies and clean ProcessedArticleIDs at interval    
+    //fetch new cookies and clean ProcessedArticleIDs at interval
     setInterval(async () => {
         try {
-            await fetchCookies();
+            const refreshed = await fetchCookies();
+            if (!refreshed) {
+                console.warn('[run] Cookie refresh failed');
+            }
             console.log('reducing processed articles size');
             const halfSize = Math.floor(processedArticleIds.size / 2);
             processedArticleIds = new Set([...processedArticleIds].slice(halfSize)); //convert to an array and keep only the last half of the elements
@@ -69,4 +82,4 @@ export const run = async (client, mySearches) => {
     }, 1*60*60*1000); //set interval to 1h, after which session could be expired
 };
 
-export { addSearch };
+export { addSearch, activeSearches };

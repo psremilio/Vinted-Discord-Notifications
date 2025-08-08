@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder } from '@discordjs/builders';
+import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -10,7 +10,7 @@ const filePath = path.resolve(__dirname, '../../config/channels.json');
 
 export const data = new SlashCommandBuilder()
     .setName('new_search')
-    .setDescription('Start receiving notifications for this Vinted channel.')
+    .setDescription('Start receiving notifications for this Vinted channel. Duplicate names are ignored.')
     .addStringOption(option =>
         option.setName('name')
             .setDescription('The name of your new search.')
@@ -91,7 +91,7 @@ export const execute = async (interaction) => {
             await interaction.followUp({ content: 'There was an error starting the monitoring.'});
         }
 
-        // schedule immediately
+        // schedule immediately using the in-memory scheduler
         try {
             addSearch(interaction.client, search);
         } catch (err) {

@@ -7,6 +7,18 @@ It's a feature that is truly missed in the Vinted app, you will never miss a goo
 > [!WARNING]
 >  Vinted uses Cloudflare to protect its API from scraping. A single IP is only allowed a limited number of calls before being blocked for 24h. If you want to have this bot running 24/7 you should consider adding rotating proxies.
 
+Set the following environment variables before running `start.sh`:
+
+```
+export BOT_TOKEN=your_discord_bot_token
+export BASE_URL="https://www.vinted.de"      # or set LOGIN_URL for backward compatibility
+export PS_API_KEY=your_key
+export SERVICE_ID=your_service_id
+export PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${SERVICE_ID}"
+# set to 1 to allow direct requests when all proxies fail
+export ALLOW_DIRECT=0
+```
+
 Functionalities:
 ----------------
 
@@ -20,6 +32,7 @@ Prerequisites:
 
 - Need to be able to run JS code, preferably on a machine that is up 24/7 ( I use npm and node on a small raspberry pi, other options could be renting a VPS, or using services like Heroku)
 - Have a discord server you can invite the bot on
+- Node.js 20 or later
 
 Step 0: Download the code (git clone or download as zip)
 --------------------------------------------------------
