@@ -1,6 +1,5 @@
 import fs from 'fs';
 import axios from 'axios';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const healthy = [];
 
@@ -19,8 +18,13 @@ export async function initProxyPool() {
     for (const p of proxies) {
         if (healthy.length >= 20) break;
         try {
-            const agent = new HttpsProxyAgent('http://' + p);
-            const res = await axios.get(base, { httpsAgent: agent, maxRedirects: 0, validateStatus: () => true });
+            const [host, portStr] = p.split(':');
+            const port = Number(portStr);
+            const res = await axios.get(base, {
+                proxy: { protocol: 'http', host, port },
+                maxRedirects: 0,
+                validateStatus: () => true,
+            });
             const cookies = res.headers['set-cookie'];
             if (cookies && cookies.length) {
                 healthy.push(p);

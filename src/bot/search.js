@@ -22,17 +22,15 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         color_ids: ids.colour,
         material_ids: ids.material,
     }).toString();
-      let http, agent, proxy;
+      let http, proxy;
       try {
-          ({ http, agent, proxy } = getHttp());
+          ({ http, proxy } = getHttp());
       } catch (e) {
           console.warn('[search] no proxy available', e.message || e);
           return [];
       }
       try {
           const res = await http.get(apiUrl.href, {
-              httpsAgent: agent,
-              proxy: false,
               headers: { Referer: channel.url },
           });
           const ct = (res.headers['content-type'] || '').toLowerCase();
@@ -44,15 +42,13 @@ export const vintedSearch = async (channel, processedArticleIds) => {
       }
 
       try {
-          ({ http, agent, proxy } = getHttp());
+          ({ http, proxy } = getHttp());
       } catch (e) {
           console.warn('[search] no proxy available (retry)', e.message || e);
           return [];
       }
       try {
           const res = await http.get(apiUrl.href, {
-              httpsAgent: agent,
-              proxy: false,
               headers: { Referer: channel.url },
           });
           const ct = (res.headers['content-type'] || '').toLowerCase();

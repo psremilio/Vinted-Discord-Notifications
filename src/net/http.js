@@ -1,34 +1,33 @@
 import axios from 'axios';
-import { CookieJar } from 'tough-cookie';
 import { wrapper } from 'axios-cookiejar-support';
-import { HttpsProxyAgent } from 'https-proxy-agent';
+import { CookieJar } from 'tough-cookie';
 import { getProxy, markBadInPool } from './proxyHealth.js';
 
 const clientsByProxy = new Map();
 let CURRENT_PROXY = null;
 
-function getClientFor(proxy) {
-  let client = clientsByProxy.get(proxy);
-  if (!client) {
-    const jar = new CookieJar();
-    const http = wrapper(
-      axios.create({
-        jar,
-        withCredentials: true,
-        maxRedirects: 5,
-        timeout: 15000,
-        proxy: false,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-      }),
-    );
-    const agent = new HttpsProxyAgent('http://' + proxy);
-    client = { http, agent, jar };
-    clientsByProxy.set(proxy, client);
-  }
+function createClient(proxyStr) {
+  const existing = clientsByProxy.get(proxyStr);
+  if (existing) return existing;
+
+  const [host, portStr] = proxyStr.split(':');
+  const port = Number(portStr);
+  const http = wrapper(
+    axios.create({
+      jar: new CookieJar(),
+      withCredentials: true,
+      maxRedirects: 5,
+      timeout: 15000,
+      proxy: { protocol: 'http', host, port },
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    })
+  );
+  const client = { http };
+  clientsByProxy.set(proxyStr, client);
   return client;
 }
 
@@ -44,12 +43,13 @@ export function getHttp() {
           proxy: false,
         })
       );
-      return { http, agent: undefined, proxy: 'DIRECT' };
+      return { http, proxy: 'DIRECT' };
     }
     throw new Error('No healthy proxies available');
   }
-  const { http, agent } = getClientFor(CURRENT_PROXY);
-  return { http, agent, proxy: CURRENT_PROXY };
+
+  const { http } = createClient(CURRENT_PROXY);
+  return { http, proxy: CURRENT_PROXY };
 }
 
 export function rotateProxy(badProxy) {
