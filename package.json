@@ -9,9 +9,12 @@
         "test": "node --test"
     },
     "dependencies": {
+        "axios": "^1.6.8",
+        "axios-cookiejar-support": "^5.0.2",
         "discord.js": "^14.15.2",
         "dotenv": "^16.4.5",
-        "undici": "^6.18.1",
+        "https-proxy-agent": "^7.0.6",
+        "tough-cookie": "^4.1.4",
         "valid-url": "^1.0.9"
     }
 }

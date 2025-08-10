@@ -1,6 +1,6 @@
 import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
-import { fetchCookies } from "./api/fetch-auth.js";
+import { initProxyPool, getHttp } from "./net/http.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -54,11 +54,28 @@ const addSearch = (client, search) => {
 //first, get cookies, then init the article id set, then launch the simmultaneous searches
 export const run = async (client, mySearches) => {
     processedArticleIds = new Set();
-    const ok = await fetchCookies();
-    if (!ok) {
-        console.error('[run] Keine gültigen Cookies — Warte 10 Minuten bis nächstem Versuch');
-        setTimeout(() => run(client, mySearches), 10 * 60 * 1000);
-        return;
+    await initProxyPool();
+    const REFRESH_H = parseInt(process.env.PROXY_REFRESH_HOURS || '6', 10);
+    setInterval(async () => {
+        try {
+            console.log('[proxy] refreshing pool…');
+            await initProxyPool();
+        } catch (e) {
+            console.warn('[proxy] refresh failed:', e.message || e);
+        }
+    }, REFRESH_H * 60 * 60 * 1000);
+    try {
+        const { http, agent } = getHttp();
+        try {
+            await http.get(process.env.VINTED_BASE_URL || 'https://www.vinted.de/', {
+                httpsAgent: agent,
+                proxy: false,
+            });
+        } catch (err) {
+            console.error('[run] initial cookie fetch failed:', err);
+        }
+    } catch (e) {
+        console.warn('[run] skip initial cookie fetch – no proxy available:', e.message || e);
     }
 
     //stagger start time for searches to avoid too many simultaneous requests
@@ -69,15 +86,16 @@ export const run = async (client, mySearches) => {
     //fetch new cookies and clean ProcessedArticleIDs at interval
     setInterval(async () => {
         try {
-            const refreshed = await fetchCookies();
-            if (!refreshed) {
-                console.warn('[run] Cookie refresh failed');
-            }
+            const { http, agent } = getHttp();
+            await http.get(process.env.VINTED_BASE_URL || 'https://www.vinted.de/', {
+                httpsAgent: agent,
+                proxy: false,
+            });
             console.log('reducing processed articles size');
             const halfSize = Math.floor(processedArticleIds.size / 2);
-            processedArticleIds = new Set([...processedArticleIds].slice(halfSize)); //convert to an array and keep only the last half of the elements
+            processedArticleIds = new Set([...processedArticleIds].slice(halfSize));
         } catch (err) {
-            console.error('\nError getting new cookies:', err);
+            console.error('[run] hourly cookie refresh skipped:', err.message || err);
         }
     }, 1*60*60*1000); //set interval to 1h, after which session could be expired
 };

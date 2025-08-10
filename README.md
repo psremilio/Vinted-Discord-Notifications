@@ -11,7 +11,7 @@ Set the following environment variables before running `start.sh`:
 
 ```
 export BOT_TOKEN=your_discord_bot_token
-export BASE_URL="https://www.vinted.de"      # or set LOGIN_URL for backward compatibility
+export VINTED_BASE_URL="https://www.vinted.de"      # or set LOGIN_URL for backward compatibility
 export PS_API_KEY=your_key
 export SERVICE_ID=your_service_id
 export PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${SERVICE_ID}"
