@@ -35,9 +35,10 @@ export async function postArticles(newArticles, channelToSend) {
         const timestamp = new Date(item.photo.high_resolution.timestamp * 1000);
         const delayInSeconds = Math.abs((Date.now() - item.photo.high_resolution.timestamp * 1000));
         const cleanDelay = await cleanTime(delayInSeconds);
-        //set button urls
-        components[0].components[0].setURL(`${process.env.BASE_URL}/items/${item.id}`);
-        components[0].components[1].setURL(`${process.env.BASE_URL}/items/${item.id}/want_it/new?`);
+        //set button urls based on the item's origin
+        const origin = new URL(item.url).origin;
+        components[0].components[0].setURL(`${origin}/items/${item.id}`);
+        components[0].components[1].setURL(`${origin}/items/${item.id}/want_it/new?`);
 
         return channelToSend.send({
             embeds: [{
