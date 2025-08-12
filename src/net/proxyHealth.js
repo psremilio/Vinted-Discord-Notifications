@@ -12,7 +12,7 @@ export async function initProxyPool() {
         proxies = fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter(Boolean).slice(0, 200);
     } catch (err) {
         console.warn('[proxy] proxy list not found:', err.message);
-        return;
+        return 0;
     }
     const base = process.env.VINTED_BASE_URL || 'https://www.vinted.de/';
     for (const p of proxies) {
@@ -23,10 +23,15 @@ export async function initProxyPool() {
             const res = await axios.get(base, {
                 proxy: { protocol: 'http', host, port },
                 maxRedirects: 0,
+                timeout: 10000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                },
                 validateStatus: () => true,
             });
-            const cookies = res.headers['set-cookie'];
-            if (cookies && cookies.length) {
+            // Consider the proxy healthy if it can reach the target and is not a hard failure
+            if (typeof res.status === 'number' && res.status < 500) {
                 healthy.push(p);
             }
         } catch (e) {
@@ -34,6 +39,7 @@ export async function initProxyPool() {
         }
     }
     console.log(`[proxy] Healthy: ${healthy.length}`);
+    return healthy.length;
 }
 
 export function getProxy() {
@@ -44,4 +50,8 @@ export function getProxy() {
 export function markBadInPool(p) {
     const i = healthy.indexOf(p);
     if (i >= 0) healthy.splice(i, 1);
+}
+
+export function getHealthyCount() {
+    return healthy.length;
 }
