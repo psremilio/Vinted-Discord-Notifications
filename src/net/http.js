@@ -34,18 +34,23 @@ function createClient(proxyStr) {
 export function getHttp() {
   if (!CURRENT_PROXY) CURRENT_PROXY = getProxy();
   if (!CURRENT_PROXY) {
-    if (process.env.ALLOW_DIRECT === '1') {
-      const http = wrapper(
-        axios.create({
-          withCredentials: true,
-          maxRedirects: 5,
-          timeout: 15000,
-          proxy: false,
-        })
-      );
-      return { http, proxy: 'DIRECT' };
-    }
-    throw new Error('No healthy proxies available');
+    // Always allow direct connection as fallback when no proxies are available
+    console.log('[proxy] No proxies available, using direct connection');
+    const http = wrapper(
+      axios.create({
+        jar: new CookieJar(),
+        withCredentials: true,
+        maxRedirects: 5,
+        timeout: 15000,
+        proxy: false,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      })
+    );
+    return { http, proxy: 'DIRECT' };
   }
 
   const { http } = createClient(CURRENT_PROXY);
