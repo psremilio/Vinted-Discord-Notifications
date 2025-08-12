@@ -1,66 +1,191 @@
-# Vinted Discord Notifications
+# Vinted Discord Notifications Bot
 
-This project allows you to host your own bot on your discord server, and receive notifications for your favorite vinted searches.
+Ein Discord Bot, der Vinted-Suchen überwacht und neue Artikel in Discord-Kanäle postet.
 
-It's a feature that is truly missed in the Vinted app, you will never miss a good deal again!
+## Features
 
-> [!WARNING]
->  Vinted uses Cloudflare to protect its API from scraping. A single IP is only allowed a limited number of calls before being blocked for 24h. If you want to have this bot running 24/7 you should consider adding rotating proxies.
+- 🔍 Automatische Überwachung von Vinted-Suchen
+- 📱 Discord-Benachrichtigungen für neue Artikel
+- 🔄 Proxy-Rotation für bessere Verfügbarkeit
+- ⚡ Konfigurierbare Suchfrequenzen
+- 🛡️ Robuste Fehlerbehandlung
 
-Set the following environment variables before running `start.sh`:
+## Installation
+
+1. **Repository klonen:**
+   ```bash
+   git clone <repository-url>
+   cd vinted-discord-notifications
+   ```
+
+2. **Abhängigkeiten installieren:**
+   ```bash
+   npm install
+   ```
+
+3. **Umgebungsvariablen konfigurieren:**
+   ```bash
+   cp .env.example .env
+   # Bearbeite .env mit deinen Werten
+   ```
+
+4. **Bot starten:**
+   ```bash
+   chmod +x start.sh
+   ./start.sh
+   ```
+
+## Konfiguration
+
+### Erforderliche Umgebungsvariablen
+
+- `BOT_TOKEN`: Dein Discord Bot Token
+- `PS_API_KEY`: ProxyScrape API-Schlüssel
+- `SERVICE_ID`: ProxyScrape Service-ID
+
+### Optionale Umgebungsvariablen
+
+- `ALLOW_DIRECT`: Erlaubt direkte Verbindungen ohne Proxies (Standard: 0)
+- `PROXY_REFRESH_HOURS`: Proxy-Pool Aktualisierungsintervall (Standard: 6)
+- `VINTED_BASE_URL`: Vinted Basis-URL (Standard: https://www.vinted.de/)
+
+## Troubleshooting
+
+### Problem: "No healthy proxies available"
+
+**Symptome:**
+- Bot startet nicht
+- Fehler in den Logs: "skip initial cookie fetch – no proxy available"
+- Wiederholte Fehler: "no proxy available No healthy proxies available"
+
+**Lösungen:**
+
+1. **ProxyScrape-Konfiguration überprüfen:**
+   ```bash
+   # Stelle sicher, dass diese Variablen gesetzt sind:
+   echo $PS_API_KEY
+   echo $SERVICE_ID
+   ```
+
+2. **IP-Whitelist überprüfen:**
+   - Deine Server-IP muss bei ProxyScrape whitelisted sein
+   - Das Start-Skript versucht dies automatisch
+
+3. **Direkte Verbindung erlauben (temporär):**
+   ```bash
+   export ALLOW_DIRECT=1
+   ./start.sh
+   ```
+
+4. **Proxy-Liste manuell überprüfen:**
+   ```bash
+   # Schaue dir die geladenen Proxies an:
+   cat config/proxies.txt
+   
+   # Überprüfe die Anzahl:
+   wc -l config/proxies.txt
+   ```
+
+5. **Proxy-Validierung lockern:**
+   - Der Bot versucht automatisch weniger strenge Validierung
+   - Überprüfe die Logs für "lockere Validierung" Nachrichten
+
+### Problem: Bot startet, aber Suchen funktionieren nicht
+
+**Symptome:**
+- Bot ist online
+- Keine Artikel werden gefunden
+- Fehler in den Such-Logs
+
+**Lösungen:**
+
+1. **Proxy-Status überprüfen:**
+   ```bash
+   # Schaue in die Logs:
+   tail -f logs/bot.log | grep "proxy"
+   ```
+
+2. **Proxy-Pool neu initialisieren:**
+   - Der Bot versucht dies automatisch alle 6 Stunden
+   - Du kannst es manuell durch Neustart erzwingen
+
+3. **Vinted-Verfügbarkeit testen:**
+   ```bash
+   curl -I https://www.vinted.de/
+   ```
+
+### Problem: Rate Limiting oder IP-Bans
+
+**Symptome:**
+- Viele Proxy-Fehler
+- "invalid session" Nachrichten
+- Bot funktioniert intermittierend
+
+**Lösungen:**
+
+1. **Proxy-Rotation verbessern:**
+   - Der Bot rotiert Proxies automatisch
+   - Überprüfe, ob genügend Proxies verfügbar sind
+
+2. **Suchfrequenz reduzieren:**
+   - Bearbeite `config/channels.json`
+   - Erhöhe die `frequency` Werte
+
+3. **Proxy-Qualität verbessern:**
+   - Überprüfe dein ProxyScrape-Abonnement
+   - Stelle sicher, dass Premium-Proxies aktiviert sind
+
+## Logs verstehen
+
+### Proxy-bezogene Logs
 
 ```
-export BOT_TOKEN=your_discord_bot_token
-export VINTED_BASE_URL="https://www.vinted.de"      # or set LOGIN_URL for backward compatibility
-export PS_API_KEY=your_key
-export SERVICE_ID=your_service_id
-export PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${SERVICE_ID}"
-# set to 1 to allow direct requests when all proxies fail
-export ALLOW_DIRECT=0
+[proxy] 1000 Proxies gespeichert          # Proxies erfolgreich geladen
+[proxy] Healthy: 5                        # 5 Proxies als gesund validiert
+[proxy] 192.168.1.1:8080 ist gesund      # Einzelner Proxy validiert
+[proxy] Versuche weniger strenge Validierung...  # Fallback-Validierung
+[proxy] 192.168.1.1:8080 akzeptiert (lockere Validierung)  # Proxy akzeptiert
 ```
 
-Functionalities:
-----------------
+### Fehler-Logs
 
-- Ability to have as many searches as you wish in as little or as many discord channels as wanted (it's possible to have multiple searches in a single channel)
-- Each search has its own schedule! you just have to configure how frequently it needs to be refreshed
-- Ability to block certain words from the title of your search results, to make your searches even more precise!
-- Checkout the 'autobuy' branch for to setup the autobuy feature.
-
-Prerequisites:
---------------
-
-- Need to be able to run JS code, preferably on a machine that is up 24/7 ( I use npm and node on a small raspberry pi, other options could be renting a VPS, or using services like Heroku)
-- Have a discord server you can invite the bot on
-- Node.js 20 or later
-
-Step 0: Download the code (git clone or download as zip)
---------------------------------------------------------
-
-Step 1: Create and invite the bot to your server
-------------------------------------------------
-
-- Go to the [Discord Developer Portal](https://discord.com/developers/applications).
-- Click on "New Application" and give your bot a name.
-- Go to the "Bot" tab and click on "Add Bot".
-- Copy the "Token" to put in the configuration file in the next steps.
-- Give intent permissions to the bot by going to the "Bot" tab and enabling the "Presence Intent", "Server Members Intent" and "Content Message Intent".
-- Invite the bot with admin permissions to your server by going to the "OAuth2" tab and selecting the "bot" and "application.commands" scope and the "Administrator" permission.
-- Copy the generated URL and paste it into your browser to invite the bot to your server. (credits:@teddy-vltn for the tutorial)
-
-Step 2: Install dependencies
-----------------------------
-
-If you want to use autobuy you will need to clone this branch, then add your session tokens to `autobuy.json`. You will also need to add your home address latitude and longitude for the automatic selection of the pickup point. Google your User Agent and paste it in the config too.
 ```
-{
-  "user_agent": "Mozilla....",
-  "access_token": "eyJ...",
-  "refresh_token": "eyJ...",
-  "latitude":1.1313,
-  "longitude":1.1313
-}
+[run] skip initial cookie fetch – no proxy available: No healthy proxies available
+[search] no proxy available No healthy proxies available
+[proxy] 192.168.1.1:8080 als schlecht markiert, verbleibend: 4
 ```
-You need to get the tokens from your browser storage, AFTER having logged-in with the account you want to use for your purchases
 
-Don't hesitate to contact me on discord (@thewwk) or open an issue here if you have any concerns or requests!
+## Erweiterte Konfiguration
+
+### Proxy-Einstellungen anpassen
+
+```bash
+# Proxy-Validierung weniger streng machen
+export PROXY_TIMEOUT=15000        # Timeout in ms
+export PROXY_MAX_HEALTHY=10       # Maximale Anzahl gesunder Proxies
+
+# Proxy-Refresh häufiger machen
+export PROXY_REFRESH_HOURS=2      # Alle 2 Stunden
+```
+
+### Fallback-Mechanismen
+
+Der Bot hat mehrere Fallback-Ebenen:
+
+1. **Strenge Proxy-Validierung** (Standard)
+2. **Lockere Proxy-Validierung** (über httpbin.org)
+3. **Direkte Verbindung** (wenn `ALLOW_DIRECT=1`)
+4. **Automatische Proxy-Pool-Erneuerung**
+
+## Support
+
+Bei Problemen:
+
+1. Überprüfe die Logs auf spezifische Fehlermeldungen
+2. Stelle sicher, dass alle Umgebungsvariablen korrekt gesetzt sind
+3. Teste die ProxyScrape-API manuell
+4. Überprüfe deine Discord Bot-Berechtigungen
+
+## Lizenz
+
+Siehe [LICENSE](LICENSE) Datei.
