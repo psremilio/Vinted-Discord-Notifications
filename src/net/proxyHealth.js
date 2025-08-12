@@ -11,7 +11,12 @@ export async function initProxyPool() {
     try {
         proxies = fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter(Boolean).slice(0, 200);
     } catch (err) {
-        console.warn('[proxy] proxy list not found:', err.message);
+        console.warn('[proxy] proxy list not found:', err.message, '- will use direct connection');
+        return;
+    }
+    
+    if (proxies.length === 0) {
+        console.warn('[proxy] no proxies in file - will use direct connection');
         return;
     }
     const base = process.env.VINTED_BASE_URL || 'https://www.vinted.de/';

@@ -7,17 +7,23 @@ It's a feature that is truly missed in the Vinted app, you will never miss a goo
 > [!WARNING]
 >  Vinted uses Cloudflare to protect its API from scraping. A single IP is only allowed a limited number of calls before being blocked for 24h. If you want to have this bot running 24/7 you should consider adding rotating proxies.
 
-Set the following environment variables before running `start.sh`:
+## Environment Variables
 
-```
+**Required variables:**
+```bash
 export BOT_TOKEN=your_discord_bot_token
-export VINTED_BASE_URL="https://www.vinted.de"      # or set LOGIN_URL for backward compatibility
-export PS_API_KEY=your_key
-export SERVICE_ID=your_service_id
-export PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${SERVICE_ID}"
-# set to 1 to allow direct requests when all proxies fail
-export ALLOW_DIRECT=0
+export VINTED_BASE_URL="https://www.vinted.de"      # or your country's Vinted URL
 ```
+
+**Optional proxy variables (leave empty to use direct connection):**
+```bash
+export PS_API_KEY=your_key                          # ProxyScrape API key (optional)
+export SERVICE_ID=your_service_id                   # ProxyScrape service ID (optional)
+export PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${SERVICE_ID}"
+```
+
+> [!NOTE]
+> The bot will automatically fall back to direct connections when no proxy credentials are provided or when proxy fetching fails. This makes it easier to get started without needing proxy services.
 
 Functionalities:
 ----------------
