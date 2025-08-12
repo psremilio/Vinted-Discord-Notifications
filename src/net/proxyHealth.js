@@ -1,5 +1,7 @@
 import fs from 'fs';
 import axios from 'axios';
+import { HttpProxyAgent } from 'http-proxy-agent';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const healthy = [];
 
@@ -14,19 +16,22 @@ export async function initProxyPool() {
         console.warn('[proxy] proxy list not found:', err.message);
         return 0;
     }
-    const base = process.env.VINTED_BASE_URL || 'https://www.vinted.de/';
+    const rawBase = process.env.VINTED_BASE_URL || 'https://www.vinted.de';
+    const baseNoSemi = rawBase.replace(/;+$/, '');
+    const HOME_URL = new URL('/', new URL(baseNoSemi)).toString();
     for (const p of proxies) {
         if (healthy.length >= 20) break;
         try {
-            const [host, portStr] = p.split(':');
-            const port = Number(portStr);
-            const res = await axios.get(base, {
-                proxy: { protocol: 'http', host, port },
+            const proxyUrl = `http://${p}`;
+            const res = await axios.get(HOME_URL, {
+                proxy: false,
+                httpAgent: new HttpProxyAgent(proxyUrl),
+                httpsAgent: new HttpsProxyAgent(proxyUrl),
                 maxRedirects: 0,
                 timeout: 10000,
                 headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
                 },
                 validateStatus: () => true,
             });
