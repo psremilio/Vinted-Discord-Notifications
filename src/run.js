@@ -9,6 +9,10 @@ const activeSearches = new Map();
 // Will hold IDs of articles already processed across all searches
 let processedArticleIds = new Set();
 
+const rawBase = process.env.VINTED_BASE_URL || 'https://www.vinted.de';
+const baseNoSemi = rawBase.replace(/;+$/, '');
+const HOME_URL = new URL('/', new URL(baseNoSemi)).toString();
+
 const runSearch = async (client, channel) => {
     try {
         process.stdout.write('.');
@@ -87,7 +91,7 @@ export const run = async (client, mySearches) => {
     try {
         const { http } = getHttp();
         try {
-            await http.get(process.env.VINTED_BASE_URL || 'https://www.vinted.de/');
+            await http.get(HOME_URL);
         } catch (err) {
             console.error('[run] initial cookie fetch failed:', err);
         }
@@ -104,7 +108,7 @@ export const run = async (client, mySearches) => {
     setInterval(async () => {
         try {
             const { http } = getHttp();
-            await http.get(process.env.VINTED_BASE_URL || 'https://www.vinted.de/');
+            await http.get(HOME_URL);
             console.log('reducing processed articles size');
             const halfSize = Math.floor(processedArticleIds.size / 2);
             processedArticleIds = new Set([...processedArticleIds].slice(halfSize));

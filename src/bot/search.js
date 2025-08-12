@@ -1,4 +1,4 @@
-import { getHttp, rotateProxy } from "../net/http.js";
+import { getHttp, rotateProxy, isProxyReallyBad } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 
 //send the authenticated request
@@ -37,8 +37,9 @@ export const vintedSearch = async (channel, processedArticleIds) => {
           if (!ct.includes('application/json')) throw new Error(`Non-JSON: ${ct}`);
           return selectNewArticles(res.data, processedArticleIds, channel);
       } catch (e) {
-          console.warn('[search] fail on proxy', proxy, e.message || e);
-          rotateProxy(proxy);
+          const status = e?.response?.status;
+          console.warn('[search] fail on proxy', proxy, status ? `status ${status}` : (e.message || e));
+          if (isProxyReallyBad(e)) rotateProxy(proxy);
       }
 
       try {
@@ -55,8 +56,9 @@ export const vintedSearch = async (channel, processedArticleIds) => {
           if (!ct.includes('application/json')) throw new Error(`Non-JSON: ${ct}`);
           return selectNewArticles(res.data, processedArticleIds, channel);
       } catch (e2) {
-          console.warn('[search] retry failed on proxy', proxy, e2.message || e2);
-          rotateProxy(proxy);
+          const status = e2?.response?.status;
+          console.warn('[search] retry failed on proxy', proxy, status ? `status ${status}` : (e2.message || e2));
+          if (isProxyReallyBad(e2)) rotateProxy(proxy);
           return [];
       }
 };
