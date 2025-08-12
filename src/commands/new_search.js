@@ -68,7 +68,7 @@ export const execute = async (interaction) => {
 
     try {
         //register the search into the json file
-        const searches = JSON.parse(fs.readFileSync(filePath));
+        const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
         if (searches.some(search => search.channelName === name)) {
             await interaction.followUp({ content: 'A search with the name ' + name + ' already exists.'});
