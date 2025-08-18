@@ -27,6 +27,7 @@ Functionalities:
 - Ability to block certain words from the title of your search results, to make your searches even more precise!
 - Checkout the 'autobuy' branch for to setup the autobuy feature.
 - New searches added via `/new_search` start monitoring immediately and duplicate names are ignored to prevent rescheduling.
+- Includes unit tests ensuring `/new_search` scheduling works without a restart.
 
 Prerequisites:
 --------------

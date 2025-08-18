@@ -1,19 +1,5 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 
-//set-up the buttons
-const components = [
-  new ActionRowBuilder().addComponents([
-    new ButtonBuilder()
-        .setLabel("Details")
-        .setEmoji("🗄️")
-        .setStyle(ButtonStyle.Link),
-    new ButtonBuilder()
-        .setLabel("Message")
-        .setEmoji("🪐")
-        .setStyle(ButtonStyle.Link),
-    ]),
-];
-
 //format the timestamp
 async function cleanTime(time) {
     let delay;
@@ -24,7 +10,7 @@ async function cleanTime(time) {
     } else if (time < 3600000) {
         delay = `${(time / 60000).toFixed(0)}min`;
     } else {
-        delay = `${(time / 3600000000).toFixed(0)}h`;
+        delay = `${(time / 3600000).toFixed(0)}h`;
     }
     return delay;
 }
@@ -37,8 +23,18 @@ export async function postArticles(newArticles, channelToSend) {
         const cleanDelay = await cleanTime(delayInSeconds);
         //set button urls based on the item's origin
         const origin = new URL(item.url).origin;
-        components[0].components[0].setURL(`${origin}/items/${item.id}`);
-        components[0].components[1].setURL(`${origin}/items/${item.id}/want_it/new?`);
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setLabel('Details')
+                .setEmoji('🗄️')
+                .setStyle(ButtonStyle.Link)
+                .setURL(`${origin}/items/${item.id}`),
+            new ButtonBuilder()
+                .setLabel('Message')
+                .setEmoji('🪐')
+                .setStyle(ButtonStyle.Link)
+                .setURL(`${origin}/items/${item.id}/want_it/new?`)
+        );
 
         return channelToSend.send({
             embeds: [{
@@ -60,7 +56,7 @@ export async function postArticles(newArticles, channelToSend) {
                 timestamp,
                 color: parseInt("09b1ba", 16),
             }],
-            components,
+            components: [row],
         });
     });
     await Promise.all(messages);

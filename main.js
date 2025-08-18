@@ -5,7 +5,7 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import fs from 'fs';
 
 import { registerCommands, handleCommands } from './src/commands.js';
-import { startScheduler } from './src/scheduler.js';
+import { run } from './src/run.js';
 
 dotenv.config();
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
@@ -14,7 +14,7 @@ const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'))
 client.on('ready',async()=>{
   console.log(`Logged in as ${client.user.tag}!`);
   registerCommands(client);
-  startScheduler(client,mySearches);
+  run(client,mySearches);
 });
 client.on('interactionCreate',interaction=>{
   if(interaction.isCommand()) handleCommands(interaction,mySearches);

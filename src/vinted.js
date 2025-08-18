@@ -1,7 +1,8 @@
 import { request } from 'undici';
 
-export async function fetchVinted(params) {
-  const host = process.env.MARKET === 'de' ? 'https://www.vinted.de' : `https://www.vinted.${process.env.MARKET}`;
+export async function fetchVinted(params = {}) {
+  const market = (process.env.MARKET || 'de').toLowerCase();
+  const host = `https://www.vinted.${market}`;
   const url = new URL('/api/v2/catalog/items', host);
   if (params.q) url.searchParams.set('search_text', params.q);
   if (params.size) url.searchParams.set('size_id', params.size);

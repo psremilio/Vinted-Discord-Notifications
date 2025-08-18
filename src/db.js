@@ -1,6 +1,30 @@
+import fs from 'fs';
+import path from 'path';
 import Database from 'better-sqlite3';
 
-const db = new Database('/data/vinted.sqlite');
+const DEFAULT_DIR = process.env.DATA_DIR || '/data';
+
+function ensureDir(p) {
+  try {
+    fs.mkdirSync(p, { recursive: true });
+  } catch {
+    // ignore
+  }
+}
+
+let dataDir = DEFAULT_DIR;
+ensureDir(dataDir);
+
+try {
+  fs.accessSync(dataDir, fs.constants.W_OK);
+} catch {
+  dataDir = path.resolve('./data');
+  ensureDir(dataDir);
+}
+
+const dbPath = path.join(dataDir, 'vinted.sqlite');
+
+const db = new Database(dbPath);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS subscriptions (
