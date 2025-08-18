@@ -26,6 +26,7 @@ Functionalities:
 - Each search has its own schedule! you just have to configure how frequently it needs to be refreshed
 - Ability to block certain words from the title of your search results, to make your searches even more precise!
 - Checkout the 'autobuy' branch for to setup the autobuy feature.
+- New searches added via `/new_search` start monitoring immediately and duplicate names are ignored to prevent rescheduling.
 
 Prerequisites:
 --------------

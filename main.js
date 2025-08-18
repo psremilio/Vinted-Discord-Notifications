@@ -4,17 +4,17 @@ import dotenv from 'dotenv';
 import { Client, GatewayIntentBits } from 'discord.js';
 import fs from 'fs';
 
-import { run } from './src/run.js';
 import { registerCommands, handleCommands } from './src/commands.js';
+import { startScheduler } from './src/scheduler.js';
 
 dotenv.config();
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
 
 client.on('ready',async()=>{
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Logged in as ${client.user.tag}!`);
   registerCommands(client);
-  run(client,mySearches);
+  startScheduler(client,mySearches);
 });
 client.on('interactionCreate',interaction=>{
   if(interaction.isCommand()) handleCommands(interaction,mySearches);

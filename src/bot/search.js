@@ -1,4 +1,4 @@
-import { getHttp, rotateProxy, isProxyReallyBad } from "../net/http.js";
+import { getHttp, rotateProxy } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 
 //send the authenticated request
@@ -24,41 +24,39 @@ export const vintedSearch = async (channel, processedArticleIds) => {
     }).toString();
       let http, proxy;
       try {
-          ({ http, proxy } = getHttp());
+          ({ http, proxy } = await getHttp());
       } catch (e) {
           console.warn('[search] no proxy available', e.message || e);
           return [];
       }
       try {
           const res = await http.get(apiUrl.href, {
-              headers: { Referer: channel.url },
+              headers: { Referer: channel.url, Accept: 'application/json' },
           });
           const ct = (res.headers['content-type'] || '').toLowerCase();
           if (!ct.includes('application/json')) throw new Error(`Non-JSON: ${ct}`);
           return selectNewArticles(res.data, processedArticleIds, channel);
       } catch (e) {
-          const status = e?.response?.status;
-          console.warn('[search] fail on proxy', proxy, status ? `status ${status}` : (e.message || e));
-          if (isProxyReallyBad(e)) rotateProxy(proxy);
+          console.warn('[search] fail on proxy', proxy, e.message || e);
+          rotateProxy(proxy);
       }
 
       try {
-          ({ http, proxy } = getHttp());
+          ({ http, proxy } = await getHttp());
       } catch (e) {
           console.warn('[search] no proxy available (retry)', e.message || e);
           return [];
       }
       try {
           const res = await http.get(apiUrl.href, {
-              headers: { Referer: channel.url },
+              headers: { Referer: channel.url, Accept: 'application/json' },
           });
           const ct = (res.headers['content-type'] || '').toLowerCase();
           if (!ct.includes('application/json')) throw new Error(`Non-JSON: ${ct}`);
           return selectNewArticles(res.data, processedArticleIds, channel);
       } catch (e2) {
-          const status = e2?.response?.status;
-          console.warn('[search] retry failed on proxy', proxy, status ? `status ${status}` : (e2.message || e2));
-          if (isProxyReallyBad(e2)) rotateProxy(proxy);
+          console.warn('[search] retry failed on proxy', proxy, e2.message || e2);
+          rotateProxy(proxy);
           return [];
       }
 };

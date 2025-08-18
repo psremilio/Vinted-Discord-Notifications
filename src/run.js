@@ -1,5 +1,5 @@
 import { vintedSearch } from "./bot/search.js";
-// import { postArticles } from "./bot/post.js"; // moved to dynamic import to avoid heavy deps during tests
+import { postArticles } from "./bot/post.js";
 import { initProxyPool, getHttp } from "./net/http.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
@@ -8,10 +8,6 @@ import { initProxyPool, getHttp } from "./net/http.js";
 const activeSearches = new Map();
 // Will hold IDs of articles already processed across all searches
 let processedArticleIds = new Set();
-
-const rawBase = process.env.VINTED_BASE_URL || 'https://www.vinted.de';
-const baseNoSemi = rawBase.replace(/;+$/, '');
-const HOME_URL = new URL('/', new URL(baseNoSemi)).toString();
 
 const runSearch = async (client, channel) => {
     try {
@@ -22,7 +18,6 @@ const runSearch = async (client, channel) => {
         if (articles && articles.length > 0) {
             process.stdout.write('\n' + channel.channelName + ' => +' + articles.length);
             articles.forEach(article => { processedArticleIds.add(article.id); });
-            const { postArticles } = await import('./bot/post.js');
             await postArticles(articles, client.channels.cache.get(channel.channelId));
         }
     } catch (err) {
@@ -59,26 +54,7 @@ const addSearch = (client, search) => {
 //first, get cookies, then init the article id set, then launch the simmultaneous searches
 export const run = async (client, mySearches) => {
     processedArticleIds = new Set();
-
-    // Initialize proxies with simple retry loop before continuing
-    const maxInitTries = parseInt(process.env.PROXY_INIT_TRIES || '6', 10); // ~3 min if default sleep
-    const initSleepMs = parseInt(process.env.PROXY_INIT_SLEEP_MS || '30000', 10);
-    let healthyCount = 0;
-    for (let i = 0; i < maxInitTries; i++) {
-        try {
-            healthyCount = await initProxyPool();
-        } catch (e) {
-            console.warn('[proxy] init failed:', e.message || e);
-            healthyCount = 0;
-        }
-        if (healthyCount > 0) break;
-        console.warn(`[proxy] Healthy proxies: ${healthyCount} – retry in ${Math.ceil(initSleepMs/1000)}s (${i+1}/${maxInitTries})`);
-        await new Promise(r => setTimeout(r, initSleepMs));
-    }
-    if (healthyCount === 0) {
-        console.error('[proxy] No healthy proxies available after initialization. Bot will run but searches will be skipped until a proxy becomes available.');
-    }
-
+    await initProxyPool();
     const REFRESH_H = parseInt(process.env.PROXY_REFRESH_HOURS || '6', 10);
     setInterval(async () => {
         try {
@@ -89,9 +65,9 @@ export const run = async (client, mySearches) => {
         }
     }, REFRESH_H * 60 * 60 * 1000);
     try {
-        const { http } = getHttp();
+        const { http } = await getHttp();
         try {
-            await http.get(HOME_URL);
+            await http.get(process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/');
         } catch (err) {
             console.error('[run] initial cookie fetch failed:', err);
         }
@@ -107,8 +83,8 @@ export const run = async (client, mySearches) => {
     //fetch new cookies and clean ProcessedArticleIDs at interval
     setInterval(async () => {
         try {
-            const { http } = getHttp();
-            await http.get(HOME_URL);
+            const { http } = await getHttp();
+            await http.get(process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/');
             console.log('reducing processed articles size');
             const halfSize = Math.floor(processedArticleIds.size / 2);
             processedArticleIds = new Set([...processedArticleIds].slice(halfSize));
