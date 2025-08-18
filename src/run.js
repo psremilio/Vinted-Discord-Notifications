@@ -1,8 +1,15 @@
 import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
-import { fetchCookies } from "./api/fetch-auth.js";
+import { initProxyPool, getHttp } from "./net/http.js";
 
-const runSearch = async (client, processedArticleIds, channel) => {
+// Map of channel names that are already scheduled.  addSearch() consults
+// this via `activeSearches.has(name)` so repeated /new_search commands don't
+// create duplicate timers.
+const activeSearches = new Map();
+// Will hold IDs of articles already processed across all searches
+let processedArticleIds = new Set();
+
+const runSearch = async (client, channel) => {
     try {
         process.stdout.write('.');
         const articles = await vintedSearch(channel, processedArticleIds);
@@ -19,38 +26,72 @@ const runSearch = async (client, processedArticleIds, channel) => {
 };
 
 //run the search and set a timeout to run it again   
-const runInterval = async (client, processedArticleIds, channel) => {
-    await runSearch(client, processedArticleIds, channel);
-    setTimeout(() => runInterval(client, processedArticleIds, channel), channel.frequency*1000);
+const runInterval = async (client, channel) => {
+    await runSearch(client, channel);
+    const delay = channel.frequency * 1000 * (0.8 + Math.random() * 0.4);
+    setTimeout(() => runInterval(client, channel), delay);
+};
+
+// Attach a new search to the scheduler
+const addSearch = (client, search) => {
+    if (activeSearches.has(search.channelName)) return;
+    activeSearches.set(search.channelName, true);
+    if (process.env.NODE_ENV === 'test') {
+        setTimeout(() => { runInterval(client, search); }, 1000);
+        return;
+    }
+    (async () => {
+        try {
+            // ersten Poll direkt losschicken, nicht erst nach timeout
+            await runSearch(client, search);
+        } catch (err) {
+            console.error('\nError in initializing articles:', err);
+        }
+        setTimeout(() => { runInterval(client, search); }, 1000);
+    })();
 };
 
 //first, get cookies, then init the article id set, then launch the simmultaneous searches
 export const run = async (client, mySearches) => {
-    let processedArticleIds = new Set();
-    await fetchCookies();
- 
-    //stagger start time for searches to avoid too many simmultaneous requests
-    mySearches.forEach((channel, index) => {
-        setTimeout(async () => {
-            try {
-                const initArticles = await vintedSearch(channel, processedArticleIds);
-                initArticles.forEach(article => { processedArticleIds.add(article.id); });
-            } catch (err) {
-                console.error('\nError in initializing articles:', err);
-            }
-            setTimeout(() => {runInterval(client, processedArticleIds, channel);}, 1000);
-        }, index * 1000);
-    });
-
-    //fetch new cookies and clean ProcessedArticleIDs at interval    
+    processedArticleIds = new Set();
+    await initProxyPool();
+    const REFRESH_H = parseInt(process.env.PROXY_REFRESH_HOURS || '6', 10);
     setInterval(async () => {
         try {
-            await fetchCookies();
+            console.log('[proxy] refreshing pool…');
+            await initProxyPool();
+        } catch (e) {
+            console.warn('[proxy] refresh failed:', e.message || e);
+        }
+    }, REFRESH_H * 60 * 60 * 1000);
+    try {
+        const { http } = await getHttp();
+        try {
+            await http.get(process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/');
+        } catch (err) {
+            console.error('[run] initial cookie fetch failed:', err);
+        }
+    } catch (e) {
+        console.warn('[run] skip initial cookie fetch – no proxy available:', e.message || e);
+    }
+
+    //stagger start time for searches to avoid too many simultaneous requests
+    mySearches.forEach((channel, index) => {
+        setTimeout(() => addSearch(client, channel), index * 1000 + 5000);
+    });
+
+    //fetch new cookies and clean ProcessedArticleIDs at interval
+    setInterval(async () => {
+        try {
+            const { http } = await getHttp();
+            await http.get(process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/');
             console.log('reducing processed articles size');
             const halfSize = Math.floor(processedArticleIds.size / 2);
-            processedArticleIds = new Set([...processedArticleIds].slice(halfSize)); //convert to an array and keep only the last half of the elements
+            processedArticleIds = new Set([...processedArticleIds].slice(halfSize));
         } catch (err) {
-            console.error('\nError getting new cookies:', err);
+            console.error('[run] hourly cookie refresh skipped:', err.message || err);
         }
     }, 1*60*60*1000); //set interval to 1h, after which session could be expired
 };
+
+export { addSearch, activeSearches };
