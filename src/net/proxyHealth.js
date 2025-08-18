@@ -23,11 +23,12 @@ export async function initProxyPool() {
             const port = Number(portStr);
             const res = await axios.get(base, {
                 proxy: { protocol: 'http', host, port },
+                timeout: 7000,
                 maxRedirects: 0,
                 validateStatus: () => true,
             });
-            const cookies = res.headers['set-cookie'];
-            if (cookies && cookies.length) {
+            // treat any <500 status (including 403/429) as reachable
+            if (res.status >= 200 && res.status < 500) {
                 healthy.push(p);
             }
         } catch (e) {
