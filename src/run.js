@@ -67,7 +67,10 @@ export const run = async (client, mySearches) => {
     try {
         const { http } = await getHttp();
         try {
-            await http.get(process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/');
+            await http.get(
+                process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/',
+                { validateStatus: () => true }
+            );
         } catch (err) {
             console.error('[run] initial cookie fetch failed:', err);
         }
@@ -84,7 +87,10 @@ export const run = async (client, mySearches) => {
     setInterval(async () => {
         try {
             const { http } = await getHttp();
-            await http.get(process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/');
+            await http.get(
+                process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/',
+                { validateStatus: () => true }
+            );
             console.log('reducing processed articles size');
             const halfSize = Math.floor(processedArticleIds.size / 2);
             processedArticleIds = new Set([...processedArticleIds].slice(halfSize));

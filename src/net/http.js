@@ -34,8 +34,15 @@ function createClient(proxyStr) {
 async function warmUp(client) {
   const base = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/';
   if (Date.now() - client.warmedAt < 30 * 60 * 1000) return;
-  await client.http.get(base);
-  client.warmedAt = Date.now();
+  try {
+    // 4xx/3xx responses still prove the proxy is reachable
+    await client.http.get(base, { validateStatus: () => true, timeout: 10000 });
+  } catch (e) {
+    // network errors shouldn't abort warmup
+    console.warn('[warmup] ignoring error:', e.message || e);
+  } finally {
+    client.warmedAt = Date.now();
+  }
 }
 
 export async function getHttp() {
