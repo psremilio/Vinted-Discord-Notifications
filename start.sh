@@ -11,10 +11,7 @@ WHITELIST_SLEEP="${WHITELIST_SLEEP:-300}"
 
 # — Railway-Whitelist —
 MY_IP=$(curl -fsS https://api64.ipify.org)
-curl -fsSL "https://api.proxyscrape.com/v2/account/datacenter_shared/whitelist" \
-     --data-urlencode "auth=${PS_API_KEY}" \
-     --data-urlencode "service=${SERVICE_ID}" \
-     --data-urlencode "ip[]=${MY_IP}"
+curl -fsSL "https://api.proxyscrape.com/v2/account/datacenter_shared/whitelist"      --data-urlencode "auth=${PS_API_KEY}"      --data-urlencode "service=${SERVICE_ID}"      --data-urlencode "ip[]=${MY_IP}"
 echo "[proxy] IP $MY_IP whitelisted – warte ${WHITELIST_SLEEP}s"
 sleep "$WHITELIST_SLEEP"
 

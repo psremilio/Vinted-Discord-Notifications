@@ -46,7 +46,16 @@ async function warmUp(client) {
 }
 
 export async function getHttp() {
-  if (!CURRENT_PROXY) CURRENT_PROXY = getProxy();
+  if (!CURRENT_PROXY) {
+    CURRENT_PROXY = getProxy();
+    if (!CURRENT_PROXY) {
+      try {
+        const mod = await import('./proxyHealth.js');
+        await mod.initProxyPool();
+        CURRENT_PROXY = getProxy();
+      } catch {}
+    }
+  }
   if (!CURRENT_PROXY) {
     if (process.env.ALLOW_DIRECT === '1') {
       const http = wrapper(
