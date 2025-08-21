@@ -24,6 +24,7 @@ export async function initProxyPool() {
     let successful = 0;
     let blocked = 0;
     let failed = 0;
+    let rateLimited = 0;
     
     for (const p of proxies) {
         if (healthy.length >= 20) break;
@@ -34,6 +35,11 @@ export async function initProxyPool() {
             
             // Create HTTPS proxy agent for proper tunneling
             const proxyAgent = new HttpsProxyAgent(`http://${host}:${port}`);
+            
+            // Add random delay between proxy tests to avoid overwhelming
+            if (tested > 1) {
+                await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 500));
+            }
             
             const res = await axios.get(base, {
                 proxy: false, // Disable axios proxy handling
@@ -50,6 +56,9 @@ export async function initProxyPool() {
                     'Connection': 'keep-alive',
                     'Cache-Control': 'no-cache',
                     'Pragma': 'no-cache',
+                    'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                    'sec-ch-ua-mobile': '?0',
+                    'sec-ch-ua-platform': '"Windows"',
                 }
             });
             
@@ -61,6 +70,9 @@ export async function initProxyPool() {
             } else if (res.status === 401) {
                 blocked++;
                 console.debug(`[proxy] Proxy ${p} returned 401 - likely blocked`);
+            } else if (res.status === 403) {
+                rateLimited++;
+                console.debug(`[proxy] Proxy ${p} returned 403 - rate limited`);
             } else {
                 failed++;
                 console.debug(`[proxy] Proxy ${p} failed with status: ${res.status}`);
@@ -75,7 +87,7 @@ export async function initProxyPool() {
         }
     }
     
-    console.log(`[proxy] Proxy test results: ${tested} tested, ${successful} healthy, ${blocked} blocked (401), ${failed} failed`);
+    console.log(`[proxy] Proxy test results: ${tested} tested, ${successful} healthy, ${blocked} blocked (401), ${rateLimited} rate limited (403), ${failed} failed`);
     console.log(`[proxy] Healthy proxies: ${healthy.length}`);
 }
 

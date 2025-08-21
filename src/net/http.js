@@ -38,6 +38,10 @@ function createClient(proxyStr) {
       'Sec-Fetch-Site': 'same-origin',
       'Cache-Control': 'no-cache',
       'Pragma': 'no-cache',
+      'X-Requested-With': 'XMLHttpRequest',
+      'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
     },
   });
   

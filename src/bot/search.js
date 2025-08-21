@@ -23,10 +23,15 @@ export const vintedSearch = async (channel, processedArticleIds) => {
     const url = new URL(channel.url);
     const ids = handleParams(url);
     const apiUrl = new URL(`https://${url.host}/api/v2/catalog/items`);
+    
+    // Add more randomization to the time parameter
+    const timeOffset = Math.floor(Math.random() * 300) - 150; // -150 to +150 seconds
+    const currentTime = Math.floor(Date.now() / 1000) + timeOffset;
+    
     apiUrl.search = new URLSearchParams({
         page: '1',
         per_page: '96',
-        time: Math.floor(Date.now()/1000 - Math.random()*60*3), //mimic random time, often with a delay in vinted
+        time: currentTime,
         search_text: ids.text,
         catalog_ids: ids.catalog,
         price_from: ids.min,
@@ -51,6 +56,10 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         }
 
         try {
+            // Add random delay before request to avoid predictable patterns
+            const randomDelay = Math.random() * 2000 + 1000; // 1-3 seconds
+            await new Promise(resolve => setTimeout(resolve, randomDelay));
+            
             const res = await http.get(apiUrl.href, {
                 // emulate a real browser request so Cloudflare is less likely to block us
                 headers: {
@@ -68,6 +77,10 @@ export const vintedSearch = async (channel, processedArticleIds) => {
                   'Sec-Fetch-Site': 'same-origin',
                   'Cache-Control': 'no-cache',
                   'Pragma': 'no-cache',
+                  'X-Requested-With': 'XMLHttpRequest',
+                  'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                  'sec-ch-ua-mobile': '?0',
+                  'sec-ch-ua-platform': '"Windows"',
                 },
                 validateStatus: () => true,
             });
@@ -85,6 +98,13 @@ export const vintedSearch = async (channel, processedArticleIds) => {
                 // Add small delay to avoid overwhelming the system
                 await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
                 throw new Error(`HTTP ${res.status}`);
+            } else if (res.status === 403) {
+                // 403 Forbidden - rotate proxy as this proxy is likely rate limited
+                console.warn('[search] HTTP 403 on proxy', proxy, '- rotating proxy (rate limited)');
+                rotateProxy(proxy);
+                // Longer delay for rate limiting
+                await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 5000));
+                throw new Error(`HTTP ${res.status}`);
             } else if (res.status >= 400 && res.status < 500) {
                 // Other client errors (4xx) - don't rotate proxy, just retry
                 throw new Error(`HTTP ${res.status}`);
@@ -97,7 +117,7 @@ export const vintedSearch = async (channel, processedArticleIds) => {
             console.warn('[search] fail on proxy', proxy, e.message || e);
             throw e; // Re-throw to trigger retry
         }
-    }, 3, 3000); // 3 retries with 3s base delay
+    }, 3, 5000); // 3 retries with 5s base delay (longer for rate limiting)
 };
 
 //chooses only articles not already seen & posted in the last 10min
