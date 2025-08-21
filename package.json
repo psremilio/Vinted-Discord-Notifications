@@ -21,8 +21,6 @@
         "dotenv": "^16.4.5",
         "https-proxy-agent": "^7.0.4",
         "undici": "^6.18.1",
-        "valid-url": "^1.0.9",
-        "axios-cookiejar-support": "^6.0.2",
-        "tough-cookie": "^4.1.3"
+        "valid-url": "^1.0.9"
     }
 }

@@ -1,6 +1,4 @@
 import axios from 'axios';
-import { wrapper } from 'axios-cookiejar-support';
-import { CookieJar } from 'tough-cookie';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { getProxy, markBadInPool } from './proxyHealth.js';
 
@@ -17,29 +15,27 @@ function createClient(proxyStr) {
   // Create HTTPS proxy agent for proper tunneling
   const proxyAgent = new HttpsProxyAgent(`http://${host}:${port}`);
   
-  const http = wrapper(
-    axios.create({
-      jar: new CookieJar(),
-      withCredentials: true,
-      maxRedirects: 5,
-      timeout: 15000,
-      proxy: false, // Disable axios proxy handling
-      httpsAgent: proxyAgent, // Use our custom agent
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'same-origin',
-        'TE': 'trailers',
-      },
-    })
-  );
+  const http = axios.create({
+    withCredentials: true,
+    maxRedirects: 5,
+    timeout: 15000,
+    proxy: false, // Disable axios proxy handling
+    httpsAgent: proxyAgent, // Use our custom agent
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'same-origin',
+      'TE': 'trailers',
+    },
+  });
+  
   const client = { http, warmedAt: 0, proxyAgent };
   clientsByProxy.set(proxyStr, client);
   return client;
@@ -87,14 +83,12 @@ export async function getHttp() {
   }
   if (!CURRENT_PROXY) {
     if (process.env.ALLOW_DIRECT === '1') {
-      const http = wrapper(
-        axios.create({
-          withCredentials: true,
-          maxRedirects: 5,
-          timeout: 15000,
-          proxy: false,
-        })
-      );
+      const http = axios.create({
+        withCredentials: true,
+        maxRedirects: 5,
+        timeout: 15000,
+        proxy: false,
+      });
       return { http, proxy: 'DIRECT' };
     }
     throw new Error('No healthy proxies available');
