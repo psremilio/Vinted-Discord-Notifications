@@ -12,14 +12,22 @@ export async function initProxyPool() {
     let proxies = [];
     try {
         proxies = fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter(Boolean).slice(0, 200);
+        console.log(`[proxy] Loaded ${proxies.length} proxies from ${file}`);
     } catch (err) {
         console.warn('[proxy] proxy list not found:', err.message);
         return;
     }
     const base = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/';
+    console.log(`[proxy] Testing proxies against: ${base}`);
+    
+    let tested = 0;
+    let successful = 0;
+    let blocked = 0;
+    let failed = 0;
     
     for (const p of proxies) {
         if (healthy.length >= 20) break;
+        tested++;
         try {
             const [host, portStr] = p.split(':');
             const port = Number(portStr);
@@ -40,22 +48,34 @@ export async function initProxyPool() {
                     'Accept-Encoding': 'gzip, deflate, br',
                     'DNT': '1',
                     'Connection': 'keep-alive',
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
                 }
             });
             
-            // treat any <500 status (including 403/429) as reachable
-            if (res.status >= 200 && res.status < 500) {
+            // treat any <500 status (including 403/429) as reachable, but exclude 401
+            if (res.status >= 200 && res.status < 500 && res.status !== 401) {
                 healthy.push(p);
-                console.log(`[proxy] Healthy proxy added: ${p}`);
+                successful++;
+                console.log(`[proxy] Healthy proxy added: ${p} (status: ${res.status})`);
+            } else if (res.status === 401) {
+                blocked++;
+                console.debug(`[proxy] Proxy ${p} returned 401 - likely blocked`);
+            } else {
+                failed++;
+                console.debug(`[proxy] Proxy ${p} failed with status: ${res.status}`);
             }
             
             // Clean up the agent
             proxyAgent.destroy();
         } catch (e) {
+            failed++;
             // ignore invalid proxy
             console.debug(`[proxy] Proxy ${p} failed: ${e.message}`);
         }
     }
+    
+    console.log(`[proxy] Proxy test results: ${tested} tested, ${successful} healthy, ${blocked} blocked (401), ${failed} failed`);
     console.log(`[proxy] Healthy proxies: ${healthy.length}`);
 }
 

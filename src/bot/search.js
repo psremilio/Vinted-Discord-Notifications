@@ -9,7 +9,9 @@ async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
     } catch (error) {
       if (attempt === maxRetries) throw error;
       
-      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      // Add randomization to avoid predictable patterns
+      const jitter = 0.5 + Math.random() * 0.5; // 0.5x to 1.0x multiplier
+      const delay = (baseDelay * Math.pow(2, attempt) + Math.random() * 1000) * jitter;
       console.log(`[search] attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -54,16 +56,18 @@ export const vintedSearch = async (channel, processedArticleIds) => {
                 headers: {
                   'User-Agent':
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                  'Accept': 'application/json, text/plain, */*',
                   'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
                   'Accept-Encoding': 'gzip, deflate, br',
                   'DNT': '1',
                   'Connection': 'keep-alive',
                   'Referer': channel.url,
-                  'Sec-Fetch-Dest': 'document',
-                  'Sec-Fetch-Mode': 'navigate',
+                  'Origin': `https://${url.host}`,
+                  'Sec-Fetch-Dest': 'empty',
+                  'Sec-Fetch-Mode': 'cors',
                   'Sec-Fetch-Site': 'same-origin',
-                  'TE': 'trailers',
+                  'Cache-Control': 'no-cache',
+                  'Pragma': 'no-cache',
                 },
                 validateStatus: () => true,
             });
@@ -74,8 +78,15 @@ export const vintedSearch = async (channel, processedArticleIds) => {
             }
             
             // Handle HTTP errors
-            if (res.status >= 400 && res.status < 500) {
-                // Client errors (4xx) - don't rotate proxy, just retry
+            if (res.status === 401) {
+                // 401 Unauthorized - rotate proxy immediately as this proxy is likely blocked
+                console.warn('[search] HTTP 401 on proxy', proxy, '- rotating proxy');
+                rotateProxy(proxy);
+                // Add small delay to avoid overwhelming the system
+                await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+                throw new Error(`HTTP ${res.status}`);
+            } else if (res.status >= 400 && res.status < 500) {
+                // Other client errors (4xx) - don't rotate proxy, just retry
                 throw new Error(`HTTP ${res.status}`);
             } else {
                 // Server errors (5xx) or other issues - rotate proxy
@@ -86,7 +97,7 @@ export const vintedSearch = async (channel, processedArticleIds) => {
             console.warn('[search] fail on proxy', proxy, e.message || e);
             throw e; // Re-throw to trigger retry
         }
-    }, 2, 2000); // 2 retries with 2s base delay
+    }, 3, 3000); // 3 retries with 3s base delay
 };
 
 //chooses only articles not already seen & posted in the last 10min

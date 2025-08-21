@@ -4,6 +4,10 @@ import { getProxy, markBadInPool } from './proxyHealth.js';
 
 const clientsByProxy = new Map();
 let CURRENT_PROXY = null;
+let failedProxiesCount = 0;
+const MAX_FAILED_PROXIES = 5;
+let globalCooldownUntil = 0;
+const GLOBAL_COOLDOWN_DURATION = 5 * 60 * 1000; // 5 minutes
 
 function createClient(proxyStr) {
   const existing = clientsByProxy.get(proxyStr);
@@ -24,15 +28,16 @@ function createClient(proxyStr) {
     headers: {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      Accept: 'application/json, text/plain, */*',
       'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
       'Accept-Encoding': 'gzip, deflate, br',
       'DNT': '1',
       'Connection': 'keep-alive',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
       'Sec-Fetch-Site': 'same-origin',
-      'TE': 'trailers',
+      'Cache-Control': 'no-cache',
+      'Pragma': 'no-cache',
     },
   });
   
@@ -71,6 +76,13 @@ async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
 }
 
 export async function getHttp() {
+  // Check global cooldown
+  if (Date.now() < globalCooldownUntil) {
+    const remaining = Math.ceil((globalCooldownUntil - Date.now()) / 1000);
+    console.warn(`[proxy] Global cooldown active, waiting ${remaining}s before retrying`);
+    await new Promise(resolve => setTimeout(resolve, remaining * 1000));
+  }
+  
   if (!CURRENT_PROXY) {
     CURRENT_PROXY = getProxy();
     if (!CURRENT_PROXY) {
@@ -91,6 +103,22 @@ export async function getHttp() {
       });
       return { http, proxy: 'DIRECT' };
     }
+    
+    // If no proxies available and direct is not allowed, try to refresh the pool one more time
+    try {
+      console.warn('[proxy] No proxies available, attempting to refresh pool...');
+      const mod = await import('./proxyHealth.js');
+      await mod.initProxyPool();
+      CURRENT_PROXY = getProxy();
+      if (CURRENT_PROXY) {
+        const client = createClient(CURRENT_PROXY);
+        await warmUp(client);
+        return { http: client.http, proxy: CURRENT_PROXY };
+      }
+    } catch (e) {
+      console.warn('[proxy] Failed to refresh proxy pool:', e.message);
+    }
+    
     throw new Error('No healthy proxies available');
   }
 
@@ -107,7 +135,27 @@ export function rotateProxy(badProxy) {
     }
     clientsByProxy.delete(badProxy);
   }
-  if (badProxy) markBadInPool(badProxy);
+  if (badProxy) {
+    markBadInPool(badProxy);
+    failedProxiesCount++;
+    
+    // If too many proxies are failing, refresh the pool and set global cooldown
+    if (failedProxiesCount >= MAX_FAILED_PROXIES) {
+      console.warn('[proxy] Too many failed proxies, refreshing pool and setting global cooldown...');
+      failedProxiesCount = 0;
+      globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_DURATION;
+      console.warn(`[proxy] Global cooldown set for ${GLOBAL_COOLDOWN_DURATION / 1000}s`);
+      
+      // Clear all clients to force recreation
+      for (const [proxy, client] of clientsByProxy) {
+        if (client.proxyAgent) {
+          client.proxyAgent.destroy();
+        }
+      }
+      clientsByProxy.clear();
+      CURRENT_PROXY = null;
+    }
+  }
   CURRENT_PROXY = getProxy();
 }
 
