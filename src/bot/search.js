@@ -1,6 +1,21 @@
 import { getHttp, rotateProxy } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 
+// Retry with exponential backoff
+async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      
+      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      console.log(`[search] attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 //send the authenticated request
 export const vintedSearch = async (channel, processedArticleIds) => {
     const url = new URL(channel.url);
@@ -22,82 +37,56 @@ export const vintedSearch = async (channel, processedArticleIds) => {
         color_ids: ids.colour,
         material_ids: ids.material,
     }).toString();
-      let http, proxy;
-      try {
-          ({ http, proxy } = await getHttp());
-      } catch (e) {
-          console.warn('[search] no proxy available', e.message || e);
-          return [];
-      }
-      try {
-          const res = await http.get(apiUrl.href, {
-              // emulate a real browser request so Cloudflare is less likely to block us
-              headers: {
-                'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Referer': channel.url,
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'same-origin',
-                'TE': 'trailers',
-              },
-              validateStatus: () => true,
-          });
-          const ct = String(res.headers['content-type'] || '').toLowerCase();
-          if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
-            return selectNewArticles(res.data, processedArticleIds, channel);
-          }
-          throw new Error(`HTTP ${res.status}`);
-      } catch (e) {
-          console.warn('[search] fail on proxy', proxy, e.message || e);
-          const status = Number((e.message || '').replace('HTTP ', ''));
-          if (!(status >= 400 && status < 500)) {
-            rotateProxy(proxy);
-          }
-      }
 
-      try {
-          ({ http, proxy } = await getHttp());
-      } catch (e) {
-          console.warn('[search] no proxy available (retry)', e.message || e);
-          return [];
-      }
-      try {
-          const res = await http.get(apiUrl.href, {
-              headers: {
-                'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Referer': channel.url,
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'same-origin',
-                'TE': 'trailers',
-              },
-              validateStatus: () => true,
-          });
-          const ct = String(res.headers['content-type'] || '').toLowerCase();
-          if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
-            return selectNewArticles(res.data, processedArticleIds, channel);
-          }
-          throw new Error(`HTTP ${res.status}`);
-      } catch (e2) {
-          console.warn('[search] retry failed on proxy', proxy, e2.message || e2);
-          const status = Number((e2.message || '').replace('HTTP ', ''));
-          if (!(status >= 400 && status < 500)) {
-            rotateProxy(proxy);
-          }
-          return [];
-      }
+    // Try with retry logic
+    return await retryWithBackoff(async () => {
+        let http, proxy;
+        try {
+            ({ http, proxy } = await getHttp());
+        } catch (e) {
+            console.warn('[search] no proxy available', e.message || e);
+            return [];
+        }
+
+        try {
+            const res = await http.get(apiUrl.href, {
+                // emulate a real browser request so Cloudflare is less likely to block us
+                headers: {
+                  'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                  'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+                  'Accept-Encoding': 'gzip, deflate, br',
+                  'DNT': '1',
+                  'Connection': 'keep-alive',
+                  'Referer': channel.url,
+                  'Sec-Fetch-Dest': 'document',
+                  'Sec-Fetch-Mode': 'navigate',
+                  'Sec-Fetch-Site': 'same-origin',
+                  'TE': 'trailers',
+                },
+                validateStatus: () => true,
+            });
+            
+            const ct = String(res.headers['content-type'] || '').toLowerCase();
+            if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
+              return selectNewArticles(res.data, processedArticleIds, channel);
+            }
+            
+            // Handle HTTP errors
+            if (res.status >= 400 && res.status < 500) {
+                // Client errors (4xx) - don't rotate proxy, just retry
+                throw new Error(`HTTP ${res.status}`);
+            } else {
+                // Server errors (5xx) or other issues - rotate proxy
+                rotateProxy(proxy);
+                throw new Error(`HTTP ${res.status}`);
+            }
+        } catch (e) {
+            console.warn('[search] fail on proxy', proxy, e.message || e);
+            throw e; // Re-throw to trigger retry
+        }
+    }, 2, 2000); // 2 retries with 2s base delay
 };
 
 //chooses only articles not already seen & posted in the last 10min

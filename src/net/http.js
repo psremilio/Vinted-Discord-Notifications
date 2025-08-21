@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { wrapper } from 'axios-cookiejar-support';
 import { CookieJar } from 'tough-cookie';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { getProxy, markBadInPool } from './proxyHealth.js';
 
 const clientsByProxy = new Map();
@@ -12,21 +13,34 @@ function createClient(proxyStr) {
 
   const [host, portStr] = proxyStr.split(':');
   const port = Number(portStr);
+  
+  // Create HTTPS proxy agent for proper tunneling
+  const proxyAgent = new HttpsProxyAgent(`http://${host}:${port}`);
+  
   const http = wrapper(
     axios.create({
       jar: new CookieJar(),
       withCredentials: true,
       maxRedirects: 5,
       timeout: 15000,
-      proxy: { protocol: 'http', host, port },
+      proxy: false, // Disable axios proxy handling
+      httpsAgent: proxyAgent, // Use our custom agent
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
         Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'same-origin',
+        'TE': 'trailers',
       },
     })
   );
-  const client = { http, warmedAt: 0 };
+  const client = { http, warmedAt: 0, proxyAgent };
   clientsByProxy.set(proxyStr, client);
   return client;
 }
@@ -42,6 +56,21 @@ async function warmUp(client) {
     console.warn('[warmup] ignoring error:', e.message || e);
   } finally {
     client.warmedAt = Date.now();
+  }
+}
+
+// Retry with exponential backoff
+async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      
+      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+      console.log(`[retry] attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 }
 
@@ -77,7 +106,13 @@ export async function getHttp() {
 }
 
 export function rotateProxy(badProxy) {
-  if (badProxy && clientsByProxy.has(badProxy)) clientsByProxy.delete(badProxy);
+  if (badProxy && clientsByProxy.has(badProxy)) {
+    const client = clientsByProxy.get(badProxy);
+    if (client.proxyAgent) {
+      client.proxyAgent.destroy();
+    }
+    clientsByProxy.delete(badProxy);
+  }
   if (badProxy) markBadInPool(badProxy);
   CURRENT_PROXY = getProxy();
 }

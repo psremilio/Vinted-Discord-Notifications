@@ -1,5 +1,6 @@
 import fs from 'fs';
 import axios from 'axios';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 const healthy = [];
 const cooldown = new Map();
@@ -16,26 +17,46 @@ export async function initProxyPool() {
         return;
     }
     const base = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/';
+    
     for (const p of proxies) {
         if (healthy.length >= 20) break;
         try {
             const [host, portStr] = p.split(':');
             const port = Number(portStr);
+            
+            // Create HTTPS proxy agent for proper tunneling
+            const proxyAgent = new HttpsProxyAgent(`http://${host}:${port}`);
+            
             const res = await axios.get(base, {
-                proxy: { protocol: 'http', host, port },
+                proxy: false, // Disable axios proxy handling
+                httpsAgent: proxyAgent, // Use our custom agent
                 timeout: 7000,
                 maxRedirects: 0,
                 validateStatus: () => true,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                }
             });
+            
             // treat any <500 status (including 403/429) as reachable
             if (res.status >= 200 && res.status < 500) {
                 healthy.push(p);
+                console.log(`[proxy] Healthy proxy added: ${p}`);
             }
+            
+            // Clean up the agent
+            proxyAgent.destroy();
         } catch (e) {
             // ignore invalid proxy
+            console.debug(`[proxy] Proxy ${p} failed: ${e.message}`);
         }
     }
-    console.log(`[proxy] Healthy: ${healthy.length}`);
+    console.log(`[proxy] Healthy proxies: ${healthy.length}`);
 }
 
 export function getProxy() {
