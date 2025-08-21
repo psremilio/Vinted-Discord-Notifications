@@ -87,16 +87,33 @@ export async function getHttp() {
     await new Promise(resolve => setTimeout(resolve, remaining * 1000));
   }
   
-  if (!CURRENT_PROXY) {
-    CURRENT_PROXY = getProxy();
+  // Try to get a proxy, with multiple attempts
+  let attempts = 0;
+  const maxAttempts = 3;
+  
+  while (attempts < maxAttempts) {
     if (!CURRENT_PROXY) {
-      try {
-        const mod = await import('./proxyHealth.js');
-        await mod.initProxyPool();
-        CURRENT_PROXY = getProxy();
-      } catch {}
+      CURRENT_PROXY = getProxy();
+      if (!CURRENT_PROXY) {
+        try {
+          const mod = await import('./proxyHealth.js');
+          await mod.initProxyPool();
+          CURRENT_PROXY = getProxy();
+        } catch {}
+      }
+    }
+    
+    if (CURRENT_PROXY) {
+      break; // Found a proxy
+    }
+    
+    attempts++;
+    if (attempts < maxAttempts) {
+      console.warn(`[proxy] No proxy available (attempt ${attempts}/${maxAttempts}), retrying...`);
+      await new Promise(resolve => setTimeout(resolve, 2000 * attempts)); // Increasing delay
     }
   }
+  
   if (!CURRENT_PROXY) {
     if (process.env.ALLOW_DIRECT === '1') {
       const http = axios.create({

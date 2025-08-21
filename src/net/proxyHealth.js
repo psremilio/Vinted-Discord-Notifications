@@ -64,9 +64,16 @@ export async function initProxyPool() {
             
             // treat any <500 status (including 403/429) as reachable, but exclude 401
             if (res.status >= 200 && res.status < 500 && res.status !== 401) {
-                healthy.push(p);
-                successful++;
-                console.log(`[proxy] Healthy proxy added: ${p} (status: ${res.status})`);
+                // Only accept proxies with good response codes (200, 201, 202, 204)
+                // 403 responses indicate rate limiting, which might make the proxy unreliable
+                if (res.status >= 200 && res.status < 300) {
+                    healthy.push(p);
+                    successful++;
+                    console.log(`[proxy] Healthy proxy added: ${p} (status: ${res.status})`);
+                } else {
+                    // Log proxies that respond but with client errors
+                    console.debug(`[proxy] Proxy ${p} responded but with status: ${res.status} - skipping`);
+                }
             } else if (res.status === 401) {
                 blocked++;
                 console.debug(`[proxy] Proxy ${p} returned 401 - likely blocked`);
