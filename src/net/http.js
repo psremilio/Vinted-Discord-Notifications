@@ -24,6 +24,7 @@ function createClient(proxyStr) {
     maxRedirects: 5,
     timeout: 15000,
     proxy: false, // Disable axios proxy handling
+    httpAgent: proxyAgent,
     httpsAgent: proxyAgent, // Use our custom agent
     headers: {
       'User-Agent':
