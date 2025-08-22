@@ -24,6 +24,13 @@ export PROXY_WHITELIST_URL="https://provider.example/whitelist?token=XYZ&ip={{IP
 export LIST_REFRESH_MIN=30
 # set to 1 to allow direct requests when all proxies fail
 export ALLOW_DIRECT=0
+
+# Testing / Polling
+# Override all per-channel frequencies (seconds). Useful to experiment quickly.
+# Example: 25 = roughly every 25s (with jitter unless disabled)
+export POLL_INTERVAL_SEC=25
+# Optional: disable jitter (use exact interval)
+export POLL_NO_JITTER=1
 ```
 
 Start the bot with `npm start` (which runs `node main.js`). On startup the bot whitelists the
