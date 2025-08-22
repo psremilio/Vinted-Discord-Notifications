@@ -22,7 +22,8 @@ function fmtPrice(value, currency = 'EUR', eurApprox) {
 }
 
 export function buildListingEmbed(i) {
-  const postedUnix = Math.floor((i.createdAt ?? Date.now()) / 1000);
+  const created = i.createdAt || i.created_at || Date.now();
+  const postedUnix = Math.floor(created / 1000);
   const condition =
     CONDITION_MAP[i.status] ||
     CONDITION_MAP[i.condition] ||
@@ -34,7 +35,6 @@ export function buildListingEmbed(i) {
     .setColor(0xeab308)
     .setTitle(`${i.title ?? 'Artikel'}${i.size ? ` — ${i.size}` : ''}`)
     .setURL(i.url)
-    .setDescription(i.brand ? `**${i.brand}**` : null)
     .addFields(
       { name: '💰 Price', value: fmtPrice(i.price, i.currency, i.price_eur) || '—', inline: true },
       { name: '📏 Size', value: i.size || '—', inline: true },
@@ -43,18 +43,21 @@ export function buildListingEmbed(i) {
       { name: '🏷️ Brand', value: i.brand || '—', inline: true },
       { name: '🔢 ID', value: `\`${i.id}\``, inline: true },
     )
-    .setImage(i.images?.[0] || i.image_url || null)
     .setFooter({ text: i.location ? `${i.location} • Vinted` : 'Vinted' })
-    .setTimestamp(new Date(i.createdAt || Date.now()));
+    .setTimestamp(new Date(created));
 
-  if (i.description) {
-    const current = emb.data.description || '';
-    emb.setDescription([current, trunc(i.description)].filter(Boolean).join('\n'));
-  }
+  // Beschreibung nur setzen, wenn vorhanden
+  const desc = [i.brand && `**${i.brand}**`, i.description && trunc(i.description)]
+    .filter(Boolean)
+    .join('\n');
+  if (desc) emb.setDescription(desc);
+  const img = i.images?.[0] || i.image_url;
+  if (img) emb.setImage(img);
 
-  if (i.seller?.name) {
-    emb.setAuthor({ name: i.seller.name, iconURL: i.seller.avatar || undefined });
-  }
+  // Verkäufer sowohl verschachtelt als auch flach unterstützen
+  const sellerName = i.seller?.name || i.seller_name;
+  const sellerAvatar = i.seller?.avatar || i.seller_avatar;
+  if (sellerName) emb.setAuthor({ name: String(sellerName), iconURL: sellerAvatar || undefined });
 
   return emb;
 }
