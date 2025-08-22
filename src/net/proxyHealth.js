@@ -1,6 +1,6 @@
-import fs from 'fs';
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { loadProxies } from './proxies.js';
 
 const healthy = [];
 const cooldown = new Map();
@@ -8,10 +8,10 @@ const cooldown = new Map();
 export async function initProxyPool() {
     // reset pool before rebuilding
     healthy.length = 0;
-    const file = process.env.PROXY_LIST_FILE || 'config/proxies.txt';
+    const file = process.env.PROXY_LIST_FILE || '/app/config/proxies.txt';
     let proxies = [];
     try {
-        proxies = fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter(Boolean).slice(0, 200);
+        proxies = loadProxies(file).slice(0, 200);
         console.log(`[proxy] Loaded ${proxies.length} proxies from ${file}`);
     } catch (err) {
         console.warn('[proxy] proxy list not found:', err.message);
@@ -27,7 +27,7 @@ export async function initProxyPool() {
     let rateLimited = 0;
     
     for (const p of proxies) {
-        if (healthy.length >= 20) break;
+        if (healthy.length >= 60) break;
         tested++;
         try {
             const [host, portStr] = p.split(':');
@@ -43,6 +43,7 @@ export async function initProxyPool() {
             
             const res = await axios.get(base, {
                 proxy: false, // Disable axios proxy handling
+                httpAgent: proxyAgent,
                 httpsAgent: proxyAgent, // Use our custom agent
                 timeout: 7000,
                 maxRedirects: 0,
