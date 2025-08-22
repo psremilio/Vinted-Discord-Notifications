@@ -3,11 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { getProxy, markBadInPool } from './proxyHealth.js';
 
 const clientsByProxy = new Map();
-let CURRENT_PROXY = null;
-let failedProxiesCount = 0;
-const MAX_FAILED_PROXIES = 5;
-let globalCooldownUntil = 0;
-const GLOBAL_COOLDOWN_DURATION = 5 * 60 * 1000; // 5 minutes
+const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
 
 function createClient(proxyStr) {
   const existing = clientsByProxy.get(proxyStr);
@@ -15,15 +11,16 @@ function createClient(proxyStr) {
 
   const [host, portStr] = proxyStr.split(':');
   const port = Number(portStr);
-  
+
   // Create HTTPS proxy agent for proper tunneling
   const proxyAgent = new HttpsProxyAgent(`http://${host}:${port}`);
-  
+
   const http = axios.create({
     withCredentials: true,
     maxRedirects: 5,
     timeout: 15000,
     proxy: false, // Disable axios proxy handling
+    httpAgent: proxyAgent,
     httpsAgent: proxyAgent, // Use our custom agent
     headers: {
       'User-Agent':
@@ -44,108 +41,73 @@ function createClient(proxyStr) {
       'sec-ch-ua-platform': '"Windows"',
     },
   });
-  
-  const client = { http, warmedAt: 0, proxyAgent };
+
+  const client = { http, warmedAt: 0, proxyAgent, proxyLabel: `${host}:${port}` };
   clientsByProxy.set(proxyStr, client);
   return client;
 }
 
-async function warmUp(client) {
-  const base = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/';
-  if (Date.now() - client.warmedAt < 30 * 60 * 1000) return;
+async function bootstrapSession(client) {
+  const TTL = 45 * 60 * 1000; // 45 minutes
+  if (client.warmedAt && Date.now() - client.warmedAt < TTL) return;
   try {
-    // 4xx/3xx responses still prove the proxy is reachable
-    await client.http.get(base, { validateStatus: () => true, timeout: 10000 });
-  } catch (e) {
-    // network errors shouldn't abort warmup
-    console.warn('[warmup] ignoring error:', e.message || e);
-  } finally {
-    client.warmedAt = Date.now();
-  }
-}
-
-// Retry with exponential backoff
-async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (attempt === maxRetries) throw error;
-      
-      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-      console.log(`[retry] attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms`);
-      await new Promise(resolve => setTimeout(resolve, delay));
+    const res = await axios.get(BASE, {
+      proxy: false,
+      httpAgent: client.proxyAgent,
+      httpsAgent: client.proxyAgent,
+      timeout: 10000,
+      validateStatus: () => true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+        Connection: 'keep-alive',
+      }
+    });
+    const setCookie = res.headers['set-cookie'] || [];
+    const cookieHeader = setCookie.map(c => c.split(';')[0]).join('; ');
+    let csrf;
+    if (typeof res.data === 'string') {
+      const m = res.data.match(/name="csrf-token"\s+content="([^"]+)"/i);
+      csrf = m && m[1];
     }
+    if (cookieHeader) client.http.defaults.headers.Cookie = cookieHeader;
+    client.http.defaults.headers.Referer = BASE + '/';
+    client.http.defaults.headers.Origin = BASE;
+    if (csrf) client.http.defaults.headers['X-CSRF-Token'] = csrf;
+    client.warmedAt = Date.now();
+    console.log(`[proxy] session bootstrapped for ${client.proxyLabel}${csrf ? ' +csrf' : ''}`);
+  } catch (e) {
+    console.warn('[proxy] bootstrap failed:', e.code || e.message);
   }
 }
 
 export async function getHttp() {
-  // Check global cooldown
-  if (Date.now() < globalCooldownUntil) {
-    const remaining = Math.ceil((globalCooldownUntil - Date.now()) / 1000);
-    console.warn(`[proxy] Global cooldown active, waiting ${remaining}s before retrying`);
-    await new Promise(resolve => setTimeout(resolve, remaining * 1000));
-  }
-  
-  // Try to get a proxy, with multiple attempts
-  let attempts = 0;
-  const maxAttempts = 3;
-  
-  while (attempts < maxAttempts) {
-    if (!CURRENT_PROXY) {
-      CURRENT_PROXY = getProxy();
-      if (!CURRENT_PROXY) {
-        try {
-          const mod = await import('./proxyHealth.js');
-          await mod.initProxyPool();
-          CURRENT_PROXY = getProxy();
-        } catch {}
-      }
+  // Per-request: attempt to grab a proxy from the pool
+  const MAX_TRIES = 6;
+  for (let i = 0; i < MAX_TRIES; i++) {
+    const p = getProxy();
+    if (!p) {
+      await new Promise(r => setTimeout(r, 150 + i * 100));
+      continue;
     }
-    
-    if (CURRENT_PROXY) {
-      break; // Found a proxy
-    }
-    
-    attempts++;
-    if (attempts < maxAttempts) {
-      console.warn(`[proxy] No proxy available (attempt ${attempts}/${maxAttempts}), retrying...`);
-      await new Promise(resolve => setTimeout(resolve, 2000 * attempts)); // Increasing delay
-    }
-  }
-  
-  if (!CURRENT_PROXY) {
-    if (process.env.ALLOW_DIRECT === '1') {
-      const http = axios.create({
-        withCredentials: true,
-        maxRedirects: 5,
-        timeout: 15000,
-        proxy: false,
-      });
-      return { http, proxy: 'DIRECT' };
-    }
-    
-    // If no proxies available and direct is not allowed, try to refresh the pool one more time
-    try {
-      console.warn('[proxy] No proxies available, attempting to refresh pool...');
-      const mod = await import('./proxyHealth.js');
-      await mod.initProxyPool();
-      CURRENT_PROXY = getProxy();
-      if (CURRENT_PROXY) {
-        const client = createClient(CURRENT_PROXY);
-        await warmUp(client);
-        return { http: client.http, proxy: CURRENT_PROXY };
-      }
-    } catch (e) {
-      console.warn('[proxy] Failed to refresh proxy pool:', e.message);
-    }
-    
-    throw new Error('No healthy proxies available');
+    const client = createClient(p);
+    await bootstrapSession(client);
+    return { http: client.http, proxy: p };
   }
 
-  const client = createClient(CURRENT_PROXY);
-  await warmUp(client);
-  return { http: client.http, proxy: CURRENT_PROXY };
+  if (process.env.ALLOW_DIRECT === '1') {
+    const http = axios.create({
+      withCredentials: true,
+      maxRedirects: 5,
+      timeout: 15000,
+      proxy: false,
+    });
+    return { http, proxy: 'DIRECT' };
+  }
+  throw new Error('No healthy proxies available');
 }
 
 export function rotateProxy(badProxy) {
@@ -156,31 +118,23 @@ export function rotateProxy(badProxy) {
     }
     clientsByProxy.delete(badProxy);
   }
-  if (badProxy) {
-    markBadInPool(badProxy);
-    failedProxiesCount++;
-    
-    // If too many proxies are failing, refresh the pool and set global cooldown
-    if (failedProxiesCount >= MAX_FAILED_PROXIES) {
-      console.warn('[proxy] Too many failed proxies, refreshing pool and setting global cooldown...');
-      failedProxiesCount = 0;
-      globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_DURATION;
-      console.warn(`[proxy] Global cooldown set for ${GLOBAL_COOLDOWN_DURATION / 1000}s`);
-      
-      // Clear all clients to force recreation
-      for (const [proxy, client] of clientsByProxy) {
-        if (client.proxyAgent) {
-          client.proxyAgent.destroy();
-        }
-      }
-      clientsByProxy.clear();
-      CURRENT_PROXY = null;
-    }
-  }
-  CURRENT_PROXY = getProxy();
+  if (badProxy) markBadInPool(badProxy);
 }
 
 export async function initProxyPool() {
   return (await import('./proxyHealth.js')).initProxyPool();
+}
+
+// Convenience helper for simple GET requests that handles session bootstrap
+export async function get(url, config = {}) {
+  const { http, proxy } = await getHttp();
+  try {
+    return await http.get(url, config);
+  } catch (e) {
+    if (e.response && e.response.status === 401) {
+      markBadInPool(proxy);
+    }
+    throw e;
+  }
 }
 

@@ -1,27 +1,8 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-
-//format the timestamp
-async function cleanTime(time) {
-    let delay;
-    if (time < 1000) {
-        delay = `${time.toFixed(0)}ms`;
-    }  else if (time < 60000) {
-        delay = `${(time/1000).toFixed(0)}s`;
-    } else if (time < 3600000) {
-        delay = `${(time / 60000).toFixed(0)}min`;
-    } else {
-        delay = `${(time / 3600000).toFixed(0)}h`;
-    }
-    return delay;
-}
+import { buildListingEmbed } from '../embeds.js';
 
 export async function postArticles(newArticles, channelToSend) {
-    //simultaneously send the messages
     const messages = newArticles.slice(0, 10).map(async (item) => {
-        const timestamp = new Date(item.photo.high_resolution.timestamp * 1000);
-        const delayInSeconds = Math.abs((Date.now() - item.photo.high_resolution.timestamp * 1000));
-        const cleanDelay = await cleanTime(delayInSeconds);
-        //set button urls based on the item's origin
         const origin = new URL(item.url).origin;
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -36,26 +17,28 @@ export async function postArticles(newArticles, channelToSend) {
                 .setURL(`${origin}/items/${item.id}/want_it/new?`)
         );
 
+        const ts = item.photo?.high_resolution?.timestamp; // seconds
+        const listing = {
+            id: item.id,
+            title: item.title,
+            url: item.url,
+            brand: item.brand_title,
+            size: item.size_title,
+            status: item.status,
+            price: item.price?.amount,
+            currency: item.price?.currency_code,
+            price_eur: item.price?.converted_amount,
+            // pass timestamp in milliseconds for embed time rendering
+            createdAt: ts ? ts * 1000 : undefined,
+            seller_name: item.user?.login,
+            seller_avatar: item.user?.profile_picture?.url,
+            image_url: item.photo?.url,
+            country_code: item.user?.country_code,
+            description: item.description,
+        };
+
         return channelToSend.send({
-            embeds: [{
-                title: `${item.title.substring(0, 25)} (${item.price.amount}€) ${item.size_title}`,
-                url: item.url,
-                fields: [
-                    {
-                        name: "\u200B",
-                        value: `\`\`\`YAML\n Size: ${item.size_title} - ${item.price.amount}€  (${cleanDelay})\`\`\``,
-                        inline: true,
-                    },
-                    {
-                        name: "\u200B",
-                        value: `\`\`\`YAML\n ${item.title} \`\`\``,
-                    },
-                ],
-                image: { url: item.photo?.url },
-                footer: {text: item.user.id+"-"+item.id},
-                timestamp,
-                color: parseInt("09b1ba", 16),
-            }],
+            embeds: [buildListingEmbed(listing)],
             components: [row],
         });
     });
