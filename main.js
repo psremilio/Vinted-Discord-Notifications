@@ -6,8 +6,12 @@ import fs from 'fs';
 
 import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
+import { whitelistCurrentEgressIP } from './src/net/whitelist.js';
+import { ensureProxyList, startProxyRefreshLoop } from './src/net/ensureProxyList.js';
+import { initProxyPool } from './src/net/proxyHealth.js';
 
 dotenv.config();
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
 
@@ -20,7 +24,13 @@ client.on('interactionCreate',interaction=>{
   if(interaction.isCommand()) handleCommands(interaction,mySearches);
 });
 
-(async function loginWithRetry(){
+(async function boot(){
+  // Ensure proxy setup before logging in
+  await whitelistCurrentEgressIP();
+  await ensureProxyList();
+  startProxyRefreshLoop();
+  await initProxyPool();
+
   while(true){
     try {
       await client.login(process.env.BOT_TOKEN);
