@@ -1,6 +1,6 @@
 import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
-import { initProxyPool, getHttp } from "./net/http.js";
+import { initProxyPool } from "./net/http.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -51,7 +51,7 @@ const addSearch = (client, search) => {
     })();
 };
 
-//first, get cookies, then init the article id set, then launch the simmultaneous searches
+//init the article id set, then launch the simultaneous searches
 export const run = async (client, mySearches) => {
     processedArticleIds = new Set();
     await initProxyPool();
@@ -64,19 +64,6 @@ export const run = async (client, mySearches) => {
             console.warn('[proxy] refresh failed:', e.message || e);
         }
     }, REFRESH_H * 60 * 60 * 1000);
-    try {
-        const { http } = await getHttp();
-        try {
-            await http.get(
-                process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/',
-                { validateStatus: () => true }
-            );
-        } catch (err) {
-            console.error('[run] initial cookie fetch failed:', err);
-        }
-    } catch (e) {
-        console.warn('[run] skip initial cookie fetch – no proxy available:', e.message || e);
-    }
 
     //stagger start time for searches to avoid too many simultaneous requests
     mySearches.forEach((channel, index) => {
@@ -84,20 +71,11 @@ export const run = async (client, mySearches) => {
     });
 
     //fetch new cookies and clean ProcessedArticleIDs at interval
-    setInterval(async () => {
-        try {
-            const { http } = await getHttp();
-            await http.get(
-                process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/',
-                { validateStatus: () => true }
-            );
-            console.log('reducing processed articles size');
-            const halfSize = Math.floor(processedArticleIds.size / 2);
-            processedArticleIds = new Set([...processedArticleIds].slice(halfSize));
-        } catch (err) {
-            console.error('[run] hourly cookie refresh skipped:', err.message || err);
-        }
-    }, 1*60*60*1000); //set interval to 1h, after which session could be expired
+    setInterval(() => {
+        console.log('reducing processed articles size');
+        const halfSize = Math.floor(processedArticleIds.size / 2);
+        processedArticleIds = new Set([...processedArticleIds].slice(halfSize));
+    }, 1 * 60 * 60 * 1000);
 };
 
 export { addSearch, activeSearches };
