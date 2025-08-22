@@ -1,6 +1,7 @@
 import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { initProxyPool } from "./net/http.js";
+import { startAutoTopUp } from "./net/proxyHealth.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -67,6 +68,8 @@ const addSearch = (client, search) => {
 export const run = async (client, mySearches) => {
     processedArticleIds = new Set();
     await initProxyPool();
+    // background top-up keeps the pool filled without blocking
+    startAutoTopUp();
     const REFRESH_H = parseInt(process.env.PROXY_REFRESH_HOURS || '6', 10);
     setInterval(async () => {
         try {

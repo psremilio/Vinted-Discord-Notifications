@@ -31,6 +31,14 @@ export ALLOW_DIRECT=0
 export POLL_INTERVAL_SEC=25
 # Optional: disable jitter (use exact interval)
 export POLL_NO_JITTER=1
+
+# Proxy-Pool Tuning
+# Hard cap for concurrently healthy proxies
+export PROXY_HEALTHY_CAP=200
+# Background top-up interval (minutes). 0 disables auto top-up
+export PROXY_TOPUP_MIN=3
+# How many proxy tests run in parallel while filling the pool
+export PROXY_TEST_CONCURRENCY=8
 ```
 
 Start the bot with `npm start` (which runs `node main.js`). On startup the bot whitelists the
