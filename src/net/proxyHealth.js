@@ -8,7 +8,9 @@ const cooldown = new Map();
 export async function initProxyPool() {
     // reset pool before rebuilding
     healthy.length = 0;
-    const file = process.env.PROXY_LIST_FILE || '/app/config/proxies.txt';
+    const file =
+        process.env.PROXY_LIST_FILE ||
+        (process.env.RAILWAY_ENVIRONMENT ? '/app/config/proxies.txt' : 'config/proxies.txt');
     let proxies = [];
     try {
         proxies = loadProxies(file).slice(0, 200);

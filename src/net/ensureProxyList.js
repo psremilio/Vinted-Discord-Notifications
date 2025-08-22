@@ -2,7 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 
-const FILE = process.env.PROXY_LIST_FILE || '/app/config/proxies.txt';
+const DEFAULT_FILE =
+  process.env.PROXY_LIST_FILE ||
+  (process.env.RAILWAY_ENVIRONMENT ? '/app/config/proxies.txt' : 'config/proxies.txt');
+const FILE = DEFAULT_FILE;
 // Build proxy list URL either from explicit PROXY_LIST_URL or using
 // PS_API_KEY and SERVICE_ID when the variable still contains
 // uninterpolated placeholders.

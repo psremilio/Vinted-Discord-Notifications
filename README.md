@@ -17,7 +17,7 @@ export VINTED_BASE_URL="https://www.vinted.de"      # or set LOGIN_URL for backw
 export PS_API_KEY=your_key            # used to build ProxyScrape URL
 export SERVICE_ID=your_service_id     # used to build ProxyScrape URL
 # export PROXY_LIST_URL="https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=XYZ&type=getproxies&protocol=http&format=txt&status=all&country=all&service=123"
-export PROXY_LIST_FILE="/app/config/proxies.txt"    # optional, defaults to this path
+export PROXY_LIST_FILE="/app/config/proxies.txt"    # optional; defaults to /app/config/proxies.txt on Railway or config/proxies.txt locally
 # optional: provider endpoint to whitelist current egress IP
 export PROXY_WHITELIST_URL="https://provider.example/whitelist?token=XYZ&ip={{IP}}"
 # optional: refresh proxy list every N minutes
@@ -30,7 +30,7 @@ Start the bot with `npm start` (which runs `node main.js`). On startup the bot w
 current egress IP (if `PROXY_WHITELIST_URL` is set) and downloads the proxy list from
 `PROXY_LIST_URL` or, if not provided, builds the ProxyScrape URL using `PS_API_KEY` and
 `SERVICE_ID`. Proxy addresses are read from `PROXY_LIST_FILE` (defaults to
-`/app/config/proxies.txt`). Ensure your deployment mounts a volume containing this file with one
+`/app/config/proxies.txt` on Railway or `config/proxies.txt` locally). Ensure your deployment mounts a volume containing this file with one
 `IP:PORT` entry per line or provide the variables above to download it automatically.
 
 Functionalities:

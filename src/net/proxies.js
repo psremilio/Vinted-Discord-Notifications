@@ -1,6 +1,10 @@
 import fs from 'fs';
 
-export function loadProxies(path = process.env.PROXY_LIST_FILE || '/app/config/proxies.txt') {
+export function loadProxies(
+  path =
+    process.env.PROXY_LIST_FILE ||
+    (process.env.RAILWAY_ENVIRONMENT ? '/app/config/proxies.txt' : 'config/proxies.txt')
+) {
   if (!fs.existsSync(path)) {
     throw new Error(`Proxyliste fehlt: ${path}`);
   }
