@@ -3,11 +3,6 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { getProxy, markBadInPool } from './proxyHealth.js';
 
 const clientsByProxy = new Map();
-let CURRENT_PROXY = null;
-let failedProxiesCount = 0;
-const MAX_FAILED_PROXIES = 5;
-let globalCooldownUntil = 0;
-const GLOBAL_COOLDOWN_DURATION = 5 * 60 * 1000; // 5 minutes
 const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
 
 function createClient(proxyStr) {
@@ -89,88 +84,30 @@ async function bootstrapSession(client) {
   }
 }
 
-// Retry with exponential backoff
-async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (attempt === maxRetries) throw error;
-      
-      const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
-      console.log(`[retry] attempt ${attempt + 1} failed, retrying in ${Math.round(delay)}ms`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-}
-
 export async function getHttp() {
-  // Check global cooldown
-  if (Date.now() < globalCooldownUntil) {
-    const remaining = Math.ceil((globalCooldownUntil - Date.now()) / 1000);
-    console.warn(`[proxy] Global cooldown active, waiting ${remaining}s before retrying`);
-    await new Promise(resolve => setTimeout(resolve, remaining * 1000));
-  }
-  
-  // Try to get a proxy, with multiple attempts
-  let attempts = 0;
-  const maxAttempts = 3;
-  
-  while (attempts < maxAttempts) {
-    if (!CURRENT_PROXY) {
-      CURRENT_PROXY = getProxy();
-      if (!CURRENT_PROXY) {
-        try {
-          const mod = await import('./proxyHealth.js');
-          await mod.initProxyPool();
-          CURRENT_PROXY = getProxy();
-        } catch {}
-      }
+  // Per-request: attempt to grab a proxy from the pool
+  const MAX_TRIES = 6;
+  for (let i = 0; i < MAX_TRIES; i++) {
+    const p = getProxy();
+    if (!p) {
+      await new Promise(r => setTimeout(r, 150 + i * 100));
+      continue;
     }
-    
-    if (CURRENT_PROXY) {
-      break; // Found a proxy
-    }
-    
-    attempts++;
-    if (attempts < maxAttempts) {
-      console.warn(`[proxy] No proxy available (attempt ${attempts}/${maxAttempts}), retrying...`);
-      await new Promise(resolve => setTimeout(resolve, 2000 * attempts)); // Increasing delay
-    }
-  }
-  
-  if (!CURRENT_PROXY) {
-    if (process.env.ALLOW_DIRECT === '1') {
-      const http = axios.create({
-        withCredentials: true,
-        maxRedirects: 5,
-        timeout: 15000,
-        proxy: false,
-      });
-      return { http, proxy: 'DIRECT' };
-    }
-    
-    // If no proxies available and direct is not allowed, try to refresh the pool one more time
-    try {
-      console.warn('[proxy] No proxies available, attempting to refresh pool...');
-      const mod = await import('./proxyHealth.js');
-      await mod.initProxyPool();
-      CURRENT_PROXY = getProxy();
-      if (CURRENT_PROXY) {
-        const client = createClient(CURRENT_PROXY);
-        await bootstrapSession(client);
-        return { http: client.http, proxy: CURRENT_PROXY };
-      }
-    } catch (e) {
-      console.warn('[proxy] Failed to refresh proxy pool:', e.message);
-    }
-    
-    throw new Error('No healthy proxies available');
+    const client = createClient(p);
+    await bootstrapSession(client);
+    return { http: client.http, proxy: p };
   }
 
-  const client = createClient(CURRENT_PROXY);
-  await bootstrapSession(client);
-  return { http: client.http, proxy: CURRENT_PROXY };
+  if (process.env.ALLOW_DIRECT === '1') {
+    const http = axios.create({
+      withCredentials: true,
+      maxRedirects: 5,
+      timeout: 15000,
+      proxy: false,
+    });
+    return { http, proxy: 'DIRECT' };
+  }
+  throw new Error('No healthy proxies available');
 }
 
 export function rotateProxy(badProxy) {
@@ -181,28 +118,7 @@ export function rotateProxy(badProxy) {
     }
     clientsByProxy.delete(badProxy);
   }
-  if (badProxy) {
-    markBadInPool(badProxy);
-    failedProxiesCount++;
-    
-    // If too many proxies are failing, refresh the pool and set global cooldown
-    if (failedProxiesCount >= MAX_FAILED_PROXIES) {
-      console.warn('[proxy] Too many failed proxies, refreshing pool and setting global cooldown...');
-      failedProxiesCount = 0;
-      globalCooldownUntil = Date.now() + GLOBAL_COOLDOWN_DURATION;
-      console.warn(`[proxy] Global cooldown set for ${GLOBAL_COOLDOWN_DURATION / 1000}s`);
-      
-      // Clear all clients to force recreation
-      for (const [proxy, client] of clientsByProxy) {
-        if (client.proxyAgent) {
-          client.proxyAgent.destroy();
-        }
-      }
-      clientsByProxy.clear();
-      CURRENT_PROXY = null;
-    }
-  }
-  CURRENT_PROXY = getProxy();
+  if (badProxy) markBadInPool(badProxy);
 }
 
 export async function initProxyPool() {
