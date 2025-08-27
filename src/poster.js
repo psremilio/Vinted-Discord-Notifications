@@ -8,7 +8,9 @@ export async function postItems(client, channelId, filterLabel, items) {
   const channel = await client.channels.fetch(channelId);
 
   function buildRow(item) {
+    const fastbuyUrl = `${item.url}${item.url.includes('?') ? '&' : '?'}fastbuy=1`;
     return new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setLabel('FASTBUY').setStyle(ButtonStyle.Link).setURL(fastbuyUrl),
       new ButtonBuilder().setLabel('Zum Angebot').setStyle(ButtonStyle.Link).setURL(item.url),
       new ButtonBuilder().setCustomId(`save_${item.id}`).setLabel('Merken').setStyle(ButtonStyle.Secondary)
     );

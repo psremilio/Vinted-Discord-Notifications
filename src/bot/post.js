@@ -26,7 +26,12 @@ export async function postArticles(newArticles, channelToSend) {
 
     for (const item of list) {
         const origin = new URL(item.url).origin;
+        const fastbuyUrl = `${item.url}${item.url.includes('?') ? '&' : '?'}fastbuy=1`;
         const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setLabel('FASTBUY')
+                .setStyle(ButtonStyle.Link)
+                .setURL(fastbuyUrl),
             new ButtonBuilder()
                 .setLabel('Details')
                 .setEmoji('🗄️')
