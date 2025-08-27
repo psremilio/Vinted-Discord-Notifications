@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vinted FastBuy (Auto-Buy Click)
 // @namespace    fastbuy.vinted
-// @match        https://www.vinted.*/*
+// @match        https://*.vinted.*/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
@@ -37,4 +37,3 @@
     new MutationObserver(focusPay).observe(document, { childList: true, subtree: true });
   }
 })();
-
