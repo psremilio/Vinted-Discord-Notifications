@@ -1,7 +1,8 @@
 // ==UserScript==
 // @name         Vinted FastBuy (Auto-Buy Click)
 // @namespace    fastbuy.vinted
-// @match        https://*.vinted.*/*
+// @match        *://vinted.*/*
+// @match        *://*.vinted.*/*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==
