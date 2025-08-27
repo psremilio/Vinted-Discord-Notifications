@@ -7,6 +7,8 @@ import { startAutoTopUp } from "./net/proxyHealth.js";
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
 // create duplicate timers.
 const activeSearches = new Map();
+// Runtime registry of polling jobs: key -> { timer, channel, cancelled }
+const jobs = new Map();
 // Will hold IDs of articles already processed across all searches
 let processedArticleIds = new Set();
 // Optional env overrides for quick testing
@@ -63,8 +65,6 @@ const runSearch = async (client, channel) => {
                         warnedMissing.add(warnKey);
                     }
                 }
-            } else {
-                await postArticles(articles, dest);
             }
             if (dest) {
                 await postArticles(articles, dest);
@@ -77,11 +77,19 @@ const runSearch = async (client, channel) => {
 
 //run the search and set a timeout to run it again   
 const runInterval = async (client, channel) => {
+    const key = channel.channelName;
+    const current = jobs.get(key);
+    if (current?.cancelled) return;
+
     await runSearch(client, channel);
+
+    const latest = jobs.get(key);
+    if (!latest || latest.cancelled) return;
     const baseSec = OVERRIDE_SEC > 0 ? OVERRIDE_SEC : channel.frequency;
     const factor = NO_JITTER ? 1 : (0.8 + Math.random() * 0.4);
     const delay = baseSec * 1000 * factor;
-    setTimeout(() => runInterval(client, channel), delay);
+    const timer = setTimeout(() => runInterval(client, channel), delay);
+    jobs.set(key, { ...latest, timer });
 };
 
 // Attach a new search to the scheduler
@@ -95,8 +103,11 @@ const addSearch = (client, search) => {
       (NO_JITTER ? '' : ' (±20% jitter)') +
       (OVERRIDE_SEC > 0 ? ' [override via POLL_INTERVAL_SEC]' : '')
     );
+    // initialize registry entry
+    jobs.set(search.channelName, { timer: null, channel: search, cancelled: false });
     if (process.env.NODE_ENV === 'test') {
-        setTimeout(() => { runInterval(client, search); }, 1000);
+        const t = setTimeout(() => { runInterval(client, search); }, 1000);
+        jobs.set(search.channelName, { timer: t, channel: search, cancelled: false });
         return;
     }
     (async () => {
@@ -106,9 +117,24 @@ const addSearch = (client, search) => {
         } catch (err) {
             console.error('\nError in initializing articles:', err);
         }
-        setTimeout(() => { runInterval(client, search); }, 1000);
+        const t = setTimeout(() => { runInterval(client, search); }, 1000);
+        jobs.set(search.channelName, { timer: t, channel: search, cancelled: false });
     })();
 };
+
+// Stop a running job by key (channelName). Returns true if a job was found and stopped.
+function removeJob(key) {
+    const k = String(key);
+    const job = jobs.get(k);
+    if (!job) return false;
+    if (job.timer) {
+        try { clearTimeout(job.timer); } catch {}
+    }
+    job.cancelled = true;
+    jobs.delete(k);
+    activeSearches.delete(k);
+    return true;
+}
 
 //init the article id set, then launch the simultaneous searches
 export const run = async (client, mySearches) => {
@@ -151,4 +177,4 @@ export const run = async (client, mySearches) => {
     }, 1 * 60 * 60 * 1000);
 };
 
-export { addSearch, activeSearches };
+export { addSearch, activeSearches, removeJob, jobs };

@@ -1,7 +1,8 @@
-import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { removeJob } from '../run.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -31,12 +32,14 @@ export const execute = async (interaction) => {
 
         await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
 
-        const embed = new EmbedBuilder()
-            .setTitle("Search " + name + " deleted! It will stop being monitored on the next restart.")
-            .setDescription(name)
-            .setColor(0x00FF00);
-
-        await interaction.editReply({ embeds: [embed] });
+        // Stop active polling job immediately if present
+        let stopped = false;
+        try { stopped = removeJob(name); } catch {}
+        if (stopped) {
+            await interaction.editReply({ content: `✅ Search \`${name}\` deleted and stopped immediately.` });
+        } else {
+            await interaction.editReply({ content: `✅ Search \`${name}\` deleted. It will stop after next restart (no running job found).` });
+        }
 
     } catch (error) {
         console.error('\nError deleting the search:', error);
