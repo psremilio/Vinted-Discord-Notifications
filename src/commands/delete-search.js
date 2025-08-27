@@ -2,7 +2,6 @@ import { SlashCommandBuilder } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { removeJob } from '../run.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -32,9 +31,14 @@ export const execute = async (interaction) => {
 
         await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
 
-        // Stop active polling job immediately if present
+        // Stop active polling job immediately if present (optional)
         let stopped = false;
-        try { stopped = removeJob(name); } catch {}
+        try {
+            const mod = await import('../run.js');
+            if (typeof mod.removeJob === 'function') {
+                stopped = mod.removeJob(name);
+            }
+        } catch {}
         if (stopped) {
             await interaction.editReply({ content: `✅ Search \`${name}\` deleted and stopped immediately.` });
         } else {
