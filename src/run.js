@@ -13,6 +13,13 @@ let processedArticleIds = new Set();
 const OVERRIDE_SEC = Number(process.env.POLL_INTERVAL_SEC || 0);
 const NO_JITTER = String(process.env.POLL_NO_JITTER || '0') === '1';
 
+// Simple key normalization helpers for mapping aliases
+const normKey = s => String(s ?? '').toLowerCase().trim().replace(/\s+/g, '').replace(/-+/g, '-');
+const singularFallback = k => k.replace(/s$/, '');
+
+// Optional mapping: filter label -> channelId, populated from config
+const CHANNEL_BY_FILTER = new Map();
+
 // Local cache for resolved channels to avoid repeated fetches and invalid targets
 const channelCache = new Map();
 const warnedMissing = new Set();
@@ -41,13 +48,25 @@ const runSearch = async (client, channel) => {
         if (articles && articles.length > 0) {
             process.stdout.write('\n' + channel.channelName + ' => +' + articles.length);
             articles.forEach(article => { processedArticleIds.add(article.id); });
-            const dest = await getChannelById(client, channel.channelId);
+            let dest = await getChannelById(client, channel.channelId);
             if (!dest) {
-                if (!warnedMissing.has(channel.channelId)) {
-                    console.warn(`[post] no valid targets for ${channel.channelName} (${channel.channelId})`);
-                    warnedMissing.add(channel.channelId);
+                // Try alias mapping based on channel name
+                const key = normKey(channel.channelName);
+                const altId = CHANNEL_BY_FILTER.get(key) || CHANNEL_BY_FILTER.get(singularFallback(key));
+                if (altId && altId !== channel.channelId) {
+                    dest = await getChannelById(client, altId);
+                }
+                if (!dest) {
+                    const warnKey = `${channel.channelName}:${channel.channelId}`;
+                    if (!warnedMissing.has(warnKey)) {
+                        console.warn(`[post] no valid targets for ${channel.channelName} (${channel.channelId})`);
+                        warnedMissing.add(warnKey);
+                    }
                 }
             } else {
+                await postArticles(articles, dest);
+            }
+            if (dest) {
                 await postArticles(articles, dest);
             }
         }
@@ -94,6 +113,18 @@ const addSearch = (client, search) => {
 //init the article id set, then launch the simultaneous searches
 export const run = async (client, mySearches) => {
     processedArticleIds = new Set();
+    // Populate mapping for alias lookups
+    try {
+        CHANNEL_BY_FILTER.clear();
+        for (const s of mySearches || []) {
+            const k = normKey(s.channelName);
+            if (s.channelId) {
+                if (!CHANNEL_BY_FILTER.has(k)) CHANNEL_BY_FILTER.set(k, s.channelId);
+                const sing = singularFallback(k);
+                if (!CHANNEL_BY_FILTER.has(sing)) CHANNEL_BY_FILTER.set(sing, s.channelId);
+            }
+        }
+    } catch {}
     await initProxyPool();
     // background top-up keeps the pool filled without blocking
     startAutoTopUp();
