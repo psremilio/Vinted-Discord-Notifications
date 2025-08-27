@@ -13,6 +13,25 @@ let processedArticleIds = new Set();
 const OVERRIDE_SEC = Number(process.env.POLL_INTERVAL_SEC || 0);
 const NO_JITTER = String(process.env.POLL_NO_JITTER || '0') === '1';
 
+// Local cache for resolved channels to avoid repeated fetches and invalid targets
+const channelCache = new Map();
+const warnedMissing = new Set();
+
+async function getChannelById(client, id) {
+    if (!id) return null;
+    if (channelCache.has(id)) return channelCache.get(id);
+    let ch = client?.channels?.cache?.get(id) || null;
+    if (!ch && client?.channels?.fetch) {
+        try {
+            ch = await client.channels.fetch(id);
+        } catch (e) {
+            // ignore; will cache as null and warn once below
+        }
+    }
+    channelCache.set(id, ch || null);
+    return ch;
+}
+
 const runSearch = async (client, channel) => {
     try {
         process.stdout.write('.');
@@ -22,7 +41,15 @@ const runSearch = async (client, channel) => {
         if (articles && articles.length > 0) {
             process.stdout.write('\n' + channel.channelName + ' => +' + articles.length);
             articles.forEach(article => { processedArticleIds.add(article.id); });
-            await postArticles(articles, client.channels.cache.get(channel.channelId));
+            const dest = await getChannelById(client, channel.channelId);
+            if (!dest) {
+                if (!warnedMissing.has(channel.channelId)) {
+                    console.warn(`[post] no valid targets for ${channel.channelName} (${channel.channelId})`);
+                    warnedMissing.add(channel.channelId);
+                }
+            } else {
+                await postArticles(articles, dest);
+            }
         }
     } catch (err) {
         console.error('\nError running bot:', err);

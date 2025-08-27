@@ -47,6 +47,8 @@ function createClient(proxyStr) {
   return client;
 }
 
+const PROXY_DEBUG = String(process.env.DEBUG_PROXY || '0') === '1';
+
 async function bootstrapSession(client) {
   const TTL = 45 * 60 * 1000; // 45 minutes
   if (client.warmedAt && Date.now() - client.warmedAt < TTL) return;
@@ -78,7 +80,9 @@ async function bootstrapSession(client) {
     client.http.defaults.headers.Origin = BASE;
     if (csrf) client.http.defaults.headers['X-CSRF-Token'] = csrf;
     client.warmedAt = Date.now();
-    console.log(`[proxy] session bootstrapped for ${client.proxyLabel}${csrf ? ' +csrf' : ''}`);
+    if (PROXY_DEBUG) {
+      console.log(`[proxy] session bootstrapped for ${client.proxyLabel}${csrf ? ' +csrf' : ''}`);
+    }
   } catch (e) {
     console.warn('[proxy] bootstrap failed:', e.code || e.message);
   }
@@ -137,4 +141,3 @@ export async function get(url, config = {}) {
     throw e;
   }
 }
-
