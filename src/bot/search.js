@@ -87,7 +87,14 @@ export const vintedSearch = async (channel, processedArticleIds) => {
             
             const ct = String(res.headers['content-type'] || '').toLowerCase();
             if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
-              return selectNewArticles(res.data, processedArticleIds, channel);
+              const items = Array.isArray(res.data?.items) ? res.data.items : [];
+              console.log(`[debug][rule:${channel.channelName}] scraped=${items.length}`);
+              // Optional bypass to test posting end-to-end
+              if (String(process.env.DEBUG_ALLOW_ALL || '0') === '1') {
+                console.log(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
+                return items;
+              }
+              return selectNewArticles(items, processedArticleIds, channel);
             }
             
             // Handle HTTP errors
@@ -120,15 +127,41 @@ export const vintedSearch = async (channel, processedArticleIds) => {
     }, 3, 5000); // 3 retries with 5s base delay (longer for rate limiting)
 };
 
-//chooses only articles not already seen & posted in the last 10min
-const selectNewArticles = (articles, processedArticleIds, channel) => {
-    const items = Array.isArray(articles.items) ? articles.items : [];
-    const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
-    const filteredArticles = items.filter(({ photo, id, title }) => 
-      photo && 
-      photo.high_resolution.timestamp * 1000 >  Date.now() - (1000 * 60 * 10) && 
-      !processedArticleIds.has(id) &&
-      !titleBlacklist.some(word => title.toLowerCase().includes(word))
-    );
-    return filteredArticles;
-  };
+// chooses only articles not already seen & posted in the last 10min
+const selectNewArticles = (items, processedArticleIds, channel) => {
+  const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
+  const cutoff = Date.now() - (1000 * 60 * 10);
+  const filteredArticles = items.filter(({ photo, id, title }) =>
+    photo &&
+    (photo.high_resolution?.timestamp || 0) * 1000 > cutoff &&
+    !processedArticleIds.has(id) &&
+    !titleBlacklist.some(word => (title || '').toLowerCase().includes(word))
+  );
+
+  console.log(
+    `[debug][rule:${channel.channelName}] matches=${filteredArticles.length} ` +
+    `firstIds=${filteredArticles.slice(0, 5).map(x => x.id).join(',')}`
+  );
+
+  if (filteredArticles.length === 0 && items.length) {
+    const sample = items.slice(0, 5).map(item => {
+      const hasPhoto = !!item.photo;
+      const tsSec = item.photo?.high_resolution?.timestamp || 0;
+      const recent = tsSec * 1000 > cutoff;
+      const notProcessed = !processedArticleIds.has(item.id);
+      const notBlacklisted = !titleBlacklist.some(word => (item.title || '').toLowerCase().includes(word));
+      return {
+        id: item.id,
+        price: item.price?.amount,
+        seller: item.user?.id || item.user?.login,
+        hasPhoto,
+        recent,
+        notProcessed,
+        notBlacklisted,
+      };
+    });
+    console.log(`[debug][rule:${channel.channelName}] sample_reasons=${JSON.stringify(sample)}`);
+  }
+
+  return filteredArticles;
+};

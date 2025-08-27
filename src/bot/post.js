@@ -19,7 +19,7 @@ async function sendToTargetsSafely(targets, payload) {
 const normKey = s => (s ?? "").toLowerCase().trim().replace(/\s+/g,"").replace(/-+/g,"-");
 const singularFallback = k => k.replace(/s$/, "");
 
-export async function postArticles(newArticles, channelToSend) {
+export async function postArticles(newArticles, channelToSend, ruleName) {
     const list = Array.isArray(newArticles) ? newArticles.slice(0, 10) : [];
     const targets = Array.isArray(channelToSend) ? channelToSend : [channelToSend];
     if (!list.length) return;
@@ -64,5 +64,10 @@ export async function postArticles(newArticles, channelToSend) {
             components: [row],
         };
         await sendToTargetsSafely(targets, payload);
+        try {
+          console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
+        } catch {
+          // ignore logging failures
+        }
     }
 }

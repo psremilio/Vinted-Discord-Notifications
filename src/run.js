@@ -48,7 +48,7 @@ const runSearch = async (client, channel) => {
                     warnedMissing.add(channel.channelId);
                 }
             } else {
-                await postArticles(articles, dest);
+                await postArticles(articles, dest, channel.channelName);
             }
         }
     } catch (err) {
