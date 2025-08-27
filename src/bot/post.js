@@ -1,8 +1,30 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildListingEmbed } from '../embeds.js';
 
+const isTextChannelLike = ch => ch && typeof ch.send === "function";
+async function sendToTargetsSafely(targets, payload) {
+  const list = Array.isArray(targets) ? targets : [targets];
+  for (const ch of (list || [])) {
+    if (!isTextChannelLike(ch)) {
+      console.warn("[post] skip invalid channel", ch?.id ?? "(undefined)");
+      continue;
+    }
+    try {
+      await ch.send(payload);
+    } catch (e) {
+      console.error("[post] send failed", ch?.id ?? "(unknown)", e);
+    }
+  }
+}
+const normKey = s => (s ?? "").toLowerCase().trim().replace(/\s+/g,"").replace(/-+/g,"-");
+const singularFallback = k => k.replace(/s$/, "");
+
 export async function postArticles(newArticles, channelToSend) {
-    const messages = newArticles.slice(0, 10).map(async (item) => {
+    const list = Array.isArray(newArticles) ? newArticles.slice(0, 10) : [];
+    const targets = Array.isArray(channelToSend) ? channelToSend : [channelToSend];
+    if (!list.length) return;
+
+    for (const item of list) {
         const origin = new URL(item.url).origin;
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -37,10 +59,10 @@ export async function postArticles(newArticles, channelToSend) {
             description: item.description,
         };
 
-        return channelToSend.send({
+        const payload = {
             embeds: [buildListingEmbed(listing)],
             components: [row],
-        });
-    });
-    await Promise.all(messages);
+        };
+        await sendToTargetsSafely(targets, payload);
+    }
 }

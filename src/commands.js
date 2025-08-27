@@ -36,12 +36,36 @@ export const registerCommands = async (client) => {
 //handle command interactions
 export const handleCommands = async (interaction, mySearches) => {
     console.log(`Received command: ${interaction.commandName}`);
-
     try {
-        const module = await import(`./commands/${interaction.commandName}.js`);
+        if (!interaction.deferred && !interaction.replied) {
+            try { await interaction.deferReply({ ephemeral: true }); } catch {}
+        }
+        let module;
+        try {
+            module = await import(`./commands/${interaction.commandName}.js`);
+        } catch (err) {
+            const name = interaction.commandName;
+            const msg = `Befehl "${name}" ist (noch) nicht verfügbar.`;
+            try {
+                await interaction.followUp({ content: msg, ephemeral: true });
+            } catch {
+                try { await interaction.reply({ content: msg, ephemeral: true }); } catch {}
+            }
+            return;
+        }
+        if (!module || typeof module.execute !== 'function') {
+            const name = interaction.commandName;
+            const msg = `Befehl "${name}" ist (noch) nicht verfügbar.`;
+            try { await interaction.followUp({ content: msg, ephemeral: true }); } catch {}
+            return;
+        }
         await module.execute(interaction, mySearches);
     } catch (error) {
         console.error('\nError handling command:', error);
-        await interaction.followUp({ content: 'There was an error while executing this command!' });
+        try {
+            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+        } catch {
+            try { await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true }); } catch {}
+        }
     }
 }
