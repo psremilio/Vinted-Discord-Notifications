@@ -9,10 +9,10 @@ export async function postItems(client, channelId, filterLabel, items) {
 
   function buildRow(item) {
     const fastbuyUrl = `${item.url}${item.url.includes('?') ? '&' : '?'}fastbuy=1`;
+    // Only link buttons to avoid potential invalid form issues
     return new ActionRowBuilder().addComponents(
       new ButtonBuilder().setLabel('FASTBUY').setStyle(ButtonStyle.Link).setURL(fastbuyUrl),
-      new ButtonBuilder().setLabel('Zum Angebot').setStyle(ButtonStyle.Link).setURL(item.url),
-      new ButtonBuilder().setCustomId(`save_${item.id}`).setLabel('Merken').setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setLabel('Zum Angebot').setStyle(ButtonStyle.Link).setURL(item.url)
     );
   }
 
@@ -20,7 +20,11 @@ export async function postItems(client, channelId, filterLabel, items) {
     for (const item of items) {
       const embed = buildListingEmbed(item);
       const row = buildRow(item);
-      await channel.send({ embeds: [embed], components: [row] });
+      try {
+        await channel.send({ embeds: [embed], components: [row] });
+      } catch (e) {
+        console.error('[poster] send failed (single)', channelId, e?.code || e?.message || e);
+      }
     }
     return;
   }
@@ -33,5 +37,9 @@ export async function postItems(client, channelId, filterLabel, items) {
     embeds.push(embed);
     rows.push(row);
   }
-  await channel.send({ embeds, components: rows.length ? [rows[0]] : [] });
+  try {
+    await channel.send({ embeds, components: rows.length ? [rows[0]] : [] });
+  } catch (e) {
+    console.error('[poster] send failed (batch)', channelId, e?.code || e?.message || e);
+  }
 }
