@@ -49,7 +49,7 @@ export const vintedSearch = async (channel, processedArticleIds) => {
     return await retryWithBackoff(async () => {
         let http, proxy;
         try {
-            ({ http, proxy } = await getHttp());
+            ({ http, proxy } = await getHttp(`https://${url.host}`));
         } catch (e) {
             console.warn('[search] no proxy available', e.message || e);
             return [];

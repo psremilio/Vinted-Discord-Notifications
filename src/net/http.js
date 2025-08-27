@@ -49,11 +49,11 @@ function createClient(proxyStr) {
 
 const PROXY_DEBUG = String(process.env.DEBUG_PROXY || '0') === '1';
 
-async function bootstrapSession(client) {
+async function bootstrapSession(client, base = BASE) {
   const TTL = 45 * 60 * 1000; // 45 minutes
   if (client.warmedAt && Date.now() - client.warmedAt < TTL) return;
   try {
-    const res = await axios.get(BASE, {
+    const res = await axios.get(base, {
       proxy: false,
       httpAgent: client.proxyAgent,
       httpsAgent: client.proxyAgent,
@@ -76,8 +76,8 @@ async function bootstrapSession(client) {
       csrf = m && m[1];
     }
     if (cookieHeader) client.http.defaults.headers.Cookie = cookieHeader;
-    client.http.defaults.headers.Referer = BASE + '/';
-    client.http.defaults.headers.Origin = BASE;
+    client.http.defaults.headers.Referer = base.endsWith('/') ? base : base + '/';
+    client.http.defaults.headers.Origin = base.replace(/\/$/, '');
     if (csrf) client.http.defaults.headers['X-CSRF-Token'] = csrf;
     client.warmedAt = Date.now();
     if (PROXY_DEBUG) {
@@ -88,7 +88,7 @@ async function bootstrapSession(client) {
   }
 }
 
-export async function getHttp() {
+export async function getHttp(base) {
   // Per-request: attempt to grab a proxy from the pool
   const MAX_TRIES = 6;
   for (let i = 0; i < MAX_TRIES; i++) {
@@ -98,7 +98,7 @@ export async function getHttp() {
       continue;
     }
     const client = createClient(p);
-    await bootstrapSession(client);
+    await bootstrapSession(client, base || BASE);
     return { http: client.http, proxy: p };
   }
 
