@@ -32,6 +32,16 @@ export POLL_INTERVAL_SEC=25
 # Optional: disable jitter (use exact interval)
 export POLL_NO_JITTER=1
 
+# Filtering / Dedupe
+# Scope of dedupe keys: per rule (default) or global
+export DEDUPE_SCOPE=per_rule   # or 'global'
+# How long a processed item stays in-memory (minutes)
+export PROCESSED_TTL_MIN=60
+# Define how recent an item must be to be considered (minutes)
+export RECENT_MAX_MIN=15
+# Enable verbose poll logs (scraped counts, matches, sample reasons)
+export DEBUG_POLL=0            # set to 1 for verbose
+
 # Proxy-Pool Tuning
 # Hard cap for concurrently healthy proxies
 export PROXY_HEALTHY_CAP=200

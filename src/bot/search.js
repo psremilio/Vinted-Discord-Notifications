@@ -1,5 +1,11 @@
 import { getHttp, rotateProxy } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
+import { dedupeKey } from "../utils/dedupe.js";
+
+const DEBUG_POLL = process.env.DEBUG_POLL === '1';
+const d = (...args) => { if (DEBUG_POLL) console.log(...args); };
+const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
+const recentMs = RECENT_MAX_MIN * 60 * 1000;
 
 // Retry with exponential backoff
 async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
@@ -19,7 +25,7 @@ async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
 }
 
 //send the authenticated request
-export const vintedSearch = async (channel, processedArticleIds) => {
+export const vintedSearch = async (channel, processedStore) => {
     const url = new URL(channel.url);
     const ids = handleParams(url);
     const apiUrl = new URL(`https://${url.host}/api/v2/catalog/items`);
@@ -88,13 +94,13 @@ export const vintedSearch = async (channel, processedArticleIds) => {
             const ct = String(res.headers['content-type'] || '').toLowerCase();
             if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
               const items = Array.isArray(res.data?.items) ? res.data.items : [];
-              console.log(`[debug][rule:${channel.channelName}] scraped=${items.length}`);
+              d(`[debug][rule:${channel.channelName}] scraped=${items.length}`);
               // Optional bypass to test posting end-to-end
               if (String(process.env.DEBUG_ALLOW_ALL || '0') === '1') {
-                console.log(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
+                d(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
                 return items;
               }
-              return selectNewArticles(items, processedArticleIds, channel);
+              return selectNewArticles(items, processedStore, channel);
             }
             
             // Handle HTTP errors
@@ -128,27 +134,25 @@ export const vintedSearch = async (channel, processedArticleIds) => {
 };
 
 // chooses only articles not already seen & posted in the last 10min
-const selectNewArticles = (items, processedArticleIds, channel) => {
+const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
-  const cutoff = Date.now() - (1000 * 60 * 10);
+  const cutoff = Date.now() - recentMs;
   const filteredArticles = items.filter(({ photo, id, title }) =>
     photo &&
     (photo.high_resolution?.timestamp || 0) * 1000 > cutoff &&
-    !processedArticleIds.has(id) &&
+    !processedStore?.has?.(dedupeKey(channel.channelName, id)) &&
     !titleBlacklist.some(word => (title || '').toLowerCase().includes(word))
   );
 
-  console.log(
-    `[debug][rule:${channel.channelName}] matches=${filteredArticles.length} ` +
-    `firstIds=${filteredArticles.slice(0, 5).map(x => x.id).join(',')}`
-  );
+  d(`[debug][rule:${channel.channelName}] matches=${filteredArticles.length} ` +
+    `firstIds=${filteredArticles.slice(0, 5).map(x => x.id).join(',')}`);
 
   if (filteredArticles.length === 0 && items.length) {
     const sample = items.slice(0, 5).map(item => {
       const hasPhoto = !!item.photo;
       const tsSec = item.photo?.high_resolution?.timestamp || 0;
       const recent = tsSec * 1000 > cutoff;
-      const notProcessed = !processedArticleIds.has(item.id);
+      const notProcessed = !processedStore?.has?.(dedupeKey(channel.channelName, item.id));
       const notBlacklisted = !titleBlacklist.some(word => (item.title || '').toLowerCase().includes(word));
       return {
         id: item.id,
@@ -160,7 +164,7 @@ const selectNewArticles = (items, processedArticleIds, channel) => {
         notBlacklisted,
       };
     });
-    console.log(`[debug][rule:${channel.channelName}] sample_reasons=${JSON.stringify(sample)}`);
+    d(`[debug][rule:${channel.channelName}] sample_reasons=${JSON.stringify(sample)}`);
   }
 
   return filteredArticles;

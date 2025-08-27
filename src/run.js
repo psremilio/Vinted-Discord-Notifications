@@ -2,13 +2,14 @@ import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { initProxyPool } from "./net/http.js";
 import { startAutoTopUp } from "./net/proxyHealth.js";
+import { createProcessedStore, dedupeKey, ttlMs } from "./utils/dedupe.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
 // create duplicate timers.
 const activeSearches = new Map();
-// Will hold IDs of articles already processed across all searches
-let processedArticleIds = new Set();
+// In-memory processed store with TTL; keys are per-rule when configured
+let processedStore = createProcessedStore();
 // Optional env overrides for quick testing
 const OVERRIDE_SEC = Number(process.env.POLL_INTERVAL_SEC || 0);
 const NO_JITTER = String(process.env.POLL_NO_JITTER || '0') === '1';
@@ -35,12 +36,15 @@ async function getChannelById(client, id) {
 const runSearch = async (client, channel) => {
     try {
         process.stdout.write('.');
-        const articles = await vintedSearch(channel, processedArticleIds);
+        const articles = await vintedSearch(channel, processedStore);
 
         //if new articles are found post them
         if (articles && articles.length > 0) {
             process.stdout.write('\n' + channel.channelName + ' => +' + articles.length);
-            articles.forEach(article => { processedArticleIds.add(article.id); });
+            articles.forEach(article => {
+              const key = dedupeKey(channel.channelName, article.id);
+              processedStore.set(key, Date.now(), { ttl: ttlMs });
+            });
             const dest = await getChannelById(client, channel.channelId);
             if (!dest) {
                 if (!warnedMissing.has(channel.channelId)) {
@@ -93,7 +97,7 @@ const addSearch = (client, search) => {
 
 //init the article id set, then launch the simultaneous searches
 export const run = async (client, mySearches) => {
-    processedArticleIds = new Set();
+    processedStore = createProcessedStore();
     await initProxyPool();
     // background top-up keeps the pool filled without blocking
     startAutoTopUp();
@@ -112,12 +116,13 @@ export const run = async (client, mySearches) => {
         setTimeout(() => addSearch(client, channel), index * 1000 + 5000);
     });
 
-    //fetch new cookies and clean ProcessedArticleIDs at interval
+    // Periodic cleanup of expired dedupe entries
     setInterval(() => {
-        console.log('reducing processed articles size');
-        const halfSize = Math.floor(processedArticleIds.size / 2);
-        processedArticleIds = new Set([...processedArticleIds].slice(halfSize));
-    }, 1 * 60 * 60 * 1000);
+        processedStore.purgeExpired();
+        try {
+          console.log(`[dedupe] purge expired; size=${processedStore.size()}`);
+        } catch { /* ignore logging failures */ }
+    }, 60 * 60 * 1000);
 };
 
 export { addSearch, activeSearches };
