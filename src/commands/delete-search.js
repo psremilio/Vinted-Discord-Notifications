@@ -16,8 +16,6 @@ export const data = new SlashCommandBuilder()
             .setRequired(true));
 
 export const execute = async (interaction) => {
-    await interaction.deferReply({ ephemeral: true });
-
     const name = interaction.options.getString('name');
 
     try {
@@ -26,7 +24,7 @@ export const execute = async (interaction) => {
 
         const searchIndex = searches.findIndex(search => search.channelName === name);
         if (searchIndex === -1) {
-            await interaction.followUp({ content: 'No search found with the name ' + name });
+            await interaction.editReply({ content: 'No search found with the name ' + name });
             return;
         }
         searches.splice(searchIndex, 1);
@@ -38,10 +36,14 @@ export const execute = async (interaction) => {
             .setDescription(name)
             .setColor(0x00FF00);
 
-        await interaction.followUp({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed] });
 
     } catch (error) {
         console.error('\nError deleting the search:', error);
-        await interaction.followUp({ content: 'There was an error deleting the search.'});
+        try {
+            await interaction.followUp({ content: 'There was an error deleting the search.'});
+        } catch {
+            try { await interaction.editReply({ content: 'There was an error deleting the search.'}); } catch {}
+        }
     }
 }
