@@ -40,11 +40,20 @@ export const handleCommands = async (interaction, mySearches) => {
         if (!interaction.deferred && !interaction.replied) {
             try { await interaction.deferReply({ ephemeral: true }); } catch {}
         }
+        const name = interaction.commandName;
         let module;
-        try {
-            module = await import(`./commands/${interaction.commandName}.js`);
-        } catch (err) {
-            const name = interaction.commandName;
+        const attempts = [
+          `./commands/${name}.js`,
+          `./commands/${name.replace(/_/g, '-')}.js`,
+          `./commands/${name.replace(/-/g, '_')}.js`,
+        ];
+        for (const p of attempts) {
+          try {
+            module = await import(p);
+            if (module) break;
+          } catch {}
+        }
+        if (!module) {
             const msg = `Befehl "${name}" ist (noch) nicht verfügbar.`;
             try {
                 await interaction.followUp({ content: msg, ephemeral: true });
@@ -54,7 +63,6 @@ export const handleCommands = async (interaction, mySearches) => {
             return;
         }
         if (!module || typeof module.execute !== 'function') {
-            const name = interaction.commandName;
             const msg = `Befehl "${name}" ist (noch) nicht verfügbar.`;
             try { await interaction.followUp({ content: msg, ephemeral: true }); } catch {}
             return;
