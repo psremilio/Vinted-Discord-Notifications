@@ -58,10 +58,6 @@ Functionalities:
 - New searches added via `/new_search` start monitoring immediately and duplicate names are ignored to prevent rescheduling.
 - Includes unit tests ensuring `/new_search` scheduling works without a restart.
 
-## Fastbuy (Quickfix)
-- Zusätzlicher „FASTBUY“-Button im Post öffnet die Item-Seite mit `?fastbuy=1`.
-- Ein Tampermonkey-Userscript klickt „Kaufen“, Navigation bis zum Checkout (kein Auto-Pay).
-- Anleitung: siehe `docs/FASTBUY.md`.
 
 Prerequisites:
 --------------
