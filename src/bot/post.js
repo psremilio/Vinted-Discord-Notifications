@@ -12,7 +12,12 @@ async function sendToTargetsSafely(targets, payload) {
     try {
       await ch.send(payload);
     } catch (e) {
-      console.error("[post] send failed", ch?.id ?? "(unknown)", e);
+      const code = Number(e?.code || 0);
+      if (code === 10003) {
+        console.error(`[post] send failed: Unknown Channel (id=${ch?.id ?? 'unknown'}) — wurde der Kanal gelöscht oder fehlt die Berechtigung?`);
+      } else {
+        console.error("[post] send failed", ch?.id ?? "(unknown)", e);
+      }
     }
   }
 }

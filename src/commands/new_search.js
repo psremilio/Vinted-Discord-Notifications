@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder, ChannelType, PermissionsBitField } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -57,7 +57,24 @@ export const execute = async (interaction) => {
     const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
     const frequency = interaction.options.getString('frequency') || 10;
     const name = interaction.options.getString('name');
-    const channel_id = interaction.channel.id;
+    const ch = interaction.channel;
+    const channel_id = ch?.id;
+
+    // Validate channel type and send permission to avoid Unknown Channel at post time
+    try {
+        const allowedTypes = new Set([
+            ChannelType.GuildText,
+            ChannelType.PublicThread,
+            ChannelType.PrivateThread,
+            ChannelType.AnnouncementThread,
+        ]);
+        const isAllowedType = allowedTypes.has(ch?.type);
+        const canSend = !!ch?.permissionsFor?.(interaction.client.user)?.has?.(PermissionsBitField.Flags.SendMessages);
+        if (!channel_id || !isAllowedType || !canSend) {
+            await interaction.followUp({ content: 'Dieser Kanal ist für Benachrichtigungen ungeeignet. Bitte führe den Befehl in einem Textkanal aus, in dem der Bot schreiben darf.' });
+            return;
+        }
+    } catch {}
 
     // validate the URL
     const validation = validateUrl(url);

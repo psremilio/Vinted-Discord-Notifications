@@ -21,13 +21,28 @@ export const registerCommands = async (client) => {
     await loadCommands();
 
     const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
+    const guildIds = (process.env.COMMAND_GUILD_IDS || process.env.COMMAND_GUILD_ID || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
     try {
-        console.log('Started refreshing application (/) commands.');
-        await rest.put(
-            Routes.applicationCommands(client.user.id),
-            { body: commands }
-        );
-        console.log('Successfully reloaded application (/) commands.');
+        if (guildIds.length > 0) {
+            console.log(`Registering ${commands.length} command(s) for guild(s): ${guildIds.join(', ')}`);
+            for (const gid of guildIds) {
+                await rest.put(
+                    Routes.applicationGuildCommands(client.user.id, gid),
+                    { body: commands }
+                );
+            }
+            console.log('Successfully registered guild (/) commands.');
+        } else {
+            console.log('Registering global (/) commands (may take up to 1h)…');
+            await rest.put(
+                Routes.applicationCommands(client.user.id),
+                { body: commands }
+            );
+            console.log('Successfully reloaded global (/) commands.');
+        }
     } catch (error) {
         console.error('\nError reloading commands:', error);
     }

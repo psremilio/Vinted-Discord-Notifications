@@ -21,7 +21,9 @@ client.on('ready',async()=>{
   run(client,mySearches);
 });
 client.on('interactionCreate',interaction=>{
-  if(interaction.isCommand()) handleCommands(interaction,mySearches);
+  if (interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand()) {
+    handleCommands(interaction,mySearches);
+  }
 });
 
 (async function boot(){

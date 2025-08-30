@@ -35,12 +35,13 @@ async function getChannelById(client, id) {
 
 const runSearch = async (client, channel) => {
     try {
-        process.stdout.write('.');
+        // Optional heartbeat dots (disabled by default)
+        if (String(process.env.DEBUG_DOTS || '0') === '1') process.stdout.write('.');
         const articles = await vintedSearch(channel, processedStore);
 
         //if new articles are found post them
         if (articles && articles.length > 0) {
-            process.stdout.write('\n' + channel.channelName + ' => +' + articles.length);
+            console.log(`${channel.channelName} => +${articles.length}`);
             articles.forEach(article => {
               const key = dedupeKey(channel.channelName, article.id);
               processedStore.set(key, Date.now(), { ttl: ttlMs });
@@ -110,6 +111,16 @@ export const run = async (client, mySearches) => {
             console.warn('[proxy] refresh failed:', e.message || e);
         }
     }, REFRESH_H * 60 * 60 * 1000);
+
+    // Validate configured channel IDs up-front to surface misconfig early
+    try {
+        await Promise.all((mySearches || []).map(async (s) => {
+            const ch = await getChannelById(client, s.channelId);
+            if (!ch) {
+                console.warn(`[post] Warnung: Zielkanal ungültig oder nicht erreichbar für "${s.channelName}" (id=${s.channelId}).`);
+            }
+        }));
+    } catch {}
 
     //stagger start time for searches to avoid too many simultaneous requests
     mySearches.forEach((channel, index) => {
