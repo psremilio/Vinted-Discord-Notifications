@@ -51,7 +51,9 @@ const validateUrl = (url) => {
 }
 
 export const execute = async (interaction) => {
-    await interaction.deferReply({ ephemeral: true });
+    if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply({ ephemeral: true });
+    }
 
     const url = interaction.options.getString('url');
     const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
