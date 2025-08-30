@@ -35,6 +35,19 @@ export const registerCommands = async (client) => {
                 );
             }
             console.log('Successfully registered guild (/) commands.');
+            // Optionally clear global commands to avoid duplicates in the UI
+            if (String(process.env.COMMAND_CLEAR_GLOBAL || '0') === '1') {
+                try {
+                    console.log('Clearing global commands (COMMAND_CLEAR_GLOBAL=1)…');
+                    await rest.put(
+                        Routes.applicationCommands(client.user.id),
+                        { body: [] }
+                    );
+                    console.log('Cleared global commands.');
+                } catch (e) {
+                    console.warn('Failed to clear global commands:', e.message || e);
+                }
+            }
         } else {
             console.log('Registering global (/) commands (may take up to 1h)…');
             await rest.put(
