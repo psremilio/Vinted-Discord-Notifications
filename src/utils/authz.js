@@ -6,67 +6,88 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const rolesPath = path.resolve(__dirname, '../../config/roles.json');
-let cached; let mtime = 0;
+let cache = null; let mtime = 0;
 
-function loadConfig() {
+function ensureFile() {
+  try {
+    if (!fs.existsSync(rolesPath)) {
+      fs.mkdirSync(path.dirname(rolesPath), { recursive: true });
+      fs.writeFileSync(rolesPath, JSON.stringify({ allow: [] }, null, 2));
+    }
+  } catch {}
+}
+
+function load() {
+  ensureFile();
   try {
     const stat = fs.statSync(rolesPath);
-    if (!cached || stat.mtimeMs !== mtime) {
-      cached = JSON.parse(fs.readFileSync(rolesPath, 'utf8'));
+    if (!cache || stat.mtimeMs !== mtime) {
+      cache = JSON.parse(fs.readFileSync(rolesPath, 'utf8'));
+      if (!Array.isArray(cache.allow)) cache.allow = [];
       mtime = stat.mtimeMs;
     }
   } catch {
-    // fallback to env-only when file missing
-    cached = null;
+    cache = { allow: [] };
   }
-  return cached;
+  return cache;
 }
 
-function envList(name) {
-  return String(process.env[name] || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
+function save(cfg) {
+  try {
+    fs.writeFileSync(rolesPath, JSON.stringify(cfg, null, 2));
+    mtime = fs.statSync(rolesPath).mtimeMs;
+    cache = cfg;
+  } catch {}
 }
 
-function allowedRolesFor(commandName) {
-  const cfg = loadConfig();
-  const fromFile = new Set([
-    ...((cfg?.global || [])),
-    ...((cfg?.commands?.[commandName] || [])),
-  ].map(String));
-
-  const fromEnv = new Set([
-    ...envList('COMMAND_ROLE_IDS'),
-    ...envList(`COMMAND_ROLE_IDS_${String(commandName || '').toUpperCase().replace(/[^A-Z0-9]/g,'_')}`),
-  ].map(String));
-
-  return new Set([...fromFile, ...fromEnv]);
-}
-
-function hasBypass(interaction) {
+export function isAdmin(interaction) {
   try {
     if (interaction.user?.id && interaction.guild?.ownerId && interaction.user.id === interaction.guild.ownerId) return true;
   } catch {}
   try {
     const perms = interaction.memberPermissions;
-    return perms?.has?.('Administrator') || perms?.has?.('ManageGuild') || false;
+    return Boolean(perms?.has?.('Administrator'));
   } catch { return false; }
 }
 
-export function isAuthorized(interaction, commandName) {
-  // DMs unsupported; require guild context to evaluate roles
+export function isAuthorized(interaction) {
+  // Admins always allowed
+  if (isAdmin(interaction)) return true;
+  // Require guild context
   if (!interaction?.inGuild?.() && !interaction?.guildId) return false;
-  if (hasBypass(interaction)) return true;
-
-  const allow = allowedRolesFor(commandName);
-  if (!allow || allow.size === 0) return true; // no restriction configured
-
+  const cfg = load();
+  const allow = new Set((cfg.allow || []).map(String));
+  if (allow.size === 0) return false; // default locked down to admins only
   const roles = interaction?.member?.roles?.cache;
   if (!roles || roles.size === 0) return false;
-  for (const roleId of allow) {
-    if (roles.has(roleId)) return true;
-  }
+  for (const roleId of allow) if (roles.has(roleId)) return true;
   return false;
 }
 
+export function listAllowed() {
+  return [...new Set((load().allow || []).map(String))];
+}
+
+export function addAllowed(roleId) {
+  const cfg = load();
+  const set = new Set((cfg.allow || []).map(String));
+  set.add(String(roleId));
+  cfg.allow = [...set];
+  save(cfg);
+  return cfg.allow;
+}
+
+export function removeAllowed(roleId) {
+  const cfg = load();
+  const set = new Set((cfg.allow || []).map(String));
+  set.delete(String(roleId));
+  cfg.allow = [...set];
+  save(cfg);
+  return cfg.allow;
+}
+
+export function resetAllowed() {
+  const cfg = { allow: [] };
+  save(cfg);
+  return cfg.allow;
+}

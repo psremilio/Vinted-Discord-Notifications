@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { REST, Routes } from 'discord.js';
-import { isAuthorized } from './utils/authz.js';
+import { isAuthorized, isAdmin } from './utils/authz.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -69,12 +69,18 @@ export const handleCommands = async (interaction, mySearches) => {
         }
         const name = interaction.commandName;
 
-        // Role-based authorization (configurable via config/roles.json or env)
-        if (!isAuthorized(interaction, name)) {
-            try {
-                await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', ephemeral: true });
-            } catch {}
-            return;
+        // Authorization: Admins always allowed. Others must be in allowlist.
+        if (name !== 'bot_roles') {
+            if (!isAuthorized(interaction)) {
+                try { await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', ephemeral: true }); } catch {}
+                return;
+            }
+        } else {
+            // bot_roles itself is admin-only
+            if (!isAdmin(interaction)) {
+                try { await interaction.followUp({ content: 'Nur Admins dürfen diesen Befehl verwenden.', ephemeral: true }); } catch {}
+                return;
+            }
         }
         let module;
         const attempts = [
