@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { REST, Routes } from 'discord.js';
+import { isAuthorized } from './utils/authz.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,6 +68,14 @@ export const handleCommands = async (interaction, mySearches) => {
             try { await interaction.deferReply({ ephemeral: true }); } catch {}
         }
         const name = interaction.commandName;
+
+        // Role-based authorization (configurable via config/roles.json or env)
+        if (!isAuthorized(interaction, name)) {
+            try {
+                await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', ephemeral: true });
+            } catch {}
+            return;
+        }
         let module;
         const attempts = [
           `./commands/${name}.js`,
