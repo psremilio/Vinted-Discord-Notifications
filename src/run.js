@@ -101,7 +101,6 @@ const addSearch = (client, search) => {
 //init the article id set, then launch the simultaneous searches
 export const run = async (client, mySearches) => {
     processedStore = createProcessedStore();
-    await initProxyPool();
     // background top-up keeps the pool filled without blocking
     startAutoTopUp();
     const REFRESH_H = parseInt(process.env.PROXY_REFRESH_HOURS || '6', 10);

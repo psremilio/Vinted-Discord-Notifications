@@ -6,6 +6,9 @@ const healthy = [];
 const cooldown = new Map();
 const HEALTHY_CAP = Number(process.env.PROXY_HEALTHY_CAP || 60);
 const TEST_CONCURRENCY = Number(process.env.PROXY_TEST_CONCURRENCY || 8);
+// Fast start: return as soon as we have a minimal number of healthy proxies
+const FAST_ENABLED = String(process.env.PROXY_FAST_START || '1') === '1';
+const FAST_MIN = Math.max(1, Number(process.env.PROXY_FAST_START_MIN || 20));
 
 let allProxies = [];
 let scanOffset = 0;
@@ -50,6 +53,8 @@ async function testOne(p, base, stats) {
 
 export async function initProxyPool() {
     healthy.length = 0;
+    const started = Date.now();
+    const DEADLINE_MS = Number(process.env.PROXY_INIT_DEADLINE_MS || 30000);
     const file =
         process.env.PROXY_LIST_FILE ||
         (process.env.RAILWAY_ENVIRONMENT ? '/app/config/proxies.txt' : 'config/proxies.txt');
@@ -72,6 +77,20 @@ export async function initProxyPool() {
         for (let i = 0; i < batch.length && healthy.length < HEALTHY_CAP; i += TEST_CONCURRENCY) {
             const slice = batch.slice(i, i + TEST_CONCURRENCY);
             await Promise.allSettled(slice.map(p => testOne(p, base, stats)));
+            if (Date.now() - started > DEADLINE_MS) {
+                console.log(`[proxy] init deadline reached (${DEADLINE_MS}ms), continuing fill in background`);
+                setTimeout(() => { refillIfBelowCap().catch(() => {}); }, 0);
+                console.log(`[proxy] Healthy proxies: ${healthy.length}`);
+                return;
+            }
+            // Early exit for fast start: continue filling in background
+            if (FAST_ENABLED && healthy.length >= Math.min(FAST_MIN, HEALTHY_CAP)) {
+                console.log(`[proxy] fast-start with ${healthy.length} healthy → continue filling in background`);
+                // Continue scanning asynchronously without blocking startup
+                setTimeout(() => { refillIfBelowCap().catch(() => {}); }, 0);
+                console.log(`[proxy] Healthy proxies: ${healthy.length}`);
+                return;
+            }
         }
     }
     console.log(`[proxy] Proxy test results: ${stats.tested} tested, ${stats.successful} healthy, ${stats.blocked} blocked (401), ${stats.rateLimited} rate limited (403), ${stats.failed} failed`);

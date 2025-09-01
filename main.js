@@ -27,11 +27,11 @@ client.on('interactionCreate',interaction=>{
 });
 
 (async function boot(){
-  // Ensure proxy setup before logging in
-  await whitelistCurrentEgressIP();
-  await ensureProxyList();
+  // Kick off proxy setup in parallel to avoid long pre-login stalls
+  try { await whitelistCurrentEgressIP(); } catch {}
+  try { await ensureProxyList(); } catch {}
   startProxyRefreshLoop();
-  await initProxyPool();
+  const poolInit = initProxyPool().catch(()=>{});
 
   while(true){
     try {
@@ -44,4 +44,6 @@ client.on('interactionCreate',interaction=>{
       await new Promise(r=>setTimeout(r,wait));
     }
   }
+  // Best-effort: wait briefly for pool to have some entries, but don't block forever
+  try { await Promise.race([poolInit, new Promise(r=>setTimeout(r, 5000))]); } catch {}
 })();
