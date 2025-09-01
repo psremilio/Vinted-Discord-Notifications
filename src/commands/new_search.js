@@ -28,25 +28,19 @@ export const data = new SlashCommandBuilder()
             .setDescription('The frequency of the search in seconds. (defaults to 10s)')
             .setRequired(false));
 
-//validate that the URL is a Vinted catalog URL with at least one query parameter
+// validate that the URL is a Vinted catalog URL with at least one query parameter
 const validateUrl = (url) => {
     try {
-        let route = new URL(url).pathname.split('/').pop();
-
-        if (route !== "catalog") {
-            return "invalid-url-with-example";
-        }
-
-        const urlObj = new URL(url);
-        const searchParams = urlObj.searchParams;
-        // check if the URL has at least one query parameter
-        if (searchParams.toString().length === 0) {
-            return "must-have-query-params"
-        }
-
+        const u = new URL(url);
+        // Accept any vinted.* host and any path containing "/catalog"
+        const isVinted = /(^|\.)vinted\./i.test(u.host);
+        const hasCatalog = /\/catalog(\/|$)/i.test(u.pathname);
+        const hasParams = u.search && u.searchParams.toString().length > 0;
+        if (!isVinted || !hasCatalog) return 'invalid-url-with-example';
+        if (!hasParams) return 'must-have-query-params';
         return true;
     } catch (error) {
-        return "invalid-url";
+        return 'invalid-url';
     }
 }
 
@@ -57,7 +51,11 @@ export const execute = async (interaction) => {
 
     const url = interaction.options.getString('url');
     const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
-    const frequency = interaction.options.getString('frequency') || 10;
+    // Normalize and clamp frequency to avoid too aggressive polling
+    const freqRaw = interaction.options.getString('frequency');
+    let frequency = Number.parseInt(freqRaw ?? '10', 10);
+    if (!Number.isFinite(frequency)) frequency = 10;
+    frequency = Math.min(Math.max(frequency, 5), 3600); // 5s–1h
     const name = interaction.options.getString('name');
     const ch = interaction.channel;
     const channel_id = ch?.id;
@@ -98,7 +96,7 @@ export const execute = async (interaction) => {
             "channelId": channel_id,
             "channelName": name,
             "url": url,
-            "frequency": frequency,
+            "frequency": Number(frequency),
             "titleBlacklist": banned_keywords
         };
         searches.push(search);

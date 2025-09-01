@@ -6,8 +6,8 @@ import { createProcessedStore, dedupeKey, ttlMs } from "./utils/dedupe.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
-// create duplicate timers.
-const activeSearches = new Map();
+// create duplicate timers. The value holds the last scheduled timeout ID.
+const activeSearches = new Map(); // name -> Timeout
 // In-memory processed store with TTL; keys are per-rule when configured
 let processedStore = createProcessedStore();
 // Optional env overrides for quick testing
@@ -67,13 +67,13 @@ const runInterval = async (client, channel) => {
     const baseSec = OVERRIDE_SEC > 0 ? OVERRIDE_SEC : channel.frequency;
     const factor = NO_JITTER ? 1 : (0.8 + Math.random() * 0.4);
     const delay = baseSec * 1000 * factor;
-    setTimeout(() => runInterval(client, channel), delay);
+    const t = setTimeout(() => runInterval(client, channel), delay);
+    activeSearches.set(channel.channelName, t);
 };
 
 // Attach a new search to the scheduler
 const addSearch = (client, search) => {
     if (activeSearches.has(search.channelName)) return;
-    activeSearches.set(search.channelName, true);
     // Log scheduling info once so you see which interval is active
     const baseSec = OVERRIDE_SEC > 0 ? OVERRIDE_SEC : search.frequency;
     console.log(
@@ -82,7 +82,8 @@ const addSearch = (client, search) => {
       (OVERRIDE_SEC > 0 ? ' [override via POLL_INTERVAL_SEC]' : '')
     );
     if (process.env.NODE_ENV === 'test') {
-        setTimeout(() => { runInterval(client, search); }, 1000);
+        const t = setTimeout(() => { runInterval(client, search); }, 1000);
+        activeSearches.set(search.channelName, t);
         return;
     }
     (async () => {
@@ -92,7 +93,8 @@ const addSearch = (client, search) => {
         } catch (err) {
             console.error('\nError in initializing articles:', err);
         }
-        setTimeout(() => { runInterval(client, search); }, 1000);
+        const t = setTimeout(() => { runInterval(client, search); }, 1000);
+        activeSearches.set(search.channelName, t);
     })();
 };
 
@@ -136,4 +138,14 @@ export const run = async (client, mySearches) => {
     }, 60 * 60 * 1000);
 };
 
-export { addSearch, activeSearches };
+// Stop and remove a scheduled job by name, if present
+function removeJob(name) {
+    const t = activeSearches.get(name);
+    if (!t) return false;
+    try { clearTimeout(t); } catch {}
+    activeSearches.delete(name);
+    console.log(`[schedule] stopped ${name}`);
+    return true;
+}
+
+export { addSearch, activeSearches, removeJob };
