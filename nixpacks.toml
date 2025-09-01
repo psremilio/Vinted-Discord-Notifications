@@ -2,7 +2,7 @@
 apt_pkgs = ["ca-certificates"]
 
 [phases.install]
-cmds = ["npm ci --omit=optional"]
+cmds = ["npm i --omit=optional"]
 
 [start]
 cmd = "npm start"
