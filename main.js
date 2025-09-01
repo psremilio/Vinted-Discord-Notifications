@@ -11,7 +11,7 @@ import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
 import { whitelistCurrentEgressIP } from './src/net/whitelist.js';
 import { ensureProxyList, startProxyRefreshLoop } from './src/net/ensureProxyList.js';
-import { initProxyPool, startHeartbeat, stopHeartbeat } from './src/net/proxyHealth.js';
+import { initProxyPool, startHeartbeat, stopHeartbeat, healthEvents, healthyCount } from './src/net/proxyHealth.js';
 
 dotenv.config();
 
@@ -29,12 +29,24 @@ function logEnvReadiness() {
 logEnvReadiness();
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+let clientReady = false;
+let monitorsStarted = false;
 const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
 
+function startMonitorsOnce(where = 'unknown'){
+  if (monitorsStarted) return;
+  if (!clientReady) return;
+  monitorsStarted = true;
+  console.log(`[start] launching monitors/search… (from=${where}, healthy=${healthyCount?.() ?? 'n/a'})`);
+  try { registerCommands(client); } catch {}
+  try { run(client,mySearches); } catch (e) { console.error('[start] run failed', e); }
+  try { startHeartbeat(); } catch {}
+}
+
 client.on('ready',async()=>{
+  clientReady = true;
   console.log(`Logged in as ${client.user.tag}!`);
-  registerCommands(client);
-  run(client,mySearches);
+  startMonitorsOnce('ready');
 });
 client.on('interactionCreate',interaction=>{
   if (interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand()) {
@@ -48,6 +60,10 @@ client.on('interactionCreate',interaction=>{
   try { await ensureProxyList(); } catch {}
   startProxyRefreshLoop();
   const poolInit = initProxyPool().catch(()=>{});
+  const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 40);
+  const DEADLINE_SEC = Number(process.env.STARTUP_DEADLINE_SEC || 60);
+  const FORCE_START = String(process.env.FORCE_START || '0') === '1';
+  const t0 = Date.now();
 
   while(true){
     try {
@@ -62,7 +78,27 @@ client.on('interactionCreate',interaction=>{
   }
   // Best-effort: wait briefly for pool to have some entries, but don't block forever
   try { await Promise.race([poolInit, new Promise(r=>setTimeout(r, 5000))]); } catch {}
-  try { startHeartbeat(); } catch {}
+  // Warmup-driven start gates (failsafe on deadline)
+  try {
+    healthEvents?.on?.('count', (n) => {
+      if (!monitorsStarted && n >= WARMUP_MIN) {
+        console.log(`[warmup] threshold reached (>= ${WARMUP_MIN})`);
+        startMonitorsOnce('warmup');
+      }
+    });
+  } catch {}
+  if (FORCE_START) {
+    console.warn('[start] FORCE_START=1 → starting immediately (warmup continues in background)');
+    startMonitorsOnce('force');
+  }
+  const iv = setInterval(() => {
+    if (monitorsStarted) { clearInterval(iv); return; }
+    if ((Date.now() - t0) / 1000 > DEADLINE_SEC) {
+      console.warn('[start] warmup deadline reached → starting anyway');
+      startMonitorsOnce('deadline');
+      clearInterval(iv);
+    }
+  }, 1000);
 })();
 
 // Graceful shutdown

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { EventEmitter } from 'events';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { loadProxies } from './proxies.js';
 
@@ -15,6 +16,8 @@ const SCORE_DECAY_SEC = Number(process.env.PROXY_SCORE_DECAY_SEC || 900);
 // Data structures
 // proxy -> { lastOkAt, okCount, score, bucketTokens, bucketRefillAt, cooldownUntil }
 const healthyMap = new Map();
+export const healthEvents = new EventEmitter();
+export function healthyCount() { return healthyMap.size; }
 const cooldown = new Map();   // proxy -> timestamp when usable again
 const failCounts = new Map(); // proxy -> fails since last ok
 
@@ -62,6 +65,7 @@ function addHealthy(proxy, { status } = {}) {
     healthyMap.delete(oldest);
   }
   if (status) console.log(`[proxy] Healthy proxy added: ${proxy} (status: ${status})`);
+  try { healthEvents.emit('count', healthyMap.size); } catch {}
 }
 
 async function twoPhaseCheck(proxy, base) {
@@ -169,18 +173,21 @@ export async function initProxyPool() {
         console.log(`[proxy] fast-start with ${healthyMap.size} healthy → continue filling in background`);
         setTimeout(() => { refillIfBelowCap().catch(() => {}); }, 0);
         console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
+        try { healthEvents.emit('count', healthyMap.size); } catch {}
         return;
       }
       if (Date.now() - started > DEADLINE_MS) {
         console.log(`[proxy] init deadline reached (${DEADLINE_MS}ms), continuing fill in background`);
         setTimeout(() => { refillIfBelowCap().catch(() => {}); }, 0);
         console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
+        try { healthEvents.emit('count', healthyMap.size); } catch {}
         return;
       }
     }
   }
   console.log(`[proxy] Proxy test results: ${stats.tested} tested, ${stats.successful} healthy, ${stats.blocked} blocked, ${stats.rateLimited} rate limited (401/403/429), ${stats.failed} failed`);
   console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
+  try { healthEvents.emit('count', healthyMap.size); } catch {}
 }
 
 async function refillIfBelowCap() {
@@ -209,6 +216,7 @@ async function refillIfBelowCap() {
   const delta = healthyMap.size - start;
   if (delta > 0) {
     console.log(`[proxy] Top-up added ${delta} → now ${healthyMap.size}/${CAPACITY}`);
+    try { healthEvents.emit('count', healthyMap.size); } catch {}
   }
 }
 
