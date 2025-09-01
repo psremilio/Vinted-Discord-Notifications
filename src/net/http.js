@@ -111,6 +111,7 @@ export async function getHttp(base) {
     });
     return { http, proxy: 'DIRECT' };
   }
+  console.warn('[proxy] No healthy proxies available; consider checking PROXY_* vars or set ALLOW_DIRECT=1 for debugging.');
   throw new Error('No healthy proxies available');
 }
 

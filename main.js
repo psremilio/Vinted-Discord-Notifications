@@ -1,4 +1,7 @@
 process.on('unhandledRejection',(reason)=>console.error('Rejection:',reason));
+process.on('uncaughtException',(err)=>{
+  try { console.error('Uncaught:', err?.stack || err?.message || err); } catch {}
+});
 
 import dotenv from 'dotenv';
 import { Client, GatewayIntentBits } from 'discord.js';
