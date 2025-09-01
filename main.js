@@ -8,7 +8,7 @@ import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
 import { whitelistCurrentEgressIP } from './src/net/whitelist.js';
 import { ensureProxyList, startProxyRefreshLoop } from './src/net/ensureProxyList.js';
-import { initProxyPool } from './src/net/proxyHealth.js';
+import { initProxyPool, startHeartbeat, stopHeartbeat } from './src/net/proxyHealth.js';
 
 dotenv.config();
 
@@ -46,4 +46,16 @@ client.on('interactionCreate',interaction=>{
   }
   // Best-effort: wait briefly for pool to have some entries, but don't block forever
   try { await Promise.race([poolInit, new Promise(r=>setTimeout(r, 5000))]); } catch {}
+  try { startHeartbeat(); } catch {}
 })();
+
+// Graceful shutdown
+function shutdown(signal){
+  console.log(`[shutdown] received ${signal}, cleaning up…`);
+  try { stopHeartbeat(); } catch {}
+  try { client.destroy(); } catch {}
+  try { import('./src/run.js').then(m=>m.stopAll && m.stopAll()); } catch {}
+  setTimeout(()=>process.exit(0), 25000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

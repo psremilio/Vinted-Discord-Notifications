@@ -147,4 +147,12 @@ function removeJob(name) {
     return true;
 }
 
-export { addSearch, activeSearches, removeJob };
+function stopAll() {
+    for (const [name, t] of activeSearches.entries()) {
+        try { clearTimeout(t); } catch {}
+        activeSearches.delete(name);
+    }
+    console.log('[schedule] all jobs stopped');
+}
+
+export { addSearch, activeSearches, removeJob, stopAll };
