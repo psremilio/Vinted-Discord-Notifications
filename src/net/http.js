@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
-import { getProxy, markBadInPool } from './proxyHealth.js';
+import { getProxy, markBadInPool, recordProxySuccess, recordProxyOutcome } from './proxyHealth.js';
 
 const clientsByProxy = new Map();
 const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
@@ -113,6 +113,53 @@ export async function getHttp(base) {
   }
   console.warn('[proxy] No healthy proxies available; consider checking PROXY_* vars or set ALLOW_DIRECT=1 for debugging.');
   throw new Error('No healthy proxies available');
+}
+
+// Hedged GET: fire up to HEDGE_REQUESTS with small delay and return the first useful response
+export async function hedgedGet(url, config = {}, base = BASE) {
+  const HEDGE_N = Math.max(1, Number(process.env.HEDGE_REQUESTS || 2));
+  const HEDGE_DELAY = Math.max(0, Number(process.env.HEDGE_DELAY_MS || 200));
+
+  const attempts = [];
+  const controllers = [];
+  let resolved = false;
+
+  function runAttempt(delayMs) {
+    return new Promise((resolve) => {
+      setTimeout(async () => {
+        if (resolved) return resolve(null);
+        let proxy;
+        try {
+          const { http, proxy: p } = await getHttp(base);
+          proxy = p;
+          const controller = new AbortController();
+          controllers.push(controller);
+          const res = await http.get(url, { ...config, signal: controller.signal, validateStatus: () => true });
+          const code = Number(res.status || 0);
+          if (!resolved && code >= 200 && code < 300) {
+            recordProxySuccess(proxy);
+            resolved = true;
+            resolve({ res, proxy });
+          } else {
+            recordProxyOutcome(proxy, code);
+            resolve(null);
+          }
+        } catch (e) {
+          // timeouts or network errors
+          recordProxyOutcome(proxy, e?.response?.status || 0);
+          resolve(null);
+        }
+      }, delayMs);
+    });
+  }
+
+  for (let i = 0; i < HEDGE_N; i++) {
+    attempts.push(runAttempt(i === 0 ? 0 : i * HEDGE_DELAY));
+  }
+  const results = await Promise.all(attempts);
+  const winner = results.find(x => x && x.res);
+  if (winner) return winner.res;
+  throw new Error('Hedged requests failed');
 }
 
 export function rotateProxy(badProxy) {

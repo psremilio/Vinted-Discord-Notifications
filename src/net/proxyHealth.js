@@ -9,9 +9,12 @@ const CHECK_TIMEOUT_SEC = Number(process.env.PROXY_CHECK_TIMEOUT_SEC || 8);
 const COOLDOWN_MIN = Number(process.env.PROXY_COOLDOWN_MIN || 30);
 const FAIL_MAX = Number(process.env.PROXY_FAIL_MAX || 3);
 const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 40);
+const REQUESTS_PER_PROXY_PER_MIN = Number(process.env.REQUESTS_PER_PROXY_PER_MIN || 8);
+const SCORE_DECAY_SEC = Number(process.env.PROXY_SCORE_DECAY_SEC || 900);
 
 // Data structures
-const healthyMap = new Map(); // proxy -> { lastOkAt, okCount, score }
+// proxy -> { lastOkAt, okCount, score, bucketTokens, bucketRefillAt, cooldownUntil }
+const healthyMap = new Map();
 const cooldown = new Map();   // proxy -> timestamp when usable again
 const failCounts = new Map(); // proxy -> fails since last ok
 
@@ -26,13 +29,33 @@ function classifyStatus(code) {
 }
 
 // Utility: add healthy entry with hard capacity cap (LRU eviction)
+function _refillTokens(state) {
+  const now = Date.now();
+  if (!state.bucketRefillAt || now >= state.bucketRefillAt + 60_000) {
+    state.bucketTokens = REQUESTS_PER_PROXY_PER_MIN;
+    state.bucketRefillAt = now;
+  }
+}
+
+function tryAcquireToken(proxy) {
+  const st = healthyMap.get(proxy);
+  if (!st) return false;
+  _refillTokens(st);
+  if (st.bucketTokens > 0) { st.bucketTokens -= 1; return true; }
+  return false;
+}
+
 function addHealthy(proxy, { status } = {}) {
   // Reset cooldown and failure score
   cooldown.delete(proxy);
   failCounts.set(proxy, 0);
-  if (healthyMap.has(proxy)) healthyMap.delete(proxy); // move to end
   const prev = healthyMap.get(proxy);
-  healthyMap.set(proxy, { lastOkAt: Date.now(), okCount: (prev?.okCount || 0) + 1, score: 0 });
+  const next = prev || { score: 0, bucketTokens: REQUESTS_PER_PROXY_PER_MIN, bucketRefillAt: 0, cooldownUntil: 0, okCount: 0, lastOkAt: 0 };
+  next.lastOkAt = Date.now();
+  next.okCount = (next.okCount || 0) + 1;
+  // move to end for LRU effect
+  if (healthyMap.has(proxy)) healthyMap.delete(proxy);
+  healthyMap.set(proxy, next);
   // Enforce capacity strictly
   while (healthyMap.size > CAPACITY) {
     const oldest = healthyMap.keys().next().value;
@@ -197,23 +220,45 @@ export function startAutoTopUp() {
 
 export function getProxy() {
   const now = Date.now();
-  const candidates = [];
-  for (const [p] of healthyMap.entries()) {
-    if ((cooldown.get(p) ?? 0) <= now) candidates.push(p);
+  const weighted = [];
+  for (const [p, st] of healthyMap.entries()) {
+    const cool = st.cooldownUntil || (cooldown.get(p) || 0);
+    if (cool > now) continue;
+    _refillTokens(st);
+    if (st.bucketTokens <= 0) continue;
+    const w = Math.max(1, Math.min(20, (st.score ?? 0) + 10));
+    weighted.push([p, w]);
   }
-  if (!candidates.length) return null;
-  return candidates[Math.floor(Math.random() * candidates.length)];
+  if (!weighted.length) return null;
+  // weighted random choice
+  const total = weighted.reduce((a, [, w]) => a + w, 0);
+  let r = Math.random() * total;
+  for (const [p, w] of weighted) {
+    if ((r -= w) <= 0) {
+      if (tryAcquireToken(p)) return p;
+    }
+  }
+  // fallback linear scan with acquire
+  for (const [p] of weighted) if (tryAcquireToken(p)) return p;
+  return null;
 }
 
 export function markBadInPool(p) {
   if (!p) return;
+  const st = healthyMap.get(p);
+  if (st) {
+    st.score = Math.max(-10, (st.score || 0) - 2);
+    healthyMap.set(p, st);
+  }
   if (healthyMap.has(p)) healthyMap.delete(p);
   const f = (failCounts.get(p) || 0) + 1;
   failCounts.set(p, f);
   const baseMin = Math.max(5, COOLDOWN_MIN);
   const jitter = 5 + Math.floor(Math.random() * 10);
   const mins = f >= FAIL_MAX ? baseMin + jitter : Math.floor(baseMin / 2) + Math.floor(Math.random() * 5);
-  cooldown.set(p, Date.now() + mins * 60 * 1000);
+  const until = Date.now() + mins * 60 * 1000;
+  cooldown.set(p, until);
+  if (st) { st.cooldownUntil = until; healthyMap.set(p, st); }
 }
 
 // Heartbeat for observability
@@ -233,3 +278,38 @@ export function stopHeartbeat() {
   if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
 }
 
+// Score decay towards 0
+let decayTimer = null;
+function startScoreDecay() {
+  if (decayTimer) return;
+  if (!SCORE_DECAY_SEC) return;
+  decayTimer = setInterval(() => {
+    for (const [p, st] of healthyMap.entries()) {
+      if (!st) continue;
+      if (!st.score) continue;
+      st.score += st.score > 0 ? -1 : 1;
+      healthyMap.set(p, st);
+    }
+  }, SCORE_DECAY_SEC * 1000);
+}
+startScoreDecay();
+
+export function recordProxySuccess(p) {
+  const st = healthyMap.get(p);
+  if (!st) return;
+  st.score = Math.min(10, (st.score || 0) + 1);
+  st.lastOkAt = Date.now();
+  healthyMap.set(p, st);
+}
+
+export function recordProxyOutcome(p, code) {
+  const st = healthyMap.get(p) || {};
+  if ([401, 403, 429].includes(Number(code))) {
+    st.score = Math.max(-10, (st.score || 0) - 3);
+    healthyMap.set(p, st);
+    markBadInPool(p);
+  } else if (Number(code) >= 500) {
+    st.score = Math.max(-10, (st.score || 0) - 1);
+    healthyMap.set(p, st);
+  }
+}

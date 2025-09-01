@@ -1,6 +1,7 @@
-import { getHttp, rotateProxy } from "../net/http.js";
+import { getHttp, rotateProxy, hedgedGet } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKey } from "../utils/dedupe.js";
+import { stats } from "../utils/stats.js";
 
 const DEBUG_POLL = process.env.DEBUG_POLL === '1';
 const d = (...args) => { if (DEBUG_POLL) console.log(...args); };
@@ -25,7 +26,7 @@ async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
 }
 
 //send the authenticated request
-export const vintedSearch = async (channel, processedStore) => {
+export const vintedSearch = async (channel, processedStore, { backfillPages = 1 } = {}) => {
     const url = new URL(channel.url);
     const ids = handleParams(url);
     const apiUrl = new URL(`https://${url.host}/api/v2/catalog/items`);
@@ -34,8 +35,7 @@ export const vintedSearch = async (channel, processedStore) => {
     const timeOffset = Math.floor(Math.random() * 300) - 150; // -150 to +150 seconds
     const currentTime = Math.floor(Date.now() / 1000) + timeOffset;
     
-    apiUrl.search = new URLSearchParams({
-        page: '1',
+    const baseParams = {
         per_page: '96',
         time: currentTime,
         search_text: ids.text,
@@ -49,24 +49,12 @@ export const vintedSearch = async (channel, processedStore) => {
         status_ids: ids.status,
         color_ids: ids.colour,
         material_ids: ids.material,
-    }).toString();
+    };
 
-    // Try with retry logic
-    return await retryWithBackoff(async () => {
-        let http, proxy;
+    async function fetchPage(page) {
+        apiUrl.search = new URLSearchParams({ page: String(page), ...baseParams }).toString();
         try {
-            ({ http, proxy } = await getHttp(`https://${url.host}`));
-        } catch (e) {
-            console.warn('[search] no proxy available', e.message || e);
-            return [];
-        }
-
-        try {
-            // Add random delay before request to avoid predictable patterns
-            const randomDelay = Math.random() * 2000 + 1000; // 1-3 seconds
-            await new Promise(resolve => setTimeout(resolve, randomDelay));
-            
-            const res = await http.get(apiUrl.href, {
+            const res = await hedgedGet(apiUrl.href, {
                 // emulate a real browser request so Cloudflare is less likely to block us
                 headers: {
                   'User-Agent':
@@ -88,13 +76,13 @@ export const vintedSearch = async (channel, processedStore) => {
                   'sec-ch-ua-mobile': '?0',
                   'sec-ch-ua-platform': '"Windows"',
                 },
-                validateStatus: () => true,
-            });
+            }, `https://${url.host}`);
             
             const ct = String(res.headers['content-type'] || '').toLowerCase();
             if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
               const items = Array.isArray(res.data?.items) ? res.data.items : [];
-              d(`[debug][rule:${channel.channelName}] scraped=${items.length}`);
+              d(`[debug][rule:${channel.channelName}] scraped=${items.length} page=${page}`);
+              stats.ok += 1;
               // Optional bypass to test posting end-to-end
               if (String(process.env.DEBUG_ALLOW_ALL || '0') === '1') {
                 d(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
@@ -107,30 +95,47 @@ export const vintedSearch = async (channel, processedStore) => {
             if (res.status === 401) {
                 // 401 Unauthorized - rotate proxy immediately as this proxy is likely blocked
                 console.warn('[search] HTTP 401 on proxy', proxy, '- rotating proxy');
-                rotateProxy(proxy);
+                try { rotateProxy(); } catch {}
+                stats.s401 += 1;
                 // Add small delay to avoid overwhelming the system
                 await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
                 throw new Error(`HTTP ${res.status}`);
             } else if (res.status === 403) {
                 // 403 Forbidden - rotate proxy as this proxy is likely rate limited
                 console.warn('[search] HTTP 403 on proxy', proxy, '- rotating proxy (rate limited)');
-                rotateProxy(proxy);
+                try { rotateProxy(); } catch {}
+                stats.s403 += 1;
                 // Longer delay for rate limiting
                 await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 5000));
                 throw new Error(`HTTP ${res.status}`);
             } else if (res.status >= 400 && res.status < 500) {
                 // Other client errors (4xx) - don't rotate proxy, just retry
+                stats.s4xx += 1;
                 throw new Error(`HTTP ${res.status}`);
             } else {
                 // Server errors (5xx) or other issues - rotate proxy
-                rotateProxy(proxy);
+                try { rotateProxy(); } catch {}
+                stats.s5xx += 1;
                 throw new Error(`HTTP ${res.status}`);
             }
         } catch (e) {
-            console.warn('[search] fail on proxy', proxy, e.message || e);
+            console.warn('[search] fail', e.message || e);
             throw e; // Re-throw to trigger retry
         }
-    }, 3, 5000); // 3 retries with 5s base delay (longer for rate limiting)
+    }
+
+    // Try with retry logic
+    const RETRIES = Number(process.env.RETRIES || 3);
+    const BASE = Number(process.env.EXP_BACKOFF_BASE_MS || 400);
+    return await retryWithBackoff(async () => {
+        const pages = Math.max(1, Number(backfillPages || 1));
+        const out = [];
+        for (let p = 1; p <= pages; p++) {
+            const items = await fetchPage(p);
+            out.push(...items);
+        }
+        return out;
+    }, RETRIES, BASE);
 };
 
 // chooses only articles not already seen & posted in the last 10min

@@ -3,6 +3,8 @@ import { postArticles } from "./bot/post.js";
 import { initProxyPool } from "./net/http.js";
 import { startAutoTopUp } from "./net/proxyHealth.js";
 import { createProcessedStore, dedupeKey, ttlMs } from "./utils/dedupe.js";
+import { limiter } from "./utils/limiter.js";
+import { startStats } from "./utils/stats.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -33,11 +35,13 @@ async function getChannelById(client, id) {
     return ch;
 }
 
-const runSearch = async (client, channel) => {
+const runSearch = async (client, channel, opts = {}) => {
     try {
         // Optional heartbeat dots (disabled by default)
         if (String(process.env.DEBUG_DOTS || '0') === '1') process.stdout.write('.');
-        const articles = await vintedSearch(channel, processedStore);
+        const JITTER_MS = Number(process.env.JITTER_MS || 0);
+        if (JITTER_MS > 0) await new Promise(r => setTimeout(r, Math.random() * JITTER_MS));
+        const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, opts));
 
         //if new articles are found post them
         if (articles && articles.length > 0) {
@@ -103,6 +107,7 @@ export const run = async (client, mySearches) => {
     processedStore = createProcessedStore();
     // background top-up keeps the pool filled without blocking
     startAutoTopUp();
+    startStats();
     const REFRESH_H = parseInt(process.env.PROXY_REFRESH_HOURS || '6', 10);
     setInterval(async () => {
         try {
@@ -135,6 +140,19 @@ export const run = async (client, mySearches) => {
           console.log(`[dedupe] purge expired; size=${processedStore.size()}`);
         } catch { /* ignore logging failures */ }
     }, 60 * 60 * 1000);
+
+    // Catch-up worker: backfill recent pages periodically
+    const CATCHUP_MIN = Number(process.env.CATCHUP_MIN || 3);
+    if (CATCHUP_MIN > 0) {
+        setInterval(() => {
+            (mySearches || []).forEach(ch => {
+                // schedule with small stagger
+                setTimeout(() => {
+                    limiter.schedule(() => vintedSearch(ch, processedStore, { backfillPages: 3 }).catch(()=>{}));
+                }, Math.random() * 2000);
+            });
+        }, CATCHUP_MIN * 60 * 1000);
+    }
 };
 
 // Stop and remove a scheduled job by name, if present
