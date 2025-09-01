@@ -8,13 +8,14 @@ dotenv.config();
 import { initProxyPool } from './net/proxyHealth.js';
 
 try {
-  await initProxyPool();
-  // By default, chain to the main bot unless explicitly disabled.
   if (String(process.env.HEALTH_ONLY || '0') === '1') {
+    // Pure health mode: run pool init (will print stats) and exit
+    await initProxyPool();
     console.log('[health:proxy] completed; HEALTH_ONLY=1 → exiting');
   } else {
-    console.log('[health:proxy] chaining to main…');
-    // Import the main entrypoint to start the bot process
+    // App mode: start the main bot immediately; proxy pool will be
+    // initialized by main.js in parallel to avoid startup stalls.
+    console.log('[health:proxy] starting main immediately (no blocking init)…');
     await import('../main.js');
   }
 } catch (err) {
