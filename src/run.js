@@ -108,6 +108,11 @@ export const run = async (client, mySearches) => {
     // background top-up keeps the pool filled without blocking
     startAutoTopUp();
     startStats();
+    try {
+        const rpm = Number(process.env.SEARCH_TARGET_RPM || 60);
+        const conc = Number(process.env.SEARCH_CONCURRENCY || 12);
+        console.log(`[limiter] rpm=${rpm} conc=${conc}`);
+    } catch {}
     const REFRESH_H = parseInt(process.env.PROXY_REFRESH_HOURS || '6', 10);
     setInterval(async () => {
         try {

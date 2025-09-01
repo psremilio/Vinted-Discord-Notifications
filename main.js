@@ -16,6 +16,9 @@ import { initProxyPool, startHeartbeat, stopHeartbeat, healthyCount } from './sr
 
 dotenv.config();
 
+// Boot marker: verify correct entry file is running
+try { console.log('[BOOT] entry', import.meta.url, 'ts=', new Date().toISOString()); } catch {}
+
 // Quick env readiness log (without secrets)
 function logEnvReadiness() {
   try {
