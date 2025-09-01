@@ -2,6 +2,7 @@ import { getHttp, rotateProxy, hedgedGet } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKey } from "../utils/dedupe.js";
 import { stats } from "../utils/stats.js";
+import { state, markFetchAttempt, markFetchSuccess, markFetchError } from "../state.js";
 
 const DEBUG_POLL = process.env.DEBUG_POLL === '1';
 const TRACE = String(process.env.TRACE_SEARCH || '0') === '1';
@@ -58,6 +59,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
     async function fetchPage(page) {
         apiUrl.search = new URLSearchParams({ page: String(page), ...baseParams }).toString();
         try {
+            const t0 = Date.now();
+            markFetchAttempt();
             const res = await hedgedGet(apiUrl.href, {
                 // emulate a real browser request so Cloudflare is less likely to block us
                 headers: {
@@ -87,7 +90,9 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
               const items = Array.isArray(res.data?.items) ? res.data.items : [];
               d(`[debug][rule:${channel.channelName}] scraped=${items.length} page=${page}`);
               trace('resp', { rule: channel.channelName, page, first: items[0] && { id: items[0].id, at: items[0]?.photo?.high_resolution?.timestamp }, got: items.length });
+              const dur = Date.now() - t0;
               stats.ok += 1;
+              markFetchSuccess(dur, res.status);
               // Optional bypass to test posting end-to-end
               if (String(process.env.DEBUG_ALLOW_ALL || '0') === '1') {
                 d(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
@@ -128,6 +133,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             }
         } catch (e) {
             console.warn('[search] fail', e.message || e);
+            markFetchError();
             throw e; // Re-throw to trigger retry
         }
     }

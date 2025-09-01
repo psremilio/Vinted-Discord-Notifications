@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildListingEmbed } from '../embeds.js';
 import { stats } from '../utils/stats.js';
+import { markPosted } from '../state.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === "function";
 async function sendToTargetsSafely(targets, payload) {
@@ -73,6 +74,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
         try {
           console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
           stats.posted += 1;
+          markPosted();
         } catch {
           // ignore logging failures
         }

@@ -12,7 +12,9 @@ import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
 import { whitelistCurrentEgressIP } from './src/net/whitelist.js';
 import { ensureProxyList, startProxyRefreshLoop } from './src/net/ensureProxyList.js';
-import { initProxyPool, startHeartbeat, stopHeartbeat, healthyCount } from './src/net/proxyHealth.js';
+import { initProxyPool, startHeartbeat, stopHeartbeat, healthyCount, coolingCount, badCount } from './src/net/proxyHealth.js';
+import { state } from './src/state.js';
+import { get as httpGet } from './src/net/http.js';
 
 dotenv.config();
 
@@ -36,8 +38,33 @@ logEnvReadiness();
 const PORT = Number(process.env.PORT || 8080);
 try {
   http
-    .createServer((req, res) => {
-      if (req.url === '/healthz') { res.writeHead(200); res.end('ok'); return; }
+    .createServer(async (req, res) => {
+      try {
+        if (req.url === '/healthz') {
+          const ok = isHealthy();
+          const body = JSON.stringify({
+            status: ok ? 'ok' : 'stall',
+            watchers: state.watchers || 0,
+            lastFetchAt: state.lastFetchAt?.toISOString?.() || null,
+            lastPostAt: state.lastPostAt?.toISOString?.() || null,
+            proxyHealthy: healthyCount?.() ?? null,
+            version: state.version,
+          });
+          res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+          res.end(body); return;
+        }
+        if (req.url === '/metrics') {
+          const lines = [];
+          const h = healthyCount?.() ?? 0;
+          lines.push(`# HELP proxy_pool_healthy Number of healthy proxies`);
+          lines.push(`# TYPE proxy_pool_healthy gauge`);
+          lines.push(`proxy_pool_healthy ${h}`);
+          // We proxy stats via logs each minute; expose last-minute totals via env-less counters
+          // Not perfect Prometheus semantics, but provides quick visibility
+          res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
+          res.end(lines.join('\n')); return;
+        }
+      } catch {}
       res.writeHead(204); res.end();
     })
     .listen(PORT, () => console.log(`[svc] listening on ${PORT}`));
@@ -65,6 +92,8 @@ function startMonitorsOnce(where = 'unknown'){
 client.on('ready',async()=>{
   clientReady = true;
   console.log(`Logged in as ${client.user.tag}!`);
+  try { state.watchers = Array.isArray(mySearches) ? mySearches.length : 0; } catch {}
+  setTimeout(() => { sendStartupPing().catch(()=>{}); }, 1000);
   startMonitorsOnce('ready');
 });
 client.on('interactionCreate',interaction=>{
@@ -104,6 +133,48 @@ client.on('interactionCreate',interaction=>{
     }
   }, DEADLINE_SEC * 1000);
 })();
+
+function isHealthy() {
+  const now = Date.now();
+  const lastOk = state.lastFetchSuccessAt ? state.lastFetchSuccessAt.getTime() : 0;
+  const tooOld = lastOk && (now - lastOk > 10 * 60 * 1000);
+  const tooManyErrors = (state.consecutiveErrors || 0) >= 10;
+  return !(tooOld || tooManyErrors);
+}
+
+async function sendStartupPing() {
+  const chId = process.env.DISCORD_PING_CHANNEL_ID;
+  if (!chId) return;
+  try {
+    const ch = await client.channels.fetch(chId).catch(()=>null) || client.channels.cache.get(chId);
+    if (!ch || typeof ch.send !== 'function') return;
+    // quick probe
+    let code = null, ms = null;
+    try {
+      const t0 = Date.now();
+      const r = await httpGet(process.env.VINTED_BASE_URL || 'https://www.vinted.de/', { validateStatus: () => true });
+      ms = Date.now() - t0;
+      code = r?.status || null;
+      state.lastProbe = { code, ms };
+    } catch {}
+    const healthy = healthyCount?.() ?? 0;
+    const watchers = state.watchers || 0;
+    const embed = {
+      color: 0x22c55e,
+      title: 'Vinted Bot gestartet ✅',
+      description: `Commit ${state.commit} • Version ${state.version}`,
+      fields: [
+        { name: 'Watcher', value: String(watchers), inline: true },
+        { name: 'Proxies', value: `${healthy}`, inline: true },
+        { name: 'Probe', value: code ? `${code} • ${ms}ms` : '—', inline: true },
+      ],
+      timestamp: new Date().toISOString(),
+    };
+    await ch.send({ embeds: [embed] });
+  } catch (e) {
+    console.warn('[ping] failed:', e?.message || e);
+  }
+}
 
 // Graceful shutdown
 function shutdown(signal){

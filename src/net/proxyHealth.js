@@ -321,3 +321,16 @@ export function recordProxyOutcome(p, code) {
     healthyMap.set(p, st);
   }
 }
+
+export function coolingCount() {
+  const now = Date.now();
+  let c = 0;
+  for (const ts of cooldown.values()) if (ts > now) c++;
+  return c;
+}
+
+export function badCount() {
+  let c = 0;
+  for (const v of failCounts.values()) if ((v || 0) > 0) c++;
+  return c;
+}
