@@ -4,6 +4,7 @@ process.on('uncaughtException',(err)=>{
 });
 
 import dotenv from 'dotenv';
+import http from 'http';
 import { Client, GatewayIntentBits } from 'discord.js';
 import fs from 'fs';
 
@@ -27,6 +28,21 @@ function logEnvReadiness() {
   } catch {}
 }
 logEnvReadiness();
+
+// Mini HTTP keepalive + health endpoint so process never idles out
+const PORT = Number(process.env.PORT || 8080);
+try {
+  http
+    .createServer((req, res) => {
+      if (req.url === '/healthz') { res.writeHead(200); res.end('ok'); return; }
+      res.writeHead(204); res.end();
+    })
+    .listen(PORT, () => console.log(`[svc] listening on ${PORT}`));
+} catch (e) {
+  console.warn('[svc] http server failed:', e?.message || e);
+}
+
+process.on('beforeExit', (code) => console.warn('[proc] beforeExit', code));
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 let clientReady = false;
