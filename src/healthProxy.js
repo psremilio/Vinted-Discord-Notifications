@@ -9,11 +9,11 @@ import { initProxyPool } from './net/proxyHealth.js';
 
 try {
   await initProxyPool();
-  // On Railway, keep running by chaining to the main bot unless explicitly disabled.
+  // By default, chain to the main bot unless explicitly disabled.
   if (String(process.env.HEALTH_ONLY || '0') === '1') {
     console.log('[health:proxy] completed; HEALTH_ONLY=1 → exiting');
-  } else if (process.env.RAILWAY_ENVIRONMENT) {
-    console.log('[health:proxy] chaining to main (Railway detected)…');
+  } else {
+    console.log('[health:proxy] chaining to main…');
     // Import the main entrypoint to start the bot process
     await import('../main.js');
   }
