@@ -15,6 +15,19 @@ import { initProxyPool, startHeartbeat, stopHeartbeat } from './src/net/proxyHea
 
 dotenv.config();
 
+// Quick env readiness log (without secrets)
+function logEnvReadiness() {
+  try {
+    const hasToken = !!process.env.BOT_TOKEN;
+    const proxyViaUrl = !!process.env.PROXY_LIST_URL;
+    const proxyViaFile = !!process.env.PROXY_LIST_FILE;
+    const proxyViaPS = !!(process.env.PS_API_KEY && process.env.SERVICE_ID);
+    const proxyMode = proxyViaUrl ? 'URL' : proxyViaFile ? 'FILE' : proxyViaPS ? 'PS_API' : 'NONE';
+    console.log(`[env] BOT_TOKEN=${hasToken ? 'set' : 'missing'} | proxies=${proxyMode}`);
+  } catch {}
+}
+logEnvReadiness();
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
 
