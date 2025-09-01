@@ -1,5 +1,7 @@
 // Simple in-memory TTL store + dedupe key helpers
-export const DEDUPE_SCOPE = process.env.DEDUPE_SCOPE || 'per_rule'; // 'per_rule' | 'global'
+// Allow CROSS_RULE_DEDUP=1 to force global scope
+const CROSS = String(process.env.CROSS_RULE_DEDUP || '0') === '1';
+export const DEDUPE_SCOPE = CROSS ? 'global' : (process.env.DEDUPE_SCOPE || 'per_rule'); // 'per_rule' | 'global'
 export const PROCESSED_TTL_MIN = parseInt(process.env.PROCESSED_TTL_MIN ?? '60', 10);
 export const ttlMs = PROCESSED_TTL_MIN * 60 * 1000;
 
@@ -36,4 +38,3 @@ export function createProcessedStore() {
   function size() { return map.size; }
   return { has, set, purgeExpired, size };
 }
-

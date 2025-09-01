@@ -4,7 +4,9 @@ import { dedupeKey } from "../utils/dedupe.js";
 import { stats } from "../utils/stats.js";
 
 const DEBUG_POLL = process.env.DEBUG_POLL === '1';
+const TRACE = String(process.env.TRACE_SEARCH || '0') === '1';
 const d = (...args) => { if (DEBUG_POLL) console.log(...args); };
+const trace = (...a) => { if (TRACE) console.log('[trace]', ...a); };
 const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
 const recentMs = RECENT_MAX_MIN * 60 * 1000;
 
@@ -49,7 +51,9 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
         status_ids: ids.status,
         color_ids: ids.colour,
         material_ids: ids.material,
+        _t: String(Date.now()),
     };
+    trace('run', { rule: channel.channelName, backfillPages });
 
     async function fetchPage(page) {
         apiUrl.search = new URLSearchParams({ page: String(page), ...baseParams }).toString();
@@ -82,13 +86,17 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
               const items = Array.isArray(res.data?.items) ? res.data.items : [];
               d(`[debug][rule:${channel.channelName}] scraped=${items.length} page=${page}`);
+              trace('resp', { rule: channel.channelName, page, first: items[0] && { id: items[0].id, at: items[0]?.photo?.high_resolution?.timestamp }, got: items.length });
               stats.ok += 1;
               // Optional bypass to test posting end-to-end
               if (String(process.env.DEBUG_ALLOW_ALL || '0') === '1') {
                 d(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
                 return items;
               }
-              return selectNewArticles(items, processedStore, channel);
+              const filtered = selectNewArticles(items, processedStore, channel);
+              const dedupeSkipped = items.length - filtered.length;
+              trace('filter', { rule: channel.channelName, page, new_count: filtered.length, skipped_dedupe: Math.max(0, dedupeSkipped) });
+              return filtered;
             }
             
             // Handle HTTP errors

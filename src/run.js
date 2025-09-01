@@ -35,21 +35,27 @@ async function getChannelById(client, id) {
     return ch;
 }
 
+const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number }
+const RULE_MIN_RPM = Math.max(0, Number(process.env.RULE_MIN_RPM || 1));
+
 const runSearch = async (client, channel, opts = {}) => {
     try {
         // Optional heartbeat dots (disabled by default)
         if (String(process.env.DEBUG_DOTS || '0') === '1') process.stdout.write('.');
         const JITTER_MS = Number(process.env.JITTER_MS || 0);
         if (JITTER_MS > 0) await new Promise(r => setTimeout(r, Math.random() * JITTER_MS));
+        // Per-rule token bucket fairness
+        const st = ruleState.get(channel.channelName) || { noNewStreak: 0, tokens: RULE_MIN_RPM };
+        ruleState.set(channel.channelName, st);
+        if (st.tokens <= 0 && RULE_MIN_RPM > 0) {
+            return;
+        }
+        if (RULE_MIN_RPM > 0) st.tokens -= 1;
         const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, opts));
 
         //if new articles are found post them
         if (articles && articles.length > 0) {
             console.log(`${channel.channelName} => +${articles.length}`);
-            articles.forEach(article => {
-              const key = dedupeKey(channel.channelName, article.id);
-              processedStore.set(key, Date.now(), { ttl: ttlMs });
-            });
             const dest = await getChannelById(client, channel.channelId);
             if (!dest) {
                 if (!warnedMissing.has(channel.channelId)) {
@@ -58,6 +64,22 @@ const runSearch = async (client, channel, opts = {}) => {
                 }
             } else {
                 await postArticles(articles, dest, channel.channelName);
+                // Commit-on-post: mark seen only after posting succeeds
+                articles.forEach(article => {
+                  const key = dedupeKey(channel.channelName, article.id);
+                  processedStore.set(key, Date.now(), { ttl: ttlMs });
+                });
+                // reset streak on success
+                st.noNewStreak = 0;
+            }
+        } else {
+            st.noNewStreak = (st.noNewStreak || 0) + 1;
+            const thr = Number(process.env.NO_NEW_THRESHOLD || 6);
+            if (st.noNewStreak >= thr) {
+                try {
+                    await limiter.schedule(() => vintedSearch(channel, processedStore, { backfillPages: Number(process.env.BACKFILL_PAGES || 3) }));
+                } catch {}
+                st.noNewStreak = 0;
             }
         }
     } catch (err) {
@@ -146,17 +168,14 @@ export const run = async (client, mySearches) => {
         } catch { /* ignore logging failures */ }
     }, 60 * 60 * 1000);
 
-    // Catch-up worker: backfill recent pages periodically
-    const CATCHUP_MIN = Number(process.env.CATCHUP_MIN || 3);
-    if (CATCHUP_MIN > 0) {
+    // Refill per-rule tokens each minute (fairness)
+    if (RULE_MIN_RPM > 0) {
         setInterval(() => {
-            (mySearches || []).forEach(ch => {
-                // schedule with small stagger
-                setTimeout(() => {
-                    limiter.schedule(() => vintedSearch(ch, processedStore, { backfillPages: 3 }).catch(()=>{}));
-                }, Math.random() * 2000);
-            });
-        }, CATCHUP_MIN * 60 * 1000);
+            for (const [name, st] of ruleState.entries()) {
+                st.tokens = RULE_MIN_RPM;
+                ruleState.set(name, st);
+            }
+        }, 60 * 1000);
     }
 };
 
