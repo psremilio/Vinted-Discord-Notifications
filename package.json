@@ -15,12 +15,14 @@
     },
     "dependencies": {
         "axios": "^1.6.8",
-        "better-sqlite3": "^9.4.1",
         "bottleneck": "^2.19.5",
         "discord.js": "^14.15.2",
         "dotenv": "^16.4.5",
         "https-proxy-agent": "^7.0.4",
         "undici": "^6.18.1",
         "valid-url": "^1.0.9"
+    },
+    "optionalDependencies": {
+        "better-sqlite3": "^9.4.1"
     }
 }
