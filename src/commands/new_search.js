@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { addSearch } from '../run.js';
+import { ensureWebhooksForChannel } from '../infra/webhooksManager.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -26,6 +27,10 @@ export const data = new SlashCommandBuilder()
     .addStringOption(option =>
         option.setName('frequency')
             .setDescription('The frequency of the search in seconds. (defaults to 10s)')
+            .setRequired(false))
+    .addBooleanOption(option =>
+        option.setName('auto_webhooks')
+            .setDescription('Create and use webhooks for this channel for faster posting (requires Manage Webhooks)')
             .setRequired(false));
 
 // validate that the URL is a Vinted catalog URL with at least one query parameter
@@ -84,6 +89,18 @@ export const execute = async (interaction) => {
     }
 
     try {
+        // optionally create webhooks for this channel
+        const WANT_AUTO = (interaction.options.getBoolean('auto_webhooks') ?? (String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1'));
+        let createdHooks = 0;
+        if (WANT_AUTO) {
+            try {
+                const urls = await ensureWebhooksForChannel(ch, Number(process.env.WEBHOOKS_PER_CHANNEL || 3), String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook'));
+                createdHooks = Array.isArray(urls) ? urls.length : 0;
+            } catch (e) {
+                console.warn('[webhooks] auto failed:', e?.message || e);
+            }
+        }
+
         //register the search into the json file
         const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
@@ -119,6 +136,10 @@ export const execute = async (interaction) => {
             .setTitle("Search saved!")
             .setDescription("Monitoring for " + name + " is now live!")
             .setColor(0x00FF00);
+
+        if (createdHooks) {
+            embed.addFields({ name: 'Webhooks', value: `Aktiviert (${createdHooks})`, inline: true });
+        }
 
         await interaction.followUp({ embeds: [embed]});
 

@@ -1,5 +1,6 @@
 import Bottleneck from 'bottleneck';
 import { metrics } from './metrics.js';
+import { getWebhooksForChannelId } from './webhooksManager.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
@@ -104,7 +105,7 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   if (idKey && b.ids.has(idKey)) return; // already queued
   const job = { channel, payload, discoveredAt, createdAt, itemId: idKey };
   // If webhooks configured for this channel, pick next webhook URL (round-robin by length)
-  const webhooks = channel?.id && WEBHOOK_MAP && Array.isArray(WEBHOOK_MAP[channel.id]) ? WEBHOOK_MAP[channel.id] : null;
+  const webhooks = channel?.id ? getWebhooksForChannelId(channel.id) : null;
   if (webhooks && webhooks.length) {
     const idx = b._rr || 0;
     job.webhookUrl = webhooks[idx % webhooks.length];
@@ -156,7 +157,7 @@ async function doSend(job, bucket) {
     let res;
     if (job.webhookUrl) {
       // Send via webhook (route-fanout)
-      res = await sendWebhook(job.webhookUrl, job.payload);
+      res = await sendWebhook(job.webhookUrl, job.payload, job.channel?.id);
     } else {
       res = await job.channel.send(job.payload);
     }
@@ -190,12 +191,13 @@ setInterval(() => {
 }, 60 * 1000);
 
 // Minimal webhook sender via fetch (undici or global)
-async function sendWebhook(url, payload) {
+async function sendWebhook(url, payload, channelId) {
   // Discord expects JSON with content/embeds/components; payload passthrough
   const body = JSON.stringify(payload);
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
   if (res.status === 429) {
     metrics.discord_rate_limit_hits.inc();
+    try { metrics.discord_webhook_send_429_total.inc({ channel: String(channelId || '') }); } catch {}
     const retryAfter = Number((await res.json().catch(()=>({})))?.retry_after || 0) * 1000;
     if (retryAfter > 0) await new Promise(r => setTimeout(r, retryAfter));
     throw new Error('429');
@@ -204,6 +206,7 @@ async function sendWebhook(url, payload) {
     const txt = await res.text().catch(()=> '');
     throw new Error(`webhook ${res.status} ${txt}`);
   }
+  try { metrics.discord_webhook_send_ok_total.inc({ channel: String(channelId || '') }); } catch {}
   return res;
 }
 

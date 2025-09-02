@@ -20,6 +20,13 @@ class LabeledGauge {
 
 class Gauge { constructor(name) { this.name = name; this.value = 0; } set(v) { this.value = v; } get() { return this.value; } }
 
+class LabeledCounter {
+  constructor(name, labelNames = []) { this.name = name; this.labelNames = labelNames; this.map = new Map(); }
+  _key(labels) { const parts = this.labelNames.map(k => `${k}=${JSON.stringify(String(labels?.[k] ?? ''))}`); return parts.join(','); }
+  inc(labels, v = 1) { const k = this._key(labels); const cur = this.map.get(k) || { labels, value: 0 }; cur.value += v; this.map.set(k, cur); }
+  entries() { return Array.from(this.map.values()); }
+}
+
 export const metrics = {
   // per-proxy gauges
   proxy_rpm_current: new LabeledGauge('proxy_rpm_current', ['proxy']),
@@ -49,6 +56,9 @@ export const metrics = {
   reorder_buffer_depth: new LabeledGauge('reorder_buffer_depth', ['channel']),
   tier_poll_latency_ms: new LabeledGauge('tier_poll_latency_ms', ['tier']),
   post_latency_ms_p95: new Gauge('post_latency_ms_p95'),
+  discord_webhook_send_ok_total: new LabeledCounter('discord_webhook_send_ok_total', ['channel']),
+  discord_webhook_send_429_total: new LabeledCounter('discord_webhook_send_429_total', ['channel']),
+  discord_webhook_cooldowns_total: new LabeledCounter('discord_webhook_cooldowns_total', ['channel']),
 };
 
 export function serializeMetrics() {
@@ -93,5 +103,12 @@ export function serializeMetrics() {
   for (const e of metrics.tier_poll_latency_ms.entries()) out.push(`tier_poll_latency_ms{tier="${e.labels.tier}"} ${e.value}`);
   // scalar post latency p95
   lineHelpType('post_latency_ms_p95', 'Posting latency p95 (ms)', 'gauge'); out.push(`post_latency_ms_p95 ${metrics.post_latency_ms_p95.get()}`);
+  // webhook labeled counters
+  lineHelpType('discord_webhook_send_ok_total', 'Webhook sends OK by channel', 'counter');
+  for (const e of metrics.discord_webhook_send_ok_total.entries()) out.push(`discord_webhook_send_ok_total{channel="${e.labels.channel}"} ${e.value}`);
+  lineHelpType('discord_webhook_send_429_total', 'Webhook sends 429 by channel', 'counter');
+  for (const e of metrics.discord_webhook_send_429_total.entries()) out.push(`discord_webhook_send_429_total{channel="${e.labels.channel}"} ${e.value}`);
+  lineHelpType('discord_webhook_cooldowns_total', 'Webhook cooldowns by channel', 'counter');
+  for (const e of metrics.discord_webhook_cooldowns_total.entries()) out.push(`discord_webhook_cooldowns_total{channel="${e.labels.channel}"} ${e.value}`);
   return out.join('\n');
 }
