@@ -7,7 +7,7 @@ import { metrics } from "../infra/metrics.js";
 
 const DEBUG_POLL = process.env.DEBUG_POLL === '1';
 const TRACE = String(process.env.TRACE_SEARCH || '0') === '1';
-const d = (...args) => { if (DEBUG_POLL) console.log(...args); };
+const d = (...args) => { if (DEBUG_POLL || String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(...args); };
 const trace = (...a) => { if (TRACE) console.log('[trace]', ...a); };
 const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
 const recentMs = RECENT_MAX_MIN * 60 * 1000;
@@ -109,6 +109,11 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 return items;
               }
               let filtered = selectNewArticles(items, processedStore, channel);
+              if ((DEBUG_POLL || String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') && filtered.length) {
+                const ts0 = (filtered[0]?.photo?.high_resolution?.timestamp||0)*1000;
+                const age0 = ts0 ? (Date.now()-ts0) : null;
+                console.log(`[found] rule=${channel.channelName} items=${filtered.length} firstId=${filtered[0]?.id} firstAgeMs=${age0}`);
+              }
               // Startup fresh-only window: skip posting of old items for first N minutes
               const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 0);
               if (skipMin > 0) {

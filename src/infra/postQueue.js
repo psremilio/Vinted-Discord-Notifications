@@ -49,6 +49,9 @@ function flushChannel(id) {
   // newest first
   eligible.sort((a, b) => b.discoveredAt - a.discoveredAt);
   for (const job of eligible) enqueueRoute(job.channel, job.payload, job.discoveredAt);
+  if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+    console.log(`[post.flush] channel=${id} released=${eligible.length} remain=${st.buf.length}`);
+  }
 }
 
 export async function sendQueued(channel, payload, meta = {}) {
@@ -98,6 +101,10 @@ setInterval(() => {
     slots--;
     // send with concurrency limiter
     postLimiter.schedule(() => doSend(job, b)).catch(() => {});
+  }
+  if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+    const ready = keys.filter(k => (routeBuckets.get(k)?.q?.length||0)>0).length;
+    console.log(`[post.tick] qps=${currentQps} bucketsReady=${ready} slotsLeft=${slots}`);
   }
 }, 1000);
 

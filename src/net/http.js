@@ -210,6 +210,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
   if (!proxy) {
     metrics.fetch_skipped_total.inc();
     try { stickyMap.record(ruleId, { skipped: true, proxy: null }); } catch {}
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} reason=no-proxy`);
     return { skipped: true };
   }
   const buckets = getBuckets(proxy, rateCtl);
@@ -217,6 +218,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     metrics.fetch_skipped_total.inc();
     rateCtl.observe(proxy, { skipped: true });
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-token`);
     return { skipped: true };
   }
   try {
@@ -229,6 +231,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
       metrics.fetch_ok_total.inc();
       recordProxySuccess(proxy);
       rateCtl.observe(proxy, { ok: true, latency, code });
+      if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] ok rule=${ruleId} proxy=${proxy} code=${code} ms=${latency}`);
       try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
       return { ok: true, res };
     }
@@ -245,20 +248,24 @@ export async function fetchRule(ruleId, url, opts = {}) {
             // slight penalty to original proxy
             rateCtl.observe(proxy, { softFail: true });
             rateCtl.observe(alt, { ok: true, latency: lat2, code: code2 });
+            if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] ok-after-retry rule=${ruleId} from=${proxy} alt=${alt} code=${code2} ms=${lat2}`);
             try { stickyMap.record(ruleId, { skipped: false, proxy: alt }); } catch {}
             return { ok: true, res: res2 };
           } else {
             recordProxyOutcome(alt, code2);
             rateCtl.observe(alt, { ok: false, code: code2, latency: lat2 });
+            if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] fail-retry rule=${ruleId} alt=${alt} code=${code2} ms=${lat2}`);
           }
         } catch (e2) {
           rateCtl.observe(alt, { fail: true });
+          if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] error-retry rule=${ruleId} alt=${alt} err=${e2?.message||e2}`);
         }
       }
     }
     metrics.fetch_softfail_total.inc();
     try { stickyMap.failover(ruleId); } catch {}
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] softfail rule=${ruleId} proxy=${proxy} code=${code}`);
     return { softFail: true };
   } catch (e) {
     // network error -> try one neighbor if retry tokens are available
@@ -272,6 +279,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
           metrics.fetch_ok_total.inc();
           rateCtl.observe(proxy, { softFail: true });
           rateCtl.observe(alt, { ok: true, latency: lat2, code: code2 });
+          if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] ok-after-neterr rule=${ruleId} alt=${alt} code=${code2} ms=${lat2}`);
           try { stickyMap.record(ruleId, { skipped: false, proxy: alt }); } catch {}
           return { ok: true, res: res2 };
         }
@@ -281,6 +289,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     try { stickyMap.failover(ruleId); } catch {}
     rateCtl.observe(proxy, { fail: true });
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] net-softfail rule=${ruleId} proxy=${proxy} err=${e?.message||e}`);
     return { softFail: true };
   }
 }
