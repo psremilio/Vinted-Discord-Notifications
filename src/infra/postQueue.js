@@ -46,16 +46,18 @@ function flushChannel(id) {
   st.buf = rest;
   try { metrics.reorder_buffer_depth.set({ channel: id }, st.buf.length); } catch {}
   if (!eligible.length) return;
-  // chronologisch nach createdAt aufsteigend (ältere zuerst)
-  eligible.sort((a, b) => (Number(a.createdAt||0) - Number(b.createdAt||0)) || (a.discoveredAt - b.discoveredAt));
-  const maxFlush = Math.max(1, Number(process.env.REORDER_FLUSH_MAX || 3));
-  const slice = eligible.slice(0, maxFlush);
-  const keep = eligible.slice(maxFlush);
+  // Neueste zuerst: priorisiere neuere Listings (createdAt, dann discoveredAt)
+  eligible.sort((a, b) => (Number(b.createdAt||0) - Number(a.createdAt||0)) || (b.discoveredAt - a.discoveredAt));
+  // Backlog-aware Flushgröße: min( max(3, ceil(queue/10)), 12 )
+  const totalBacklog = eligible.length + st.buf.length;
+  const dyn = Math.min(12, Math.max(3, Math.ceil(totalBacklog / 10)));
+  const slice = eligible.slice(0, dyn);
+  const keep = eligible.slice(dyn);
   // Nicht geflushedes zurück in Buffer legen
   st.buf = keep.concat(st.buf);
-  for (const job of slice) enqueueRoute(job.channel, job.payload, job.discoveredAt);
+  for (const job of slice) enqueueRoute(job.channel, job.payload, job.discoveredAt, job.createdAt);
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
-    console.log(`[post.flush] channel=${id} released=${slice.length} remain=${st.buf.length}`);
+    console.log(`[post.flush] channel=${id} released=${slice.length} remain=${st.buf.length} backlog=${totalBacklog}`);
   }
 }
 
@@ -72,28 +74,35 @@ export async function sendQueued(channel, payload, meta = {}) {
   // Optional per-channel reorder window
   const discoveredAt = Number(meta?.discoveredAt || Date.now());
   const createdAt = Number(meta?.createdAt || Date.now());
+  const itemId = meta?.itemId ? String(meta.itemId) : null;
   if (REORDER_WINDOW_MS > 0 && channel?.id) {
     const st = ensureChannelBuffer(channel);
-    st.buf.push({ discoveredAt, createdAt, channel, payload });
+    st.buf.push({ discoveredAt, createdAt, channel, payload, itemId });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
     return;
   }
-  enqueueRoute(channel, payload, discoveredAt, createdAt);
+  enqueueRoute(channel, payload, discoveredAt, createdAt, itemId);
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
-const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt}>, cooldownUntil: number }
+const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl}>, cooldownUntil: number, ids:Set<string>, _rr:number }
 function bucketKey(channel) { return `chan:${channel?.id || 'UNKNOWN'}`; }
 function getBucket(channel) {
   const key = bucketKey(channel);
   let b = routeBuckets.get(key);
-  if (!b) { b = { q: [], cooldownUntil: 0 }; routeBuckets.set(key, b); }
+  if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), _rr: 0 }; routeBuckets.set(key, b); }
   return [key, b];
 }
 
 function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   const [, b] = getBucket(channel);
-  const job = { channel, payload, discoveredAt, createdAt };
+  // coalesce duplicates per channel by itemId if present
+  let itemId = payload?.embeds?.[0]?.data?.fields?.find?.(f => /`\d+`/.test(f?.value || ''))?.value?.replace(/`/g,'');
+  // prefer explicit meta if provided in route (we pass via meta.itemId earlier)
+  if (typeof arguments[4] === 'string') itemId = arguments[4];
+  const idKey = itemId ? String(itemId) : null;
+  if (idKey && b.ids.has(idKey)) return; // already queued
+  const job = { channel, payload, discoveredAt, createdAt, itemId: idKey };
   // If webhooks configured for this channel, pick next webhook URL (round-robin by length)
   const webhooks = channel?.id && WEBHOOK_MAP && Array.isArray(WEBHOOK_MAP[channel.id]) ? WEBHOOK_MAP[channel.id] : null;
   if (webhooks && webhooks.length) {
@@ -102,6 +111,7 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
     b._rr = (idx + 1) % webhooks.length;
   }
   b.q.push(job);
+  if (idKey) b.ids.add(idKey);
 }
 
 // WFQ-like scheduler: per second serve up to currentQps, 1 msg per bucket per tick
@@ -109,19 +119,28 @@ setInterval(() => {
   let slots = currentQps;
   const now = Date.now();
   const keys = Array.from(routeBuckets.keys());
-  for (const key of keys) {
-    if (slots <= 0) break;
-    const b = routeBuckets.get(key);
-    if (!b || b.q.length === 0) continue;
-    if (b.cooldownUntil > now) continue;
-    const job = b.q.shift();
-    slots--;
-    // send with concurrency limiter
-    postLimiter.schedule(() => doSend(job, b)).catch(() => {});
+  // dynamic per-bucket sends (burst window)
+  const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
+  const cooldown = metrics.discord_cooldown_active.get?.() || 0;
+  const perBucketSends = (!cooldown && totalQ > 50) ? 2 : 1;
+  // do up to perBucketSends passes for fairness
+  for (let pass = 0; pass < perBucketSends && slots > 0; pass++) {
+    for (const key of keys) {
+      if (slots <= 0) break;
+      const b = routeBuckets.get(key);
+      if (!b || b.q.length === 0) continue;
+      if (b.cooldownUntil > now) continue;
+      // priority: newest first by createdAt desc then discoveredAt desc
+      b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (bj.discoveredAt - a.discoveredAt));
+      const job = b.q.shift();
+      if (job?.itemId) try { b.ids.delete(job.itemId); } catch {}
+      slots--;
+      postLimiter.schedule(() => doSend(job, b)).catch(() => {});
+    }
   }
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
     const ready = keys.filter(k => (routeBuckets.get(k)?.q?.length||0)>0).length;
-    console.log(`[post.tick] qps=${currentQps} bucketsReady=${ready} slotsLeft=${slots}`);
+    console.log(`[post.tick] qps=${currentQps} bucketsReady=${ready} slotsLeft=${slots} totalQ=${totalQ} perBucket=${perBucketSends}`);
   }
 }, 1000);
 
