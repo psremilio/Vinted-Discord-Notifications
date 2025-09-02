@@ -46,6 +46,12 @@ export function buildListingEmbed(i) {
     .setFooter({ text: i.location ? `${i.location} • Vinted` : 'Vinted' })
     .setTimestamp(new Date(created));
 
+  // Optional: echte Bot-Latenz anzeigen, wenn discover-Zeit vorhanden
+  if (i.discoveredAt) {
+    const lagSec = Math.max(0, Math.round((Date.now() - Number(i.discoveredAt)) / 1000));
+    emb.addFields({ name: '⏱ entdeckt in', value: `${lagSec}s`, inline: true });
+  }
+
   // Beschreibung nur setzen, wenn vorhanden
   const desc = [i.brand && `**${i.brand}**`, i.description && trunc(i.description)]
     .filter(Boolean)

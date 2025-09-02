@@ -1,8 +1,9 @@
 import Bottleneck from 'bottleneck';
 import { metrics } from './metrics.js';
 
-const QPS = Math.max(1, Number(process.env.DISCORD_QPS || 50));
+const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
+const REORDER_WINDOW_MS = Math.max(0, Number(process.env.REORDER_WINDOW_MS || 30000));
 
 export const postLimiter = new Bottleneck({
   maxConcurrent: CONC,
@@ -20,13 +21,55 @@ const MAX_QUEUE = Math.max(2000, Number(process.env.DISCORD_QUEUE_MAX || 5000));
 const queue = [];
 let discordCooldownUntil = 0;
 
-export async function sendQueued(channel, payload) {
+// Per-channel reorder buffers
+const chanBuf = new Map(); // channelId -> { buf: Array<{discoveredAt, channel, payload}>, timer }
+function ensureChannelBuffer(channel) {
+  const id = channel?.id || 'UNKNOWN';
+  let st = chanBuf.get(id);
+  if (!st) {
+    st = { buf: [], timer: null };
+    st.timer = setInterval(() => flushChannel(id), 1000);
+    chanBuf.set(id, st);
+  }
+  return st;
+}
+function flushChannel(id) {
+  const st = chanBuf.get(id);
+  if (!st) return;
+  const now = Date.now();
+  const eligible = [];
+  const rest = [];
+  for (const it of st.buf) {
+    if (!REORDER_WINDOW_MS || (now - it.discoveredAt) >= REORDER_WINDOW_MS) eligible.push(it);
+    else rest.push(it);
+  }
+  st.buf = rest;
+  if (!eligible.length) return;
+  // newest first
+  eligible.sort((a, b) => b.discoveredAt - a.discoveredAt);
+  for (const job of eligible) {
+    enqueueSend(job.channel, job.payload);
+  }
+}
+
+export async function sendQueued(channel, payload, meta = {}) {
   // Simple backpressure: drop tail if queue exceeds MAX_QUEUE
   try { metrics.discord_queue_depth.set(queue.length); } catch {}
   if (queue.length >= MAX_QUEUE) {
     metrics.discord_dropped_total.inc();
     return; // drop
   }
+  // Optional per-channel reorder window
+  const discoveredAt = Number(meta?.discoveredAt || Date.now());
+  if (REORDER_WINDOW_MS > 0 && channel?.id) {
+    const st = ensureChannelBuffer(channel);
+    st.buf.push({ discoveredAt, channel, payload });
+    return;
+  }
+  enqueueSend(channel, payload);
+}
+
+function enqueueSend(channel, payload) {
   const job = () => postLimiter.schedule(async () => {
     // Honor hard cooldown from headers/errors
     const now = Date.now();

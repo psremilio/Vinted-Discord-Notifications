@@ -108,6 +108,9 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 return items;
               }
               const filtered = selectNewArticles(items, processedStore, channel);
+              // annotate discovery time for posting/metrics
+              const tdisc = Date.now();
+              filtered.forEach(it => { try { it.discoveredAt = tdisc; } catch {} });
               const dedupeSkipped = items.length - filtered.length;
               trace('filter', { rule: channel.channelName, page, new_count: filtered.length, skipped_dedupe: Math.max(0, dedupeSkipped) });
               return filtered;

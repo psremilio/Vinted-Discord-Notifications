@@ -5,7 +5,7 @@ import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === "function";
-async function sendToTargetsSafely(targets, payload) {
+async function sendToTargetsSafely(targets, payload, meta = {}) {
   const list = Array.isArray(targets) ? targets : [targets];
   for (const ch of (list || [])) {
     if (!isTextChannelLike(ch)) {
@@ -13,7 +13,7 @@ async function sendToTargetsSafely(targets, payload) {
       continue;
     }
     try {
-      await sendQueued(ch, payload);
+      await sendQueued(ch, payload, meta);
     } catch (e) {
       const code = Number(e?.code || 0);
       if (code === 10003) {
@@ -71,7 +71,9 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
             embeds: [buildListingEmbed(listing)],
             components: [row],
         };
-        await sendToTargetsSafely(targets, payload);
+        // pass discoveredAt through to postQueue for optional reordering
+        const meta = { discoveredAt: item.discoveredAt || Date.now() };
+        await sendToTargetsSafely(targets, payload, meta);
         try {
           console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
           stats.posted += 1;
