@@ -28,6 +28,14 @@ export class EdfScheduler {
   start() {
     if (this.timer) return;
     this.timer = setInterval(() => this._tick(), 250);
+    // light observability
+    let lastLog = Date.now();
+    setInterval(() => {
+      const now = Date.now();
+      const ready = Array.from(this.rules.values()).filter(r => !r.running && r.nextAt <= now).length;
+      const total = this.rules.size;
+      console.log(`[sched.edf.tick] ready=${ready} rules=${total}`);
+    }, 2000).unref?.();
   }
 
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
@@ -57,4 +65,3 @@ export class EdfScheduler {
     }
   }
 }
-

@@ -64,7 +64,10 @@ export const runSearch = async (client, channel, opts = {}) => {
         }
         const bfPages = useBackfill ? Number(process.env.NO_NEW_BACKFILL_PAGES || Math.max(2, Number(process.env.BACKFILL_PAGES || 1))) : Number(process.env.BACKFILL_PAGES || 1);
         try { metrics.backfill_pages_active.set(countActiveBackfill()); } catch {}
+        const tPoll0 = Date.now();
         const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, { ...opts, backfillPages: bfPages }));
+        const elapsedPoll = Date.now() - tPoll0;
+        try { const tier = tierOf(channel.channelName); metrics.tier_poll_latency_ms.set({ tier }, elapsedPoll); } catch {}
 
         //if new articles are found post them
         if (articles && articles.length > 0) {

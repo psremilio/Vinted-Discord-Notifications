@@ -44,12 +44,11 @@ function flushChannel(id) {
     else rest.push(it);
   }
   st.buf = rest;
+  try { metrics.reorder_buffer_depth.set({ channel: id }, st.buf.length); } catch {}
   if (!eligible.length) return;
   // newest first
   eligible.sort((a, b) => b.discoveredAt - a.discoveredAt);
-  for (const job of eligible) {
-    enqueueSend(job.channel, job.payload);
-  }
+  for (const job of eligible) enqueueRoute(job.channel, job.payload, job.discoveredAt);
 }
 
 export async function sendQueued(channel, payload, meta = {}) {
@@ -64,47 +63,82 @@ export async function sendQueued(channel, payload, meta = {}) {
   if (REORDER_WINDOW_MS > 0 && channel?.id) {
     const st = ensureChannelBuffer(channel);
     st.buf.push({ discoveredAt, channel, payload });
+    try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
     return;
   }
-  enqueueSend(channel, payload);
+  enqueueRoute(channel, payload, discoveredAt);
 }
 
-function enqueueSend(channel, payload) {
-  const job = () => postLimiter.schedule(async () => {
-    // Honor hard cooldown from headers/errors
-    const now = Date.now();
-    if (discordCooldownUntil > now) {
-      try { metrics.discord_cooldown_active.set(1); } catch {}
-      await new Promise(r => setTimeout(r, Math.min(5000, discordCooldownUntil - now)));
-    } else {
-      try { metrics.discord_cooldown_active.set(0); } catch {}
-    }
-    try {
-      const res = await channel.send(payload);
-      // No headers from discord.js, but if ever available, handle here
-      try { metrics.discord_cooldown_active.set(0); } catch {}
-      return res;
-    } catch (e) {
-      if (is429(e)) metrics.discord_rate_limit_hits.inc();
-      const retry = Math.max(
-        Number(e?.retry_after || e?.data?.retry_after || e?.rawError?.retry_after || 0) * 1000,
-        Number(e?.headers?.['x-ratelimit-reset-after'] || 0) * 1000
-      );
-      if (retry > 0) {
-        discordCooldownUntil = Date.now() + retry;
-        try { metrics.discord_cooldown_active.set(1); } catch {}
-      }
-      throw e;
-    }
-  });
-  queue.push(job);
-  // drain loop (micro task)
-  setImmediate(async () => {
-    const j = queue.shift();
-    try { metrics.discord_queue_depth.set(queue.length); } catch {}
-    if (j) { try { await j(); } catch {} }
-  });
+// Route-aware per-bucket queues (bucket ≈ channel route)
+const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt}>, cooldownUntil: number }
+function bucketKey(channel) { return `chan:${channel?.id || 'UNKNOWN'}`; }
+function getBucket(channel) {
+  const key = bucketKey(channel);
+  let b = routeBuckets.get(key);
+  if (!b) { b = { q: [], cooldownUntil: 0 }; routeBuckets.set(key, b); }
+  return [key, b];
 }
+
+function enqueueRoute(channel, payload, discoveredAt) {
+  const [, b] = getBucket(channel);
+  b.q.push({ channel, payload, discoveredAt });
+}
+
+// WFQ-like scheduler: per second serve up to currentQps, 1 msg per bucket per tick
+setInterval(() => {
+  let slots = currentQps;
+  const now = Date.now();
+  const keys = Array.from(routeBuckets.keys());
+  for (const key of keys) {
+    if (slots <= 0) break;
+    const b = routeBuckets.get(key);
+    if (!b || b.q.length === 0) continue;
+    if (b.cooldownUntil > now) continue;
+    const job = b.q.shift();
+    slots--;
+    // send with concurrency limiter
+    postLimiter.schedule(() => doSend(job, b)).catch(() => {});
+  }
+}, 1000);
+
+async function doSend(job, bucket) {
+  const now = Date.now();
+  if (discordCooldownUntil > now) {
+    try { metrics.discord_cooldown_active.set(1); } catch {}
+    await new Promise(r => setTimeout(r, Math.min(5000, discordCooldownUntil - now)));
+  } else {
+    try { metrics.discord_cooldown_active.set(0); } catch {}
+  }
+  try {
+    const res = await job.channel.send(job.payload);
+    const latency = Date.now() - (Number(job.discoveredAt) || now);
+    recordPostLatency(latency);
+    try { metrics.discord_cooldown_active.set(0); } catch {}
+    return res;
+  } catch (e) {
+    if (is429(e)) metrics.discord_rate_limit_hits.inc();
+    const retry = Math.max(
+      Number(e?.retry_after || e?.data?.retry_after || e?.rawError?.retry_after || 0) * 1000,
+      Number(e?.headers?.['x-ratelimit-reset-after'] || 0) * 1000
+    );
+    if (retry > 0) {
+      bucket.cooldownUntil = Date.now() + retry;
+      discordCooldownUntil = Math.max(discordCooldownUntil, bucket.cooldownUntil);
+      try { metrics.discord_cooldown_active.set(1); } catch {}
+    }
+    throw e;
+  }
+}
+
+// Post latency p95
+const postLats = [];
+function recordPostLatency(ms) { postLats.push(ms); if (postLats.length > 500) postLats.shift(); }
+setInterval(() => {
+  if (!postLats.length) return;
+  const a = postLats.slice().sort((x, y) => x - y);
+  const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+  try { metrics.post_latency_ms_p95.set(p95); } catch {}
+}, 60 * 1000);
 
 // Auto-tune QPS based on recent 429s
 let last429 = 0;

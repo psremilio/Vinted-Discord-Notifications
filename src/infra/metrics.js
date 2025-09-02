@@ -45,6 +45,10 @@ export const metrics = {
   rules_reassigned_total: new Counter('rules_reassigned_total'),
   discord_cooldown_active: new Gauge('discord_cooldown_active'),
   skipped_ratio_p95: new Gauge('skipped_ratio_p95'),
+  // scheduler/posting extras
+  reorder_buffer_depth: new LabeledGauge('reorder_buffer_depth', ['channel']),
+  tier_poll_latency_ms: new LabeledGauge('tier_poll_latency_ms', ['tier']),
+  post_latency_ms_p95: new Gauge('post_latency_ms_p95'),
 };
 
 export function serializeMetrics() {
@@ -82,5 +86,12 @@ export function serializeMetrics() {
   lineHelpType('rules_reassigned_total', 'Rules reassigned due to skew', 'counter'); out.push(`rules_reassigned_total ${metrics.rules_reassigned_total.get()}`);
   lineHelpType('discord_cooldown_active', 'Discord hard cooldown active (0/1)', 'gauge'); out.push(`discord_cooldown_active ${metrics.discord_cooldown_active.get()}`);
   lineHelpType('skipped_ratio_p95', 'p95 skipped slot ratio across rules', 'gauge'); out.push(`skipped_ratio_p95 ${metrics.skipped_ratio_p95.get()}`);
+  // labeled gauges
+  lineHelpType('reorder_buffer_depth', 'Per channel reorder buffer depth', 'gauge');
+  for (const e of metrics.reorder_buffer_depth.entries()) out.push(`reorder_buffer_depth{channel="${e.labels.channel}"} ${e.value}`);
+  lineHelpType('tier_poll_latency_ms', 'Last poll latency per tier (ms)', 'gauge');
+  for (const e of metrics.tier_poll_latency_ms.entries()) out.push(`tier_poll_latency_ms{tier="${e.labels.tier}"} ${e.value}`);
+  // scalar post latency p95
+  lineHelpType('post_latency_ms_p95', 'Posting latency p95 (ms)', 'gauge'); out.push(`post_latency_ms_p95 ${metrics.post_latency_ms_p95.get()}`);
   return out.join('\n');
 }
