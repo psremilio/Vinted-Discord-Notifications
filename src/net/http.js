@@ -195,7 +195,7 @@ export async function get(url, config = {}) {
 }
 
 // Low-level fetch via a specific proxy, with latency measurement
-export async function doFetchWithProxy(proxy, url, config = {}, timeout = 12000) {
+export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 12000)) {
   const client = createClient(proxy);
   await bootstrapSession(client);
   const t0 = Date.now();

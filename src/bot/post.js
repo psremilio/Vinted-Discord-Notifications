@@ -71,8 +71,8 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
             embeds: [buildListingEmbed(listing)],
             components: [row],
         };
-        // pass discoveredAt through to postQueue for optional reordering
-        const meta = { discoveredAt: item.discoveredAt || Date.now() };
+        // pass discoveredAt & createdAt through to postQueue for ordering
+        const meta = { discoveredAt: item.discoveredAt || Date.now(), createdAt: listing.createdAt || Date.now() };
         await sendToTargetsSafely(targets, payload, meta);
         try {
           console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);

@@ -22,7 +22,7 @@ const queue = [];
 let discordCooldownUntil = 0;
 
 // Per-channel reorder buffers
-const chanBuf = new Map(); // channelId -> { buf: Array<{discoveredAt, channel, payload}>, timer }
+const chanBuf = new Map(); // channelId -> { buf: Array<{discoveredAt, createdAt, channel, payload}>, timer }
 function ensureChannelBuffer(channel) {
   const id = channel?.id || 'UNKNOWN';
   let st = chanBuf.get(id);
@@ -46,13 +46,21 @@ function flushChannel(id) {
   st.buf = rest;
   try { metrics.reorder_buffer_depth.set({ channel: id }, st.buf.length); } catch {}
   if (!eligible.length) return;
-  // newest first
-  eligible.sort((a, b) => b.discoveredAt - a.discoveredAt);
-  for (const job of eligible) enqueueRoute(job.channel, job.payload, job.discoveredAt);
+  // chronologisch nach createdAt aufsteigend (ältere zuerst)
+  eligible.sort((a, b) => (Number(a.createdAt||0) - Number(b.createdAt||0)) || (a.discoveredAt - b.discoveredAt));
+  const maxFlush = Math.max(1, Number(process.env.REORDER_FLUSH_MAX || 3));
+  const slice = eligible.slice(0, maxFlush);
+  const keep = eligible.slice(maxFlush);
+  // Nicht geflushedes zurück in Buffer legen
+  st.buf = keep.concat(st.buf);
+  for (const job of slice) enqueueRoute(job.channel, job.payload, job.discoveredAt);
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
-    console.log(`[post.flush] channel=${id} released=${eligible.length} remain=${st.buf.length}`);
+    console.log(`[post.flush] channel=${id} released=${slice.length} remain=${st.buf.length}`);
   }
 }
+
+// Optional webhook fanout config: JSON mapping channelId -> [webhookURL,...]
+let WEBHOOK_MAP = null; try { WEBHOOK_MAP = JSON.parse(process.env.DISCORD_WEBHOOKS_JSON || 'null'); } catch {}
 
 export async function sendQueued(channel, payload, meta = {}) {
   // Simple backpressure: drop tail if queue exceeds MAX_QUEUE
@@ -63,13 +71,14 @@ export async function sendQueued(channel, payload, meta = {}) {
   }
   // Optional per-channel reorder window
   const discoveredAt = Number(meta?.discoveredAt || Date.now());
+  const createdAt = Number(meta?.createdAt || Date.now());
   if (REORDER_WINDOW_MS > 0 && channel?.id) {
     const st = ensureChannelBuffer(channel);
-    st.buf.push({ discoveredAt, channel, payload });
+    st.buf.push({ discoveredAt, createdAt, channel, payload });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
     return;
   }
-  enqueueRoute(channel, payload, discoveredAt);
+  enqueueRoute(channel, payload, discoveredAt, createdAt);
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
@@ -82,9 +91,17 @@ function getBucket(channel) {
   return [key, b];
 }
 
-function enqueueRoute(channel, payload, discoveredAt) {
+function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   const [, b] = getBucket(channel);
-  b.q.push({ channel, payload, discoveredAt });
+  const job = { channel, payload, discoveredAt, createdAt };
+  // If webhooks configured for this channel, pick next webhook URL (round-robin by length)
+  const webhooks = channel?.id && WEBHOOK_MAP && Array.isArray(WEBHOOK_MAP[channel.id]) ? WEBHOOK_MAP[channel.id] : null;
+  if (webhooks && webhooks.length) {
+    const idx = b._rr || 0;
+    job.webhookUrl = webhooks[idx % webhooks.length];
+    b._rr = (idx + 1) % webhooks.length;
+  }
+  b.q.push(job);
 }
 
 // WFQ-like scheduler: per second serve up to currentQps, 1 msg per bucket per tick
@@ -117,7 +134,13 @@ async function doSend(job, bucket) {
     try { metrics.discord_cooldown_active.set(0); } catch {}
   }
   try {
-    const res = await job.channel.send(job.payload);
+    let res;
+    if (job.webhookUrl) {
+      // Send via webhook (route-fanout)
+      res = await sendWebhook(job.webhookUrl, job.payload);
+    } else {
+      res = await job.channel.send(job.payload);
+    }
     const latency = Date.now() - (Number(job.discoveredAt) || now);
     recordPostLatency(latency);
     try { metrics.discord_cooldown_active.set(0); } catch {}
@@ -146,6 +169,24 @@ setInterval(() => {
   const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
   try { metrics.post_latency_ms_p95.set(p95); } catch {}
 }, 60 * 1000);
+
+// Minimal webhook sender via fetch (undici or global)
+async function sendWebhook(url, payload) {
+  // Discord expects JSON with content/embeds/components; payload passthrough
+  const body = JSON.stringify(payload);
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  if (res.status === 429) {
+    metrics.discord_rate_limit_hits.inc();
+    const retryAfter = Number((await res.json().catch(()=>({})))?.retry_after || 0) * 1000;
+    if (retryAfter > 0) await new Promise(r => setTimeout(r, retryAfter));
+    throw new Error('429');
+  }
+  if (!res.ok) {
+    const txt = await res.text().catch(()=> '');
+    throw new Error(`webhook ${res.status} ${txt}`);
+  }
+  return res;
+}
 
 // Auto-tune QPS based on recent 429s
 let last429 = 0;
