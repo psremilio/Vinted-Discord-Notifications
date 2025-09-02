@@ -12,6 +12,7 @@ export class EdfScheduler {
     this.rules = new Map(); // name -> { rule, tier, targetMs, nextAt, running }
     this.timer = null;
     this.client = null;
+    this.inflight = 0;
   }
 
   addRule(client, rule) {
@@ -53,15 +54,26 @@ export class EdfScheduler {
   }
 
   async _tick() {
-    const st = this._pickReady();
-    if (!st) return;
-    st.running = true;
-    try {
-      await this.runFn(this.client, st.rule);
-    } catch {}
-    finally {
-      st.running = false;
-      st.nextAt = Date.now() + jitter(st.targetMs);
+    const budget = Math.max(1, Number(process.env.SEARCH_CONCURRENCY || 4));
+    let dispatched = 0;
+    while (dispatched < budget) {
+      const st = this._pickReady();
+      if (!st) break;
+      st.running = true;
+      this.inflight++;
+      dispatched++;
+      // fire-and-forget; limiter in runFn enforces real concurrency
+      this.runFn(this.client, st.rule)
+        .catch(() => {})
+        .finally(() => {
+          st.running = false;
+          st.nextAt = Date.now() + jitter(st.targetMs);
+          this.inflight = Math.max(0, this.inflight - 1);
+        });
+    }
+    if (dispatched && String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+      const ready = Array.from(this.rules.values()).filter(r => !r.running && r.nextAt <= Date.now()).length;
+      console.log(`[sched.edf.tick] dispatched=${dispatched} inflight=${this.inflight} readyLeft=${ready}`);
     }
   }
 }
