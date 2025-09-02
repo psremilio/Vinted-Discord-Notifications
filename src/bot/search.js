@@ -3,6 +3,7 @@ import { handleParams } from "./handle-params.js";
 import { dedupeKey } from "../utils/dedupe.js";
 import { stats } from "../utils/stats.js";
 import { state, markFetchAttempt, markFetchSuccess, markFetchError } from "../state.js";
+import { metrics } from "../infra/metrics.js";
 
 const DEBUG_POLL = process.env.DEBUG_POLL === '1';
 const TRACE = String(process.env.TRACE_SEARCH || '0') === '1';
@@ -107,7 +108,27 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 d(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
                 return items;
               }
-              const filtered = selectNewArticles(items, processedStore, channel);
+              let filtered = selectNewArticles(items, processedStore, channel);
+              // Startup fresh-only window: skip posting of old items for first N minutes
+              const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 0);
+              if (skipMin > 0) {
+                const sinceStartMs = Date.now() - (state.startedAt?.getTime?.() || 0);
+                if (sinceStartMs < skipMin * 60 * 1000) {
+                  const cutoff = Date.now() - skipMin * 60 * 1000;
+                  const old = [];
+                  const fresh = [];
+                  for (const it of filtered) {
+                    const ts = (it.photo?.high_resolution?.timestamp || 0) * 1000;
+                    if (ts && ts < cutoff) old.push(it); else fresh.push(it);
+                  }
+                  // mark old as processed to avoid later posting, but do not return them
+                  for (const it of old) {
+                    try { processedStore.set(dedupeKey(channel.channelName, it.id), Date.now()); } catch {}
+                  }
+                  if (old.length) { try { metrics.fetch_skipped_total.inc(old.length); } catch {} }
+                  filtered = fresh;
+                }
+              }
               // annotate discovery time for posting/metrics
               const tdisc = Date.now();
               filtered.forEach(it => { try { it.discoveredAt = tdisc; } catch {} });

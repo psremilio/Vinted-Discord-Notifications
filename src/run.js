@@ -6,6 +6,8 @@ import { createProcessedStore, dedupeKey, ttlMs } from "./utils/dedupe.js";
 import { limiter } from "./utils/limiter.js";
 import { startStats } from "./utils/stats.js";
 import { metrics } from "./infra/metrics.js";
+import { EdfScheduler } from "./schedule/edf.js";
+import { tierOf } from "./schedule/tiers.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -39,7 +41,7 @@ async function getChannelById(client, id) {
 const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number, backfillOnUntil?: number, backfillCooldownUntil?: number }
 const RULE_MIN_RPM = Math.max(0, Number(process.env.RULE_MIN_RPM || 1));
 
-const runSearch = async (client, channel, opts = {}) => {
+export const runSearch = async (client, channel, opts = {}) => {
     try {
         // Optional heartbeat dots (disabled by default)
         if (String(process.env.DEBUG_DOTS || '0') === '1') process.stdout.write('.');
@@ -103,43 +105,19 @@ const runSearch = async (client, channel, opts = {}) => {
     }
 };
 
-//run the search and set a timeout to run it again   
-const runInterval = async (client, channel) => {
-    await runSearch(client, channel);
-    const baseSec = OVERRIDE_SEC > 0 ? OVERRIDE_SEC : channel.frequency;
-    const factor = NO_JITTER ? 1 : (0.8 + Math.random() * 0.4);
-    const delay = baseSec * 1000 * factor;
-    const t = setTimeout(() => runInterval(client, channel), delay);
-    activeSearches.set(channel.channelName, t);
-};
+// Attach a new search to the scheduler (EDF)
+const edf = new EdfScheduler(async (client, rule) => {
+  await runSearch(client, rule);
+});
 
-// Attach a new search to the scheduler
 const addSearch = (client, search) => {
     if (activeSearches.has(search.channelName)) return;
-    // Log scheduling info once so you see which interval is active
-    const baseSec = OVERRIDE_SEC > 0 ? OVERRIDE_SEC : search.frequency;
-    console.log(
-      `[schedule] ${search.channelName}: every ${baseSec}s` +
-      (NO_JITTER ? '' : ' (±20% jitter)') +
-      (OVERRIDE_SEC > 0 ? ' [override via POLL_INTERVAL_SEC]' : '')
-    );
-    if (process.env.NODE_ENV === 'test') {
-        const t = setTimeout(() => { runInterval(client, search); }, 1000);
-        activeSearches.set(search.channelName, t);
-        try { metrics.rules_active.set(activeSearches.size); } catch {}
-        return;
-    }
-    (async () => {
-        try {
-            // ersten Poll direkt losschicken, nicht erst nach timeout
-            await runSearch(client, search);
-        } catch (err) {
-            console.error('\nError in initializing articles:', err);
-        }
-        const t = setTimeout(() => { runInterval(client, search); }, 1000);
-        activeSearches.set(search.channelName, t);
-        try { metrics.rules_active.set(activeSearches.size); } catch {}
-    })();
+    // Log scheduling info
+    const tier = tierOf(search.channelName);
+    console.log(`[schedule] ${search.channelName}: EDF tier=${tier}` + (NO_JITTER ? '' : ' (±jitter)'));
+    edf.addRule(client, search);
+    activeSearches.set(search.channelName, true);
+    try { metrics.rules_active.set(activeSearches.size); } catch {}
 };
 
 //init the article id set, then launch the simultaneous searches
@@ -173,10 +151,9 @@ export const run = async (client, mySearches) => {
         }));
     } catch {}
 
-    //stagger start time for searches to avoid too many simultaneous requests
-    mySearches.forEach((channel, index) => {
-        setTimeout(() => addSearch(client, channel), index * 1000 + 5000);
-    });
+    // Register rules into EDF then start
+    (mySearches || []).forEach((channel) => addSearch(client, channel));
+    edf.start();
 
     // Periodic cleanup of expired dedupe entries
     setInterval(() => {
@@ -199,9 +176,7 @@ export const run = async (client, mySearches) => {
 
 // Stop and remove a scheduled job by name, if present
 function removeJob(name) {
-    const t = activeSearches.get(name);
-    if (!t) return false;
-    try { clearTimeout(t); } catch {}
+    if (!activeSearches.has(name)) return false;
     activeSearches.delete(name);
     console.log(`[schedule] stopped ${name}`);
     try { metrics.rules_active.set(activeSearches.size); } catch {}
@@ -209,10 +184,8 @@ function removeJob(name) {
 }
 
 function stopAll() {
-    for (const [name, t] of activeSearches.entries()) {
-        try { clearTimeout(t); } catch {}
-        activeSearches.delete(name);
-    }
+    edf.stop();
+    for (const [name] of activeSearches.entries()) activeSearches.delete(name);
     console.log('[schedule] all jobs stopped');
     try { metrics.rules_active.set(0); } catch {}
 }

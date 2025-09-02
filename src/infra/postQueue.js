@@ -3,7 +3,7 @@ import { metrics } from './metrics.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
-const REORDER_WINDOW_MS = Math.max(0, Number(process.env.REORDER_WINDOW_MS || 30000));
+const REORDER_WINDOW_MS = Math.max(0, Number(process.env.REORDER_WINDOW_MS || 12000));
 
 export const postLimiter = new Bottleneck({
   maxConcurrent: CONC,

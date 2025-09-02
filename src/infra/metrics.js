@@ -33,6 +33,7 @@ export const metrics = {
   discord_rate_limit_hits: new Counter('discord_rate_limit_hits'),
   discord_queue_depth: new Gauge('discord_queue_depth'),
   discord_dropped_total: new Counter('discord_dropped_total'),
+  fresh_skipped_total: new Counter('fresh_skipped_total'),
   // misc gauges
   rules_active: new Gauge('rules_active'),
   proxy_healthy: new Gauge('proxy_healthy'),
@@ -76,6 +77,7 @@ export function serializeMetrics() {
   lineHelpType('global_latency_p95_ms', 'Global p95 latency over window (ms)', 'gauge'); out.push(`global_latency_p95_ms ${metrics.global_latency_p95_ms.get()}`);
   lineHelpType('discord_queue_depth', 'Discord posting queue depth', 'gauge'); out.push(`discord_queue_depth ${metrics.discord_queue_depth.get()}`);
   lineHelpType('discord_dropped_total', 'Discord posts dropped due to full queue', 'counter'); out.push(`discord_dropped_total ${metrics.discord_dropped_total.get()}`);
+  lineHelpType('fresh_skipped_total', 'Items skipped by startup fresh-only window', 'counter'); out.push(`fresh_skipped_total ${metrics.fresh_skipped_total.get()}`);
   lineHelpType('backfill_pages_active', 'Number of rules in backfill mode', 'gauge'); out.push(`backfill_pages_active ${metrics.backfill_pages_active.get()}`);
   lineHelpType('rules_reassigned_total', 'Rules reassigned due to skew', 'counter'); out.push(`rules_reassigned_total ${metrics.rules_reassigned_total.get()}`);
   lineHelpType('discord_cooldown_active', 'Discord hard cooldown active (0/1)', 'gauge'); out.push(`discord_cooldown_active ${metrics.discord_cooldown_active.get()}`);
