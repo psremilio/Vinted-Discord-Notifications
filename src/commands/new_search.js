@@ -51,12 +51,31 @@ const validateUrl = (url) => {
 
 export const execute = async (interaction) => {
     const t0 = Date.now();
+    let acked = false;
     try {
         if (!interaction.deferred && !interaction.replied) {
             await interaction.deferReply({ ephemeral: true });
+            acked = true;
+        } else {
+            acked = true;
         }
-    } catch {}
+    } catch (e) {
+        // Fallback: try an immediate ephemeral reply via flags
+        try {
+            await interaction.reply({ content: '⏳ wird angelegt…', flags: 1 << 6 });
+            acked = true;
+        } catch (e2) {
+            console.warn('[cmd.ack.fail] new_search', e?.message || e, e2?.message || e2);
+        }
+    }
     try { console.log('[cmd.latency] /new_search ack_ms=%d', Date.now() - t0); } catch {}
+
+    async function safeEdit(contentOrOptions) {
+        try {
+            if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
+            return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
+        } catch {}
+    }
 
     const url = interaction.options.getString('url');
     const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
@@ -80,7 +99,7 @@ export const execute = async (interaction) => {
         const isAllowedType = allowedTypes.has(ch?.type);
         const canSend = !!ch?.permissionsFor?.(interaction.client.user)?.has?.(PermissionsBitField.Flags.SendMessages);
         if (!channel_id || !isAllowedType || !canSend) {
-            await interaction.editReply('Dieser Kanal ist für Benachrichtigungen ungeeignet. Bitte führe den Befehl in einem Textkanal aus, in dem der Bot schreiben darf.');
+            await safeEdit('Dieser Kanal ist für Benachrichtigungen ungeeignet. Bitte führe den Befehl in einem Textkanal aus, in dem der Bot schreiben darf.');
             return;
         }
     } catch {}
@@ -88,7 +107,7 @@ export const execute = async (interaction) => {
     // validate the URL
     const validation = validateUrl(url);
     if (validation !== true) {
-        await interaction.editReply(String(validation));
+        await safeEdit(String(validation));
         return;
     }
 
@@ -109,7 +128,7 @@ export const execute = async (interaction) => {
         const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
         if (searches.some(search => search.channelName === name)) {
-            await interaction.editReply('A search with the name ' + name + ' already exists.');
+            await safeEdit('A search with the name ' + name + ' already exists.');
             return;
         }
 
@@ -126,7 +145,7 @@ export const execute = async (interaction) => {
             fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
         } catch (error) {
             console.error('\nError saving new search:', error);
-            await interaction.editReply('There was an error starting the monitoring.');
+            await safeEdit('There was an error starting the monitoring.');
         }
 
         // schedule immediately using the in-memory scheduler
@@ -145,13 +164,10 @@ export const execute = async (interaction) => {
             embed.addFields({ name: 'Webhooks', value: `Aktiviert (${createdHooks})`, inline: true });
         }
 
-        await interaction.editReply({ embeds: [embed]});
+        await safeEdit({ embeds: [embed]});
 
     } catch (error) {
         console.error('Error starting monitoring:', error);
-        try {
-            if (interaction.deferred || interaction.replied) await interaction.editReply('There was an error starting the monitoring.');
-            else await interaction.reply({ content: 'There was an error starting the monitoring.', flags: 1 << 6 });
-        } catch {}
+        await safeEdit('There was an error starting the monitoring.');
     }
 }
