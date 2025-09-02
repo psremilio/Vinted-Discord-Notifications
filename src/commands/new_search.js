@@ -50,9 +50,13 @@ const validateUrl = (url) => {
 }
 
 export const execute = async (interaction) => {
-    if (!interaction.deferred && !interaction.replied) {
-        await interaction.deferReply({ ephemeral: true });
-    }
+    const t0 = Date.now();
+    try {
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply({ ephemeral: true });
+        }
+    } catch {}
+    try { console.log('[cmd.latency] /new_search ack_ms=%d', Date.now() - t0); } catch {}
 
     const url = interaction.options.getString('url');
     const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];

@@ -1,6 +1,6 @@
 import Bottleneck from 'bottleneck';
 import { metrics } from './metrics.js';
-import { getWebhooksForChannelId } from './webhooksManager.js';
+import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksManager.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
@@ -21,6 +21,7 @@ function is429(err) {
 const MAX_QUEUE = Math.max(2000, Number(process.env.DISCORD_QUEUE_MAX || 5000));
 const queue = [];
 let discordCooldownUntil = 0;
+const ensureInFlight = new Set(); // channelId being ensured
 
 // Per-channel reorder buffers
 const chanBuf = new Map(); // channelId -> { buf: Array<{discoveredAt, createdAt, channel, payload}>, timer }
@@ -110,6 +111,14 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
     const idx = b._rr || 0;
     job.webhookUrl = webhooks[idx % webhooks.length];
     b._rr = (idx + 1) % webhooks.length;
+  } else if (channel?.id && String(process.env.AUTO_WEBHOOKS_ON_POST || '1') === '1') {
+    // lazy auto-ensure (non-blocking)
+    const cid = channel.id;
+    if (!ensureInFlight.has(cid)) {
+      ensureInFlight.add(cid);
+      ensureWebhooksForChannel(channel).catch(()=>{}).finally(()=>ensureInFlight.delete(cid));
+      if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[webhooks.ensure.lazy] channel=${cid}`);
+    }
   }
   b.q.push(job);
   if (idKey) b.ids.add(idKey);
@@ -195,6 +204,11 @@ async function sendWebhook(url, payload, channelId) {
   // Discord expects JSON with content/embeds/components; payload passthrough
   const body = JSON.stringify(payload);
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+    try {
+      console.log('[webhooks.send] channel=%s status=%d reset_after=%s', String(channelId||''), res.status, res.headers.get('x-ratelimit-reset-after'));
+    } catch {}
+  }
   if (res.status === 429) {
     metrics.discord_rate_limit_hits.inc();
     try { metrics.discord_webhook_send_429_total.inc({ channel: String(channelId || '') }); } catch {}

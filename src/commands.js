@@ -28,41 +28,41 @@ export const registerCommands = async (client) => {
         .filter(Boolean);
     try {
         if (guildIds.length > 0) {
-            console.log(`Registering ${commands.length} command(s) for guild(s): ${guildIds.join(', ')}`);
+            console.log(`[cmd.sync] registering ${commands.length} command(s) for guild(s): ${guildIds.join(', ')}`);
             for (const gid of guildIds) {
                 await rest.put(
                     Routes.applicationGuildCommands(client.user.id, gid),
                     { body: commands }
                 );
             }
-            console.log('Successfully registered guild (/) commands.');
+            console.log('[cmd.sync] guild scope ok');
             // Always clear global commands when guild-scoped is configured
             try {
-                console.log('Clearing global commands (guild IDs present)…');
+                console.log('[cmd.sync] clearing global commands (guild IDs present)…');
                 await rest.put(
                     Routes.applicationCommands(client.user.id),
                     { body: [] }
                 );
-                console.log('Cleared global commands.');
+                console.log('[cmd.sync] cleared global commands');
             } catch (e) {
-                console.warn('Failed to clear global commands:', e.message || e);
+                console.warn('[cmd.sync] failed to clear global commands:', e.message || e);
             }
         } else {
-            console.log('Registering global (/) commands (may take up to 1h)…');
+            console.log('[cmd.sync] registering global (/) commands (may take up to 1h)…');
             await rest.put(
                 Routes.applicationCommands(client.user.id),
                 { body: commands }
             );
-            console.log('Successfully reloaded global (/) commands.');
+            console.log('[cmd.sync] global scope ok');
         }
     } catch (error) {
-        console.error('\nError reloading commands:', error);
+        console.error('[cmd.sync] error reloading commands:', error);
     }
 }
 
 //handle command interactions
 export const handleCommands = async (interaction, mySearches) => {
-    console.log(`Received command: ${interaction.commandName}`);
+    console.log(`[cmd.interaction] ${interaction.commandName}`);
     try {
         if (!interaction.deferred && !interaction.replied) {
             try { await interaction.deferReply({ ephemeral: true }); } catch {}
