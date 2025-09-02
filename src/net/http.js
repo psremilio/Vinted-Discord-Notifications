@@ -1,6 +1,10 @@
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { getProxy, markBadInPool, recordProxySuccess, recordProxyOutcome } from './proxyHealth.js';
+import { stickyMap } from '../schedule/stickyMap.js';
+import { getBuckets, dropBuckets } from '../schedule/proxyBuckets.js';
+import { rateCtl } from '../schedule/rateControl.js';
+import { metrics } from '../infra/metrics.js';
 
 const clientsByProxy = new Map();
 const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
@@ -187,5 +191,96 @@ export async function get(url, config = {}) {
       markBadInPool(proxy);
     }
     throw e;
+  }
+}
+
+// Low-level fetch via a specific proxy, with latency measurement
+export async function doFetchWithProxy(proxy, url, config = {}, timeout = 12000) {
+  const client = createClient(proxy);
+  await bootstrapSession(client);
+  const t0 = Date.now();
+  const res = await client.http.get(url, { ...config, timeout, validateStatus: () => true });
+  const latency = Date.now() - t0;
+  return { res, latency };
+}
+
+// Sticky-per-proxy fetch with AIMD and token buckets
+export async function fetchRule(ruleId, url, opts = {}) {
+  const proxy = stickyMap.assign(ruleId);
+  if (!proxy) {
+    metrics.fetch_skipped_total.inc();
+    try { stickyMap.record(ruleId, { skipped: true, proxy: null }); } catch {}
+    return { skipped: true };
+  }
+  const buckets = getBuckets(proxy, rateCtl);
+  if (!buckets || !buckets.main.take(1)) {
+    metrics.fetch_skipped_total.inc();
+    rateCtl.observe(proxy, { skipped: true });
+    try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+    return { skipped: true };
+  }
+  try {
+    const { res, latency } = await doFetchWithProxy(proxy, url, opts, 12000);
+    const code = Number(res?.status || 0);
+    if (code === 429 || code === 403) {
+      // treat as fail for controller, but return softFail path below
+      rateCtl.observe(proxy, { ok: false, code, latency });
+    } else if (code >= 200 && code < 300) {
+      metrics.fetch_ok_total.inc();
+      recordProxySuccess(proxy);
+      rateCtl.observe(proxy, { ok: true, latency, code });
+      try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
+      return { ok: true, res };
+    }
+    // failed or rate limited -> consider retry on neighbor if tokens allow
+    const retry = getBuckets(proxy, rateCtl).retry;
+    if (retry && retry.take(1)) {
+      const alt = stickyMap.next(proxy);
+      if (alt) {
+        try {
+          const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, 12000);
+          const code2 = Number(res2?.status || 0);
+          if (code2 >= 200 && code2 < 300) {
+            metrics.fetch_ok_total.inc();
+            // slight penalty to original proxy
+            rateCtl.observe(proxy, { softFail: true });
+            rateCtl.observe(alt, { ok: true, latency: lat2, code: code2 });
+            try { stickyMap.record(ruleId, { skipped: false, proxy: alt }); } catch {}
+            return { ok: true, res: res2 };
+          } else {
+            recordProxyOutcome(alt, code2);
+            rateCtl.observe(alt, { ok: false, code: code2, latency: lat2 });
+          }
+        } catch (e2) {
+          rateCtl.observe(alt, { fail: true });
+        }
+      }
+    }
+    metrics.fetch_softfail_total.inc();
+    try { stickyMap.failover(ruleId); } catch {}
+    try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+    return { softFail: true };
+  } catch (e) {
+    // network error -> try one neighbor if retry tokens are available
+    const retry = getBuckets(proxy, rateCtl).retry;
+    if (retry && retry.take(1)) {
+      const alt = stickyMap.next(proxy);
+      try {
+        const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, 12000);
+        const code2 = Number(res2?.status || 0);
+        if (code2 >= 200 && code2 < 300) {
+          metrics.fetch_ok_total.inc();
+          rateCtl.observe(proxy, { softFail: true });
+          rateCtl.observe(alt, { ok: true, latency: lat2, code: code2 });
+          try { stickyMap.record(ruleId, { skipped: false, proxy: alt }); } catch {}
+          return { ok: true, res: res2 };
+        }
+      } catch {}
+    }
+    metrics.fetch_softfail_total.inc();
+    try { stickyMap.failover(ruleId); } catch {}
+    rateCtl.observe(proxy, { fail: true });
+    try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+    return { softFail: true };
   }
 }

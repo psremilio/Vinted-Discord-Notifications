@@ -2,6 +2,7 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildListingEmbed } from '../embeds.js';
 import { stats } from '../utils/stats.js';
 import { markPosted } from '../state.js';
+import { sendQueued } from '../infra/postQueue.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === "function";
 async function sendToTargetsSafely(targets, payload) {
@@ -12,7 +13,7 @@ async function sendToTargetsSafely(targets, payload) {
       continue;
     }
     try {
-      await ch.send(payload);
+      await sendQueued(ch, payload);
     } catch (e) {
       const code = Number(e?.code || 0);
       if (code === 10003) {

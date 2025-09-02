@@ -15,6 +15,10 @@ import { ensureProxyList, startProxyRefreshLoop } from './src/net/ensureProxyLis
 import { initProxyPool, startHeartbeat, stopHeartbeat, healthyCount, coolingCount, badCount } from './src/net/proxyHealth.js';
 import { state } from './src/state.js';
 import { get as httpGet } from './src/net/http.js';
+import { metrics, serializeMetrics } from './src/infra/metrics.js';
+import { activeSearches } from './src/run.js';
+import { startLoopLagMonitor, getLagP95 } from './src/infra/loopLag.js';
+import { rateCtl } from './src/schedule/rateControl.js';
 
 dotenv.config();
 
@@ -42,27 +46,36 @@ try {
       try {
         if (req.url === '/healthz') {
           const ok = isHealthy();
+          let err60 = 0;
+          try { err60 = rateCtl.errorRateSec(60); } catch {}
           const body = JSON.stringify({
             status: ok ? 'ok' : 'stall',
             watchers: state.watchers || 0,
+            rules_active: activeSearches?.size || (state.watchers || 0) || 0,
             lastFetchAt: state.lastFetchAt?.toISOString?.() || null,
             lastPostAt: state.lastPostAt?.toISOString?.() || null,
             proxyHealthy: healthyCount?.() ?? null,
+            last_60s_429_rate: err60,
+            global_rpm_effective: metrics.global_rpm_effective.get?.() ?? null,
+            event_loop_lag_ms_p95: getLagP95(),
             version: state.version,
           });
           res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
           res.end(body); return;
         }
         if (req.url === '/metrics') {
-          const lines = [];
-          const h = healthyCount?.() ?? 0;
-          lines.push(`# HELP proxy_pool_healthy Number of healthy proxies`);
-          lines.push(`# TYPE proxy_pool_healthy gauge`);
-          lines.push(`proxy_pool_healthy ${h}`);
-          // We proxy stats via logs each minute; expose last-minute totals via env-less counters
-          // Not perfect Prometheus semantics, but provides quick visibility
+          try {
+            const h = healthyCount?.() ?? 0;
+            metrics.proxy_healthy.set(h);
+            try { metrics.rules_active.set(activeSearches?.size || (state.watchers || 0) || 0); } catch {}
+            try {
+              // update aggregate gauges so dashboards can be light
+              metrics.http_429_rate_60s.set(rateCtl.errorRateSec(60));
+              metrics.global_latency_p95_ms.set(rateCtl.latencyP95Sec(60));
+            } catch {}
+          } catch {}
           res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
-          res.end(lines.join('\n')); return;
+          res.end(serializeMetrics()); return;
         }
       } catch {}
       res.writeHead(204); res.end();
@@ -132,6 +145,8 @@ client.on('interactionCreate',interaction=>{
       startMonitorsOnce('watchdog');
     }
   }, DEADLINE_SEC * 1000);
+  try { startLoopLagMonitor(1000); } catch {}
+  startStallDetector();
 })();
 
 function isHealthy() {
@@ -140,6 +155,35 @@ function isHealthy() {
   const tooOld = lastOk && (now - lastOk > 10 * 60 * 1000);
   const tooManyErrors = (state.consecutiveErrors || 0) >= 10;
   return !(tooOld || tooManyErrors);
+}
+
+function startStallDetector() {
+  const chId = process.env.DISCORD_PING_CHANNEL_ID;
+  setInterval(async () => {
+    const now = Date.now();
+    const lastOk = state.lastFetchSuccessAt ? state.lastFetchSuccessAt.getTime() : 0;
+    const tooOld = lastOk && (now - lastOk > 10 * 60 * 1000);
+    const tooManyErrors = (state.consecutiveErrors || 0) >= 10;
+    if (tooOld || tooManyErrors) {
+      console.warn('[stall] detected — restarting searches');
+      try { const mod = await import('./src/run.js'); await mod.restartAll?.(client, mySearches); } catch {}
+      if (chId) {
+        try {
+          const ch = await client.channels.fetch(chId).catch(()=>null) || client.channels.cache.get(chId);
+          if (ch && typeof ch.send === 'function') {
+            await ch.send({
+              embeds: [{
+                color: 0xf59e0b,
+                title: 'Watcher neu gestartet (Stall-Detector)',
+                description: tooOld ? 'No fetch success > 10min' : 'Consecutive errors >= 10',
+                timestamp: new Date().toISOString(),
+              }]
+            });
+          }
+        } catch {}
+      }
+    }
+  }, 60 * 1000);
 }
 
 async function sendStartupPing() {

@@ -5,6 +5,7 @@ import { startAutoTopUp } from "./net/proxyHealth.js";
 import { createProcessedStore, dedupeKey, ttlMs } from "./utils/dedupe.js";
 import { limiter } from "./utils/limiter.js";
 import { startStats } from "./utils/stats.js";
+import { metrics } from "./infra/metrics.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -35,7 +36,7 @@ async function getChannelById(client, id) {
     return ch;
 }
 
-const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number }
+const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number, backfillOnUntil?: number, backfillCooldownUntil?: number }
 const RULE_MIN_RPM = Math.max(0, Number(process.env.RULE_MIN_RPM || 1));
 
 const runSearch = async (client, channel, opts = {}) => {
@@ -51,7 +52,17 @@ const runSearch = async (client, channel, opts = {}) => {
             return;
         }
         if (RULE_MIN_RPM > 0) st.tokens -= 1;
-        const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, opts));
+        // Hysterese: Backfill-Mode nur zeitweise aktivieren
+        const now = Date.now();
+        const stH = ruleState.get(channel.channelName);
+        const minMs = Number(process.env.NO_NEW_STREAK_MIN_MS || 300000);
+        let useBackfill = false;
+        if (stH?.backfillOnUntil && now < stH.backfillOnUntil) {
+            useBackfill = true;
+        }
+        const bfPages = useBackfill ? Number(process.env.NO_NEW_BACKFILL_PAGES || Math.max(2, Number(process.env.BACKFILL_PAGES || 1))) : Number(process.env.BACKFILL_PAGES || 1);
+        try { metrics.backfill_pages_active.set(countActiveBackfill()); } catch {}
+        const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, { ...opts, backfillPages: bfPages }));
 
         //if new articles are found post them
         if (articles && articles.length > 0) {
@@ -76,9 +87,14 @@ const runSearch = async (client, channel, opts = {}) => {
             st.noNewStreak = (st.noNewStreak || 0) + 1;
             const thr = Number(process.env.NO_NEW_THRESHOLD || 6);
             if (st.noNewStreak >= thr) {
-                try {
-                    await limiter.schedule(() => vintedSearch(channel, processedStore, { backfillPages: Number(process.env.BACKFILL_PAGES || 3) }));
-                } catch {}
+                const now = Date.now();
+                const minMs = Number(process.env.NO_NEW_STREAK_MIN_MS || 300000);
+                const inCooldown = (st.backfillCooldownUntil || 0) > now;
+                const active = (st.backfillOnUntil || 0) > now;
+                if (!active && !inCooldown) {
+                    st.backfillOnUntil = now + minMs; // enable mode
+                    st.backfillCooldownUntil = now + 2 * minMs; // ensure off-period later
+                }
                 st.noNewStreak = 0;
             }
         }
@@ -110,6 +126,7 @@ const addSearch = (client, search) => {
     if (process.env.NODE_ENV === 'test') {
         const t = setTimeout(() => { runInterval(client, search); }, 1000);
         activeSearches.set(search.channelName, t);
+        try { metrics.rules_active.set(activeSearches.size); } catch {}
         return;
     }
     (async () => {
@@ -121,6 +138,7 @@ const addSearch = (client, search) => {
         }
         const t = setTimeout(() => { runInterval(client, search); }, 1000);
         activeSearches.set(search.channelName, t);
+        try { metrics.rules_active.set(activeSearches.size); } catch {}
     })();
 };
 
@@ -186,6 +204,7 @@ function removeJob(name) {
     try { clearTimeout(t); } catch {}
     activeSearches.delete(name);
     console.log(`[schedule] stopped ${name}`);
+    try { metrics.rules_active.set(activeSearches.size); } catch {}
     return true;
 }
 
@@ -195,6 +214,25 @@ function stopAll() {
         activeSearches.delete(name);
     }
     console.log('[schedule] all jobs stopped');
+    try { metrics.rules_active.set(0); } catch {}
 }
 
 export { addSearch, activeSearches, removeJob, stopAll };
+
+// Restart all searches: stop existing timers and re-schedule from config
+export async function restartAll(client, mySearches) {
+  try { stopAll(); } catch {}
+  try {
+    mySearches.forEach((channel, index) => {
+      setTimeout(() => addSearch(client, channel), index * 1000 + 1000);
+    });
+  } catch (e) {
+    console.warn('[schedule] restartAll failed:', e?.message || e);
+  }
+}
+
+function countActiveBackfill() {
+  const now = Date.now();
+  let n = 0; for (const st of ruleState.values()) if ((st.backfillOnUntil || 0) > now) n++;
+  return n;
+}

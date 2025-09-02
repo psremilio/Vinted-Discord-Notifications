@@ -4,7 +4,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { loadProxies } from './proxies.js';
 
 // Configuration with sensible defaults and backwards compatibility
-const CAPACITY = Number(process.env.PROXY_CAPACITY || process.env.PROXY_HEALTHY_CAP || 60);
+const CAPACITY = Number(process.env.PROXY_CAPACITY || process.env.PROXY_HEALTHY_CAP || 800);
 const CHECK_CONCURRENCY = Number(process.env.PROXY_CHECK_CONCURRENCY || process.env.PROXY_TEST_CONCURRENCY || 8);
 const CHECK_TIMEOUT_SEC = Number(process.env.PROXY_CHECK_TIMEOUT_SEC || 8);
 const COOLDOWN_MIN = Number(process.env.PROXY_COOLDOWN_MIN || 30);
@@ -66,6 +66,7 @@ function addHealthy(proxy, { status } = {}) {
   }
   if (status) console.log(`[proxy] Healthy proxy added: ${proxy} (status: ${status})`);
   try { healthEvents.emit('count', healthyMap.size); } catch {}
+  try { healthEvents.emit('add', proxy); } catch {}
 }
 
 async function twoPhaseCheck(proxy, base) {
@@ -267,6 +268,7 @@ export function markBadInPool(p) {
   const until = Date.now() + mins * 60 * 1000;
   cooldown.set(p, until);
   if (st) { st.cooldownUntil = until; healthyMap.set(p, st); }
+  try { healthEvents.emit('cooldown', p); } catch {}
 }
 
 // Heartbeat for observability
@@ -333,4 +335,14 @@ export function badCount() {
   let c = 0;
   for (const v of failCounts.values()) if ((v || 0) > 0) c++;
   return c;
+}
+
+export function listHealthyProxies() {
+  return Array.from(healthyMap.keys());
+}
+
+export function getProxyScores() {
+  const out = {};
+  for (const [p, st] of healthyMap.entries()) out[p] = st?.score || 0;
+  return out;
 }

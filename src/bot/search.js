@@ -1,4 +1,4 @@
-import { getHttp, rotateProxy, hedgedGet } from "../net/http.js";
+import { fetchRule } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKey } from "../utils/dedupe.js";
 import { stats } from "../utils/stats.js";
@@ -61,7 +61,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
         try {
             const t0 = Date.now();
             markFetchAttempt();
-            const res = await hedgedGet(apiUrl.href, {
+            const result = await fetchRule(channel.channelName, apiUrl.href, {
                 // emulate a real browser request so Cloudflare is less likely to block us
                 headers: {
                   'User-Agent':
@@ -83,7 +83,16 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                   'sec-ch-ua-mobile': '?0',
                   'sec-ch-ua-platform': '"Windows"',
                 },
-            }, `https://${url.host}`);
+            });
+            if (result?.skipped) {
+              // token not available → skip this slot without error
+              return [];
+            }
+            if (result?.softFail) {
+              // soft failure counted by controller → no retry within this page
+              return [];
+            }
+            const res = result.res;
             
             const ct = String(res.headers['content-type'] || '').toLowerCase();
             if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
@@ -106,28 +115,19 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             
             // Handle HTTP errors
             if (res.status === 401) {
-                // 401 Unauthorized - rotate proxy immediately as this proxy is likely blocked
-                console.warn('[search] HTTP 401 on proxy', proxy, '- rotating proxy');
-                try { rotateProxy(); } catch {}
                 stats.s401 += 1;
-                // Add small delay to avoid overwhelming the system
-                await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+                await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 1500));
                 throw new Error(`HTTP ${res.status}`);
             } else if (res.status === 403) {
-                // 403 Forbidden - rotate proxy as this proxy is likely rate limited
-                console.warn('[search] HTTP 403 on proxy', proxy, '- rotating proxy (rate limited)');
-                try { rotateProxy(); } catch {}
                 stats.s403 += 1;
-                // Longer delay for rate limiting
-                await new Promise(resolve => setTimeout(resolve, 3000 + Math.random() * 5000));
+                await new Promise(resolve => setTimeout(resolve, 1500 + Math.random() * 2000));
                 throw new Error(`HTTP ${res.status}`);
             } else if (res.status >= 400 && res.status < 500) {
                 // Other client errors (4xx) - don't rotate proxy, just retry
                 stats.s4xx += 1;
                 throw new Error(`HTTP ${res.status}`);
             } else {
-                // Server errors (5xx) or other issues - rotate proxy
-                try { rotateProxy(); } catch {}
+                // Server errors (5xx) or other issues → count & retry
                 stats.s5xx += 1;
                 throw new Error(`HTTP ${res.status}`);
             }
