@@ -239,9 +239,9 @@ export function rebuildFromList(client, list) {
 
 export async function rebuildFromDisk(client) {
   try {
-    const raw = await import('fs');
-    const path = (await import('path')).default;
-    const searches = JSON.parse(raw.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    const fsmod = await import('fs');
+    const path = await import('path');
+    const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
     rebuildFromList(client, searches);
   } catch (e) {
     console.warn('[schedule] rebuildFromDisk failed:', e?.message || e);
