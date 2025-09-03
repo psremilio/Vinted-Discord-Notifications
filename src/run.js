@@ -9,6 +9,7 @@ import { metrics } from "./infra/metrics.js";
 import { EdfScheduler } from "./schedule/edf.js";
 import { tierOf } from "./schedule/tiers.js";
 import { buildParentGroups, buildExplicitFamily } from "./rules/parenting.js";
+import { loadFamiliesFromConfig } from "./rules/families.js";
 import { itemMatchesFilters, parseRuleFilters, buildFamilyKey } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
 
@@ -110,6 +111,9 @@ export const runSearch = async (client, channel, opts = {}) => {
                 const now = Date.now();
                 const maxAge = Number(process.env.MATCH_MAX_AGE_MS || 45000);
                 const priceDropMax = Number(process.env.PRICE_DROP_MAX_AGE_MS || 300000);
+                const hardMax = (stH?.backfillOnUntil && now < stH.backfillOnUntil)
+                  ? Number(process.env.BACKFILL_MAX_AGE_MS || 120000)
+                  : Number(process.env.MAX_AGE_MS || 45000);
                 const gated = [];
                 for (const it of matched) {
                   let first = now;
@@ -117,6 +121,11 @@ export const runSearch = async (client, channel, opts = {}) => {
                   try { it.__firstMatchedAt = first; } catch {}
                   try { metrics.parent_child_drift_ms_histogram?.set({ family: String(channel.channelName) }, Math.max(0, Number(first||now) - Number(it.discoveredAt || now))); } catch {}
                   const age = now - Number(first || now);
+                  const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || Number(it.createdAt || 0) || 0;
+                  const listedAge = createdMs ? (now - createdMs) : 0;
+                  if (listedAge > 0 && hardMax > 0 && listedAge > hardMax) {
+                    continue; // hard drop stale
+                  }
                   if (age <= maxAge) { gated.push(it); continue; }
                   if (age <= priceDropMax) {
                     try { it.__priceDrop = true; } catch {}
@@ -143,7 +152,20 @@ export const runSearch = async (client, channel, opts = {}) => {
                   warnedMissing.add(channel.channelId);
                 }
               } else {
-                await postArticles(articles, dest, channel.channelName);
+                // Apply hard freshness gate for parent as well
+                const now = Date.now();
+                const stH2 = ruleState.get(channel.channelName);
+                const hardMax = (stH2?.backfillOnUntil && now < stH2.backfillOnUntil)
+                  ? Number(process.env.BACKFILL_MAX_AGE_MS || 120000)
+                  : Number(process.env.MAX_AGE_MS || 45000);
+                const fresh = [];
+                for (const it of articles) {
+                  const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || Number(it.createdAt || 0) || 0;
+                  const listedAge = createdMs ? (now - createdMs) : 0;
+                  if (hardMax > 0 && listedAge > hardMax) continue;
+                  fresh.push(it);
+                }
+                if (fresh.length) await postArticles(fresh, dest, channel.channelName);
                 articles.forEach(article => {
                   const key = dedupeKey(channel.channelName, article.id);
                   processedStore.set(key, Date.now(), { ttl: ttlMs });
@@ -215,10 +237,12 @@ function buildFamilies(mySearches) {
   let families = [];
   try {
     if (String(process.env.FANOUT_MODE || '1') === '1') {
+      const configFamilies = loadFamiliesFromConfig(mySearches);
       const explicit = (process.env.FANOUT_PARENT_RULE && process.env.FANOUT_CHILD_RULES)
         ? buildExplicitFamily(mySearches, process.env.FANOUT_PARENT_RULE, process.env.FANOUT_CHILD_RULES)
         : null;
-      if (explicit && explicit.length) families = explicit;
+      if (configFamilies && configFamilies.length) families = configFamilies;
+      else if (explicit && explicit.length) families = explicit;
       else if (String(process.env.FANOUT_AUTO_GROUP || '1') === '1') families = buildParentGroups(mySearches);
     }
   } catch {}

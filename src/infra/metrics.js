@@ -71,6 +71,10 @@ export const metrics = {
   post_age_ms_histogram: new LabeledGauge('post_age_ms_histogram', ['channel']),
   parent_child_drift_ms_histogram: new LabeledGauge('parent_child_drift_ms_histogram', ['family']),
   proxy_latency_ewma_ms: new LabeledGauge('proxy_latency_ewma_ms', ['proxy']),
+  // p95 diagnostics
+  queue_age_ms_p95: new LabeledGauge('queue_age_ms_p95', ['channel']),
+  first_age_ms_p95: new LabeledGauge('first_age_ms_p95', ['rule']),
+  proxy_fetch_ms_p95: new LabeledGauge('proxy_fetch_ms_p95', ['proxy']),
 };
 
 export function serializeMetrics() {
@@ -143,5 +147,12 @@ export function serializeMetrics() {
   for (const e of metrics.parent_child_drift_ms_histogram.entries()) out.push(`parent_child_drift_ms_histogram{family="${e.labels.family}"} ${e.value}`);
   lineHelpType('proxy_latency_ewma_ms', 'Per-proxy EWMA latency (ms)', 'gauge');
   for (const e of metrics.proxy_latency_ewma_ms.entries()) out.push(`proxy_latency_ewma_ms{proxy="${e.labels.proxy}"} ${e.value}`);
+  // p95 diagnostics
+  lineHelpType('queue_age_ms_p95', 'Queue age p95 (ms) per channel', 'gauge');
+  for (const e of metrics.queue_age_ms_p95.entries()) out.push(`queue_age_ms_p95{channel="${e.labels.channel}"} ${e.value}`);
+  lineHelpType('first_age_ms_p95', 'First age (listed->discovered) p95 per rule', 'gauge');
+  for (const e of metrics.first_age_ms_p95.entries()) out.push(`first_age_ms_p95{rule="${e.labels.rule}"} ${e.value}`);
+  lineHelpType('proxy_fetch_ms_p95', 'Per-proxy fetch latency p95 (ms)', 'gauge');
+  for (const e of metrics.proxy_fetch_ms_p95.entries()) out.push(`proxy_fetch_ms_p95{proxy="${e.labels.proxy}"} ${e.value}`);
   return out.join('\n');
 }

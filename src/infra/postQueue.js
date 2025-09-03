@@ -55,9 +55,13 @@ function flushChannel(id) {
     (Number(b.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) ||
     (b.discoveredAt - a.discoveredAt)
   );
-  // Backlog-aware Flushgröße: min( max(3, ceil(queue/10)), 12 )
+  // Backlog-aware Flushgröße: min( max(POST_BURST_MIN, ceil(queue/10)), POST_BURST_MAX )
   const totalBacklog = eligible.length + st.buf.length;
-  const dyn = Math.min(12, Math.max(3, Math.ceil(totalBacklog / 10)));
+  const BURST_MIN = Math.max(1, Number(process.env.POST_BURST_MIN || 3));
+  const BURST_MAX = Math.max(BURST_MIN, Number(process.env.POST_BURST_MAX || 30));
+  let dyn = Math.max(BURST_MIN, Math.ceil(totalBacklog / 10));
+  if (totalBacklog > 50) dyn = Math.min(BURST_MAX, dyn + 10); // boost when backlog high
+  dyn = Math.min(BURST_MAX, dyn);
   const slice = eligible.slice(0, dyn);
   const keep = eligible.slice(dyn);
   // Nicht geflushedes zurück in Buffer legen
@@ -183,6 +187,7 @@ async function doSend(job, bucket) {
     }
     const latency = Date.now() - (Number(job.discoveredAt) || now);
     recordPostLatency(latency);
+    try { recordQueueAge(job?.channel?.id, latency); } catch {}
     try { metrics.post_age_ms_histogram.set({ channel: String(job?.channel?.id || '') }, Math.max(0, now - Number(job.createdAt || now))); } catch {}
     try { metrics.discord_cooldown_active.set(0); } catch {}
     return res;
@@ -256,5 +261,25 @@ setInterval(() => {
     }
     // apply
     postLimiter.updateSettings({ reservoir: currentQps, reservoirRefreshAmount: currentQps });
+  } catch {}
+}, 60 * 1000);
+
+// Per-channel queue age p95 (discoveredAt -> send)
+const qAgeByChan = new Map(); // channelId -> number[]
+function recordQueueAge(channelId, ageMs) {
+  if (!channelId) return;
+  let arr = qAgeByChan.get(channelId);
+  if (!arr) { arr = []; qAgeByChan.set(channelId, arr); }
+  arr.push(ageMs);
+  if (arr.length > 300) arr.shift();
+}
+setInterval(() => {
+  try {
+    for (const [cid, arr] of qAgeByChan.entries()) {
+      if (!arr.length) continue;
+      const a = arr.slice().sort((x,y)=>x-y);
+      const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+      metrics.queue_age_ms_p95.set({ channel: String(cid) }, p95);
+    }
   } catch {}
 }, 60 * 1000);

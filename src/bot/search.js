@@ -11,6 +11,18 @@ const d = (...args) => { if (DEBUG_POLL || String(process.env.LOG_LEVEL||'').toL
 const trace = (...a) => { if (TRACE) console.log('[trace]', ...a); };
 const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
 const recentMs = RECENT_MAX_MIN * 60 * 1000;
+const firstAgeByRule = new Map(); // rule -> number[]
+function recordFirstAge(rule, ms) {
+  try {
+    let arr = firstAgeByRule.get(rule);
+    if (!arr) { arr = []; firstAgeByRule.set(rule, arr); }
+    arr.push(ms);
+    if (arr.length > 300) arr.shift();
+    const a = arr.slice().sort((x,y)=>x-y);
+    const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+    metrics.first_age_ms_p95?.set({ rule: String(rule) }, p95);
+  } catch {}
+}
 
 // Retry with exponential backoff
 async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
@@ -132,6 +144,13 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
               // annotate discovery time for posting/metrics
               const tdisc = Date.now();
               filtered.forEach(it => { try { it.discoveredAt = tdisc; } catch {} });
+              // record first-age (listed->discovered) samples
+              try {
+                for (const it of filtered) {
+                  const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                  if (createdMs) recordFirstAge(channel.channelName, Math.max(0, tdisc - createdMs));
+                }
+              } catch {}
               const dedupeSkipped = items.length - filtered.length;
               trace('filter', { rule: channel.channelName, page, new_count: filtered.length, skipped_dedupe: Math.max(0, dedupeSkipped) });
               return filtered;

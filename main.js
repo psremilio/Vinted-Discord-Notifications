@@ -47,6 +47,13 @@ try {
   console.log('[acceptance] no_token_skips_rate_60s ≈ 0');
 } catch {}
 
+// Warn if cross-rule dedupe is enabled (can break fanout across channels)
+try {
+  if (String(process.env.CROSS_RULE_DEDUP || '0') === '1' || String(process.env.DEDUPE_SCOPE || '').toLowerCase() === 'global') {
+    console.warn('[warn] CROSS_RULE_DEDUP/DEDUP_SCOPE=global aktiviert — das kann Fanout in Unterkanälen unterdrücken. Empfohlen: DEDUPE_SCOPE=per_rule');
+  }
+} catch {}
+
 // Mini HTTP keepalive + health endpoint so process never idles out
 const PORT = Number(process.env.PORT || 8080);
 try {

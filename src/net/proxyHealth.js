@@ -271,6 +271,18 @@ export function markBadInPool(p) {
   try { healthEvents.emit('cooldown', p); } catch {}
 }
 
+// Quarantine a proxy for a specific window (ms) without increasing fail counts aggressively.
+export function quarantineProxy(p, windowMs = 15 * 60 * 1000) {
+  if (!p) return;
+  const st = healthyMap.get(p) || {};
+  const until = Date.now() + Math.max(60_000, Number(windowMs || 0));
+  cooldown.set(p, until);
+  st.cooldownUntil = until;
+  st.score = Math.max(-5, (st.score || 0) - 1);
+  healthyMap.set(p, st);
+  try { healthEvents.emit('cooldown', p); } catch {}
+}
+
 // Heartbeat for observability
 let hbTimer = null;
 export function startHeartbeat() {

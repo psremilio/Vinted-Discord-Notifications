@@ -206,6 +206,7 @@ export async function get(url, config = {}) {
 
 // Low-level fetch via a specific proxy, with latency measurement and EWMA tracking
 const ewmaByProxy = new Map(); // proxy -> { value, alpha }
+const latSamplesByProxy = new Map(); // proxy -> number[]
 export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 4000)) {
   const client = createClient(proxy);
   await bootstrapSession(client);
@@ -229,6 +230,13 @@ export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number
     s.value = s.alpha * latency + (1 - s.alpha) * (s.value || latency);
     ewmaByProxy.set(proxy, s);
     if (metrics?.proxy_latency_ewma_ms) metrics.proxy_latency_ewma_ms.set({ proxy }, Math.round(s.value));
+    let arr = latSamplesByProxy.get(proxy);
+    if (!arr) { arr = []; latSamplesByProxy.set(proxy, arr); }
+    arr.push(latency);
+    if (arr.length > 300) arr.shift();
+    const a = arr.slice().sort((x,y)=>x-y);
+    const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+    metrics.proxy_fetch_ms_p95?.set({ proxy }, p95);
   } catch {}
   return { res, latency };
 }
@@ -260,7 +268,8 @@ export async function fetchRule(ruleId, url, opts = {}) {
     return { skipped: true };
   }
   const buckets = getBuckets(proxy, rateCtl);
-  if (!buckets || !buckets.main.take(1)) {
+  const DISABLE_RES = String(process.env.SEARCH_DISABLE_RESERVOIR || '0') === '1';
+  if (!buckets || (!DISABLE_RES && !buckets.main.take(1))) {
     metrics.fetch_skipped_total.inc();
     try { metrics.no_token_skips_total?.inc({ rule: String(ruleId) }); } catch {}
     rateCtl.observe(proxy, { skipped: true });
@@ -271,6 +280,15 @@ export async function fetchRule(ruleId, url, opts = {}) {
   try {
     const { res, latency } = await doFetchWithProxy(proxy, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
     const code = Number(res?.status || 0);
+    // Slow-proxy quarantine
+    try {
+      const budget = Number(process.env.LATENCY_BUDGET_MS || 2000) * 3;
+      if (latency > budget) {
+        const win = Number(process.env.SLOW_PROXY_WINDOW_MS || 900000);
+        quarantineProxy?.(proxy, win);
+        if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] quarantine proxy=${proxy} ms=${latency}`);
+      }
+    } catch {}
     if (code === 429 || code === 403) {
       // treat as fail for controller, but return softFail path below
       rateCtl.observe(proxy, { ok: false, code, latency });
