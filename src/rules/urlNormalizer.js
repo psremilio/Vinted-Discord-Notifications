@@ -65,6 +65,44 @@ export function buildFamilyKey(rawUrl) {
   } catch { return String(rawUrl || ''); }
 }
 
+// Canonicalize a Vinted search URL by normalizing parameter order and array values.
+// Keeps all parameters (does not strip) but sorts arrays and keys for deterministic storage.
+export function canonicalizeUrl(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || ''));
+    const params = new URLSearchParams(u.search);
+    const norm = {};
+    for (const [k, v] of params.entries()) {
+      if (ARRAY_KEYS.has(k)) {
+        norm[k] = norm[k] || [];
+        norm[k].push(v);
+      } else {
+        // last write wins for non-array keys
+        norm[k] = String(v || '');
+      }
+    }
+    for (const k of Object.keys(norm)) {
+      if (ARRAY_KEYS.has(k)) norm[k] = normalizeArray(norm[k]);
+    }
+    const keys = Object.keys(norm).sort();
+    const parts = [];
+    for (const k of keys) {
+      const v = norm[k];
+      if (Array.isArray(v)) {
+        for (const it of v) parts.push([k, it]);
+      } else {
+        parts.push([k, v]);
+      }
+    }
+    const sp = new URLSearchParams();
+    for (const [k, v] of parts) sp.append(k, v);
+    u.search = sp.toString();
+    return u.toString();
+  } catch {
+    return String(rawUrl || '');
+  }
+}
+
 // Extract rule filters for fanout matching
 export function parseRuleFilters(rawUrl) {
   const u = new URL(String(rawUrl || ''));

@@ -24,7 +24,9 @@ export function buildParentGroups(rules) {
   const groupsByKey = new Map();
   for (const r of (rules || [])) {
     try {
-      const autoFamily = String(process.env.FANOUT_AUTO_GROUP || '1') === '1';
+      const strat = String(process.env.PARENTING_STRATEGY || 'exact_url');
+      // Back-compat: allow FANOUT_AUTO_GROUP=0 to force exact_url behavior
+      const autoFamily = (strat !== 'exact_url') && (String(process.env.FANOUT_AUTO_GROUP || '1') === '1');
       const raw = r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link;
       const parentKey = buildParentKey(raw);
       const key = autoFamily ? buildFamilyKey(raw) : parentKey;

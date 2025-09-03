@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { addSearch } from '../run.js';
+import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
 import { ensureWebhooksForChannel } from '../infra/webhooksManager.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -62,7 +63,7 @@ export const execute = async (interaction) => {
         }
     }
 
-    const url = interaction.options.getString('url');
+    const urlRaw = interaction.options.getString('url');
     const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
     // Normalize and clamp frequency to avoid too aggressive polling
     const freqRaw = interaction.options.getString('frequency');
@@ -90,13 +91,15 @@ export const execute = async (interaction) => {
     } catch {}
 
     // validate the URL
-    const validation = validateUrl(url);
+    const validation = validateUrl(urlRaw);
     if (validation !== true) {
         await safeEdit(String(validation));
         return;
     }
 
     try {
+        const canonicalUrl = canonicalizeUrl(urlRaw);
+        const canonicalKey = buildParentKey(canonicalUrl);
         // optionally create webhooks for this channel
         const WANT_AUTO = (interaction.options.getBoolean('auto_webhooks') ?? (String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1'));
         let createdHooks = 0;
@@ -111,20 +114,47 @@ export const execute = async (interaction) => {
 
         //register the search into the json file
         const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-
-        if (searches.some(search => search.channelName === name)) {
-            await safeEdit('A search with the name ' + name + ' already exists.');
-            return;
-        }
-
-        const search = {
-            "channelId": channel_id,
-            "channelName": name,
-            "url": url,
-            "frequency": Number(frequency),
-            "titleBlacklist": banned_keywords
+        const findByKey = (list, key) => {
+            if (!Array.isArray(list)) return -1;
+            for (let i = 0; i < list.length; i++) {
+                const s = list[i] || {};
+                const k = s.canonicalKey || buildParentKey(String(s.url || ''));
+                if (k === key) return i;
+            }
+            return -1;
         };
-        searches.push(search);
+        const idxByKey = findByKey(searches, canonicalKey);
+        const idxByName = searches.findIndex(s => String(s.channelName) === String(name));
+
+        const next = {
+            channelId: channel_id,
+            channelName: name,
+            url: canonicalUrl,
+            frequency: Number(frequency),
+            titleBlacklist: banned_keywords,
+            canonicalKey,
+        };
+
+        let op = 'created';
+        if (idxByKey !== -1) {
+            // Update existing by canonical key (idempotent)
+            const prev = searches[idxByKey] || {};
+            // Avoid name collision if another search holds the desired name
+            if (idxByName !== -1 && idxByName !== idxByKey) {
+                // keep previous name, update rest
+                next.channelName = prev.channelName;
+            }
+            searches[idxByKey] = { ...prev, ...next };
+            op = 'updated';
+        } else if (idxByName !== -1) {
+            // Update existing by name (backward compatibility)
+            const prev = searches[idxByName] || {};
+            searches[idxByName] = { ...prev, ...next };
+            op = 'updated';
+        } else {
+            searches.push(next);
+            op = 'created';
+        }
 
         try{
             fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
@@ -140,7 +170,7 @@ export const execute = async (interaction) => {
                 try {
                     if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
                     else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
-                    else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, search);
+                    else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, next);
                 } catch {}
             }, 0);
         } catch (err) {
@@ -148,15 +178,18 @@ export const execute = async (interaction) => {
         }
 
         const embed = new EmbedBuilder()
-            .setTitle("Search saved!")
-            .setDescription("Monitoring for " + name + " is now live!")
+            .setTitle(op === 'created' ? 'Search created' : 'Search updated')
+            .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
             .setColor(0x00FF00);
 
         if (createdHooks) {
             embed.addFields({ name: 'Webhooks', value: `Aktiviert (${createdHooks})`, inline: true });
         }
+        embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
 
         await safeEdit({ embeds: [embed]});
+        try { console.log('[cmd.result] /new_search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
+        try { console.log('[cmd.latency] /new_search exec_ms=%d', Date.now() - t0); } catch {}
 
     } catch (error) {
         console.error('Error starting monitoring:', error);

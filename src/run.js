@@ -267,13 +267,15 @@ function buildFamilies(mySearches) {
   let families = [];
   try {
     if (String(process.env.FANOUT_MODE || '1') === '1') {
-      const configFamilies = loadFamiliesFromConfig(mySearches);
-      const explicit = (process.env.FANOUT_PARENT_RULE && process.env.FANOUT_CHILD_RULES)
+      const strat = String(process.env.PARENTING_STRATEGY || 'exact_url');
+      const allowMismatch = String(process.env.PARENTING_ALLOW_EXPLICIT_MISMATCH || '0') === '1' || strat !== 'exact_url';
+      const configFamilies = allowMismatch ? loadFamiliesFromConfig(mySearches) : [];
+      const explicit = allowMismatch && (process.env.FANOUT_PARENT_RULE && process.env.FANOUT_CHILD_RULES)
         ? buildExplicitFamily(mySearches, process.env.FANOUT_PARENT_RULE, process.env.FANOUT_CHILD_RULES)
         : null;
       if (configFamilies && configFamilies.length) families = configFamilies;
       else if (explicit && explicit.length) families = explicit;
-      else if (String(process.env.FANOUT_AUTO_GROUP || '1') === '1') families = buildParentGroups(mySearches);
+      else if (String(process.env.FANOUT_AUTO_GROUP || (strat === 'exact_url' ? '0' : '1')) === '1') families = buildParentGroups(mySearches);
     }
   } catch {}
   // Fallback: name-based prefixes, if no families built
@@ -297,10 +299,10 @@ function buildFamilies(mySearches) {
       }
     }
   } catch {}
-  if (FANOUT_DEBUG) {
+  if (FANOUT_DEBUG || String(process.env.RULES_DUMP || '1') === '1') {
     try {
       const famCount = families?.length || 0;
-      ll('[fanout.family]', 'families=', famCount);
+      console.log('[fanout.family] families_loaded=%d', famCount);
       for (const fam of families || []) {
         const fk = buildFamilyKey(fam.parent.url);
         const pk = buildParentKey(fam.parent.url);
@@ -342,6 +344,7 @@ export function rebuildFromList(client, list) {
   const newMap = new Map();
   for (const r of toSchedule) newMap.set(r.channelName, r);
   try { metrics.scheduler_reload_events_total.inc(); } catch {}
+  try { console.log('[rebuild] applying diff… newRules=%d', newMap.size); } catch {}
   // Update or add
   for (const [name, rule] of newMap.entries()) {
     if (activeSearches.has(name)) {
@@ -375,7 +378,12 @@ export async function incrementalRebuildFromDisk(client) {
     const fsmod = await import('fs');
     const path = await import('path');
     const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
-    setTimeout(() => { try { rebuildFromList(client, searches); } catch {} }, 0);
+    setTimeout(() => {
+      try {
+        console.log('[rebuild] mode=incremental');
+        rebuildFromList(client, searches);
+      } catch {}
+    }, 0);
   } catch (e) {
     console.warn('[schedule] incrementalRebuildFromDisk failed:', e?.message || e);
   }

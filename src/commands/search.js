@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { addSearch } from '../run.js';
+import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,7 +49,7 @@ export const execute = async (interaction) => {
     try { await interaction.deferReply({ ephemeral: true }); } catch {}
   }
 
-  const url = interaction.options.getString('url');
+  const urlRaw = interaction.options.getString('url');
   const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(s => s.trim()) : [];
   let frequency = Number.parseInt(interaction.options.getString('frequency') ?? '10', 10);
   if (!Number.isFinite(frequency)) frequency = 10;
@@ -72,7 +73,7 @@ export const execute = async (interaction) => {
     }
   } catch {}
 
-  const validation = validateUrl(url);
+  const validation = validateUrl(urlRaw);
   if (validation !== true) {
     await interaction.followUp({ content: validation });
     return;
@@ -80,18 +81,40 @@ export const execute = async (interaction) => {
 
   try {
     const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (searches.some(s => s.channelName === name)) {
-      await interaction.followUp({ content: 'A search with the name ' + name + ' already exists.' });
-      return;
-    }
-    const search = {
+    const canonicalUrl = canonicalizeUrl(urlRaw);
+    const canonicalKey = buildParentKey(canonicalUrl);
+    const findByKey = (list, key) => {
+      if (!Array.isArray(list)) return -1;
+      for (let i = 0; i < list.length; i++) {
+        const s = list[i] || {};
+        const k = s.canonicalKey || buildParentKey(String(s.url || ''));
+        if (k === key) return i;
+      }
+      return -1;
+    };
+    const idxByKey = findByKey(searches, canonicalKey);
+    const idxByName = searches.findIndex(s => String(s.channelName) === String(name));
+    const next = {
       channelId: channel_id,
       channelName: name,
-      url,
+      url: canonicalUrl,
       frequency: Number(frequency),
       titleBlacklist: banned_keywords,
+      canonicalKey,
     };
-    searches.push(search);
+    let op = 'created';
+    if (idxByKey !== -1) {
+      const prev = searches[idxByKey] || {};
+      if (idxByName !== -1 && idxByName !== idxByKey) next.channelName = prev.channelName;
+      searches[idxByKey] = { ...prev, ...next };
+      op = 'updated';
+    } else if (idxByName !== -1) {
+      const prev = searches[idxByName] || {};
+      searches[idxByName] = { ...prev, ...next };
+      op = 'updated';
+    } else {
+      searches.push(next);
+    }
     try {
       fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
     } catch (e) {
@@ -99,19 +122,28 @@ export const execute = async (interaction) => {
       await interaction.followUp({ content: 'There was an error starting the monitoring.' });
     }
     try {
-      addSearch(interaction.client, search);
+      // Prefer incremental rebuild so updates apply immediately
+      const mod = await import('../run.js');
+      setTimeout(() => {
+        try {
+          if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
+          else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
+          else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, next);
+        } catch {}
+      }, 0);
     } catch (err) {
-      console.error('Live scheduling failed (alias):', err);
+      console.error('Live scheduling rebuild failed (alias):', err);
     }
 
     const embed = new EmbedBuilder()
-      .setTitle('Search saved!')
-      .setDescription('Monitoring for ' + name + ' is now live!')
+      .setTitle(op === 'created' ? 'Search created' : 'Search updated')
+      .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
       .setColor(0x00FF00);
+    embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
     await interaction.followUp({ embeds: [embed] });
+    try { console.log('[cmd.result] /search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
   } catch (err) {
     console.error('Error starting monitoring (alias):', err);
     await interaction.followUp({ content: 'There was an error starting the monitoring.' });
   }
 };
-
