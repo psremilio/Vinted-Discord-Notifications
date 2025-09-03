@@ -20,12 +20,11 @@ const loadCommands = async () => {
 //register commands with Discord to (refreshes them if necessary)
 export const registerCommands = async (client) => {
     await loadCommands();
-
     const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
-    const guildIds = (process.env.COMMAND_GUILD_IDS || process.env.COMMAND_GUILD_ID || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
+    // Prefer explicit guild IDs; allow forced single guild via COMMANDS_FORCE_GUILD_ID
+    let guildIds = (process.env.COMMAND_GUILD_IDS || process.env.COMMAND_GUILD_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!guildIds.length && process.env.COMMANDS_FORCE_GUILD_ID) guildIds = [String(process.env.COMMANDS_FORCE_GUILD_ID)];
+    let registered = 0;
     try {
         if (guildIds.length > 0) {
             console.log(`[cmd.sync] registering ${commands.length} command(s) for guild(s): ${guildIds.join(', ')}`);
@@ -34,9 +33,10 @@ export const registerCommands = async (client) => {
                     Routes.applicationGuildCommands(client.user.id, gid),
                     { body: commands }
                 );
+                registered += commands.length;
+                console.log(`[cmd.register] guild=${gid} count=${commands.length}`);
             }
             console.log('[cmd.sync] guild scope ok');
-            // Always clear global commands when guild-scoped is configured
             try {
                 console.log('[cmd.sync] clearing global commands (guild IDs present)…');
                 await rest.put(
@@ -53,37 +53,39 @@ export const registerCommands = async (client) => {
                 Routes.applicationCommands(client.user.id),
                 { body: commands }
             );
+            registered = commands.length;
             console.log('[cmd.sync] global scope ok');
         }
+        try { console.log('[commands.ready]', 'guilds=', guildIds.length || 'global', 'registered=', registered, 'names=', commands.map(c=>c.name).join(',')); } catch {}
     } catch (error) {
         console.error('[cmd.sync] error reloading commands:', error);
     }
+    return { guilds: guildIds, registered };
 }
 
 //handle command interactions
 export const handleCommands = async (interaction, mySearches) => {
-    console.log(`[cmd.interaction] ${interaction.commandName}`);
+    try { console.log('[cmd.interaction]', 'name=', interaction.commandName, 'user=', interaction.user?.id, 'guild=', interaction.guildId); } catch {}
     try {
-        // Ack ASAP before any heavy work (prefer flags=Ephemeral; fallback to ephemeral)
+        // Ack ASAP before any heavy work (flags-based)
         if (!interaction.deferred && !interaction.replied) {
             try { await interaction.deferReply({ flags: 1 << 6 }); }
-            catch (e1) { try { await interaction.deferReply({ ephemeral: true }); }
-            catch (e2) { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} } }
+            catch (e1) { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} }
         }
         const name = interaction.commandName;
 
         // Authorization: Admins always allowed. Others must be in allowlist.
         if (name !== 'bot_roles') {
             if (!isAuthorized(interaction)) {
-                try { await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', flags: 1 << 6 }); } catch {}
-                return;
-            }
+            try { await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', flags: 1 << 6 }); } catch {}
+            return;
+        }
         } else {
             // bot_roles itself is admin-only
             if (!isAdmin(interaction)) {
-                try { await interaction.followUp({ content: 'Nur Admins dürfen diesen Befehl verwenden.', flags: 1 << 6 }); } catch {}
-                return;
-            }
+            try { await interaction.followUp({ content: 'Nur Admins dürfen diesen Befehl verwenden.', flags: 1 << 6 }); } catch {}
+            return;
+        }
         }
         let module;
         const attempts = [
@@ -112,7 +114,10 @@ export const handleCommands = async (interaction, mySearches) => {
             return;
         }
         // Execute command; ensure any long work runs after ack
-        setTimeout(() => { module.execute(interaction, mySearches).catch(err => console.error('\nError handling command (async):', err)); }, 0);
+        setTimeout(() => {
+          try { console.log('[cmd.enqueued]', 'name=', name); } catch {}
+          module.execute(interaction, mySearches).catch(err => console.error('\nError handling command (async):', err));
+        }, 0);
     } catch (error) {
         console.error('\nError handling command:', error);
         try {

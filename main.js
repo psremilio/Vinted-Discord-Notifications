@@ -52,6 +52,7 @@ try {
   if (String(process.env.CROSS_RULE_DEDUP || '0') === '1' || String(process.env.DEDUPE_SCOPE || '').toLowerCase() === 'global') {
     console.warn('[warn] CROSS_RULE_DEDUP/DEDUP_SCOPE=global aktiviert — das kann Fanout in Unterkanälen unterdrücken. Empfohlen: DEDUPE_SCOPE=per_rule');
   }
+  console.log('[cmd.reply.mode]=flags');
 } catch {}
 
 // Mini HTTP keepalive + health endpoint so process never idles out
@@ -128,18 +129,28 @@ async function startMonitorsOnce(where = 'unknown'){
   try { startHeartbeat(); } catch {}
 }
 
+const IS_COMMANDS_LEADER = (String(process.env.COMMANDS_ROLE || '').toLowerCase() === 'leader') && (String(process.env.COMMANDS_DISABLE || '0') !== '1');
+
 client.on('ready',async()=>{
   clientReady = true;
   console.log(`Logged in as ${client.user.tag}!`);
   try { state.watchers = Array.isArray(mySearches) ? mySearches.length : 0; } catch {}
   setTimeout(() => { sendStartupPing().catch(()=>{}); }, 1000);
+  // Commands registration (Singleton)
+  if (IS_COMMANDS_LEADER) {
+    try { const res = await registerCommands(client); console.log('[commands.ready]', 'leader=1', 'guilds=', (res?.guilds?.length||'global'), 'registered=', res?.registered || 0); } catch (e) { console.warn('[commands.init] failed:', e?.message || e); }
+  } else {
+    console.log('[commands.disabled]', 'role=', process.env.COMMANDS_ROLE || '-', 'disable=', process.env.COMMANDS_DISABLE || '0');
+  }
   startMonitorsOnce('ready');
 });
-client.on('interactionCreate',interaction=>{
-  if (interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand()) {
-    handleCommands(interaction,mySearches);
-  }
-});
+if (IS_COMMANDS_LEADER) {
+  client.on('interactionCreate',interaction=>{
+    if (interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand()) {
+      handleCommands(interaction,mySearches);
+    }
+  });
+}
 
 (async function boot(){
   // Kick off proxy setup in parallel to avoid long pre-login stalls
@@ -211,6 +222,11 @@ function startStallDetector() {
     }
   }, 60 * 1000);
 }
+
+// Commands heartbeat (leader only)
+setInterval(() => {
+  try { metrics.commands_heartbeat.set(Date.now()); } catch {}
+}, 30 * 1000);
 
 async function sendStartupPing() {
   const chId = process.env.DISCORD_PING_CHANNEL_ID;

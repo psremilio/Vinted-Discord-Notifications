@@ -84,6 +84,9 @@ export const metrics = {
   proxy_fetch_ms_p95: new LabeledGauge('proxy_fetch_ms_p95', ['proxy']),
   // fanout mismatch counters
   fanout_skipped_by_mismatch_total: new LabeledCounter('fanout_skipped_by_mismatch_total', ['field']),
+  // commands
+  commands_heartbeat: new Gauge('commands_heartbeat'),
+  cmd_exec_ms_p95: new LabeledGauge('cmd_exec_ms_p95', ['command']),
   // scheduler
   scheduler_reload_events_total: new Counter('scheduler_reload_events_total'),
   scheduler_rules_total: new Gauge('scheduler_rules_total'),
@@ -194,5 +197,9 @@ export function serializeMetrics() {
   // per-route queue depth
   lineHelpType('route_queue_depth', 'Per-route queue depth by channel', 'gauge');
   for (const e of metrics.route_queue_depth.entries()) out.push(`route_queue_depth{channel="${e.labels.channel}"} ${e.value}`);
+  // commands
+  lineHelpType('commands_heartbeat', 'Commands worker heartbeat (epoch ms)', 'gauge'); out.push(`commands_heartbeat ${metrics.commands_heartbeat.get()}`);
+  lineHelpType('cmd_exec_ms_p95', 'Command exec p95 (ms) per command', 'gauge');
+  for (const e of metrics.cmd_exec_ms_p95.entries()) out.push(`cmd_exec_ms_p95{command="${e.labels.command}"} ${e.value}`);
   return out.join('\n');
 }

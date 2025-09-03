@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { addSearch } from '../run.js';
 import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
 import { ensureWebhooksForChannel } from '../infra/webhooksManager.js';
+import { metrics } from '../infra/metrics.js';
 import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,7 +61,7 @@ export const execute = async (interaction) => {
             if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
             return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
         } catch (e) {
-            try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true }); } catch {}
+            try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 }); } catch {}
         }
     }
 
@@ -109,6 +110,7 @@ export const execute = async (interaction) => {
         }
 
         enqueueMutation('new_search', async () => {
+          try { console.log('[cmd.enqueued.mutation]', 'name=', name, 'op=new_search'); } catch {}
           let op = 'created';
           const searches = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
           const findByKey = (list, key) => {
@@ -169,14 +171,24 @@ export const execute = async (interaction) => {
           }
 
           // Respond when done
-          const embed = new EmbedBuilder()
+        const exec = Date.now() - t0;
+        try {
+          const nameKey = '/new_search';
+          const k = nameKey;
+          const arr = (global.__cmd_exec_samples = global.__cmd_exec_samples || new Map());
+          let list = arr.get(k); if (!list) { list = []; arr.set(k, list); }
+          list.push(exec); if (list.length > 300) list.shift();
+          const a = list.slice().sort((x,y)=>x-y); const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+          metrics.cmd_exec_ms_p95?.set({ command: nameKey }, p95);
+        } catch {}
+        const embed = new EmbedBuilder()
             .setTitle(op === 'created' ? 'Search created' : 'Search updated')
             .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
             .setColor(0x00FF00);
-          embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
-          await safeEdit({ embeds: [embed]});
-          try { console.log('[cmd.result] /new_search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
-          try { console.log('[cmd.latency] /new_search exec_ms=%d', Date.now() - t0); } catch {}
+        embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
+        await safeEdit({ embeds: [embed]});
+        try { console.log('[cmd.result] /new_search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
+        try { console.log('[cmd.latency] /new_search exec_ms=%d', exec); } catch {}
         }, async (e) => {
           console.error('Error starting monitoring:', e);
           await safeEdit('There was an error starting the monitoring.');

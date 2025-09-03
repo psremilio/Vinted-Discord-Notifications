@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { buildParentKey } from '../rules/urlNormalizer.js';
 import { tombstoneRule } from '../run.js';
 import { purgeChannelQueues } from '../infra/postQueue.js';
+import { metrics } from '../infra/metrics.js';
 import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +53,7 @@ export const execute = async (interaction) => {
           try { await safeEdit(`⏳ Eingereiht… (${queued} vor dir)`); } catch {}
         }
         enqueueMutation('delete_search', async () => {
+          try { console.log('[cmd.enqueued.mutation]', 'name=', name || '(by_url)', 'op=delete_search'); } catch {}
           let beforeRules = null, afterRules = null;
           try { const mod = await import('../run.js'); beforeRules = mod.activeSearches?.size ?? null; } catch {}
           const searches = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
@@ -88,8 +90,17 @@ export const execute = async (interaction) => {
             try { if (removed?.channelId) purgeChannelQueues(removed.channelId); } catch {}
             try { afterRules = mod.activeSearches?.size ?? null; } catch {}
           } catch {}
-          const tag = name ? `name=\`${name}\`` : (key ? `key=\`${key}\`` : '');
-          const commitMs = Date.now() - t0;
+        const tag = name ? `name=\`${name}\`` : (key ? `key=\`${key}\`` : '');
+        const commitMs = Date.now() - t0;
+        try {
+          const nameKey = '/delete_search';
+          const k = nameKey;
+          const arr = (global.__cmd_exec_samples = global.__cmd_exec_samples || new Map());
+          let list = arr.get(k); if (!list) { list = []; arr.set(k, list); }
+          list.push(commitMs); if (list.length > 300) list.shift();
+          const a = list.slice().sort((x,y)=>x-y); const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+          metrics.cmd_exec_ms_p95?.set({ command: nameKey }, p95);
+        } catch {}
           try { await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2)); } catch (e) { console.warn('[cmd] save after delete failed:', e?.message || e); }
           try { tombstoneRule(removedName, removed?.url); } catch {}
           try { const mod = await import('../run.js'); if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client); else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client); } catch (e) { console.warn('[cmd] rebuild after delete failed:', e?.message || e); }
