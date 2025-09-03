@@ -196,6 +196,57 @@ const addSearch = (client, search) => {
     activeSearches.set(search.channelName, true);
     try { metrics.rules_active.set(activeSearches.size); } catch {}
 };
+export { addSearch };
+
+function buildFamilies(mySearches) {
+  let families = [];
+  try {
+    if (String(process.env.FANOUT_MODE || '1') === '1') {
+      const explicit = (process.env.FANOUT_PARENT_RULE && process.env.FANOUT_CHILD_RULES)
+        ? buildExplicitFamily(mySearches, process.env.FANOUT_PARENT_RULE, process.env.FANOUT_CHILD_RULES)
+        : null;
+      if (explicit && explicit.length) families = explicit;
+      else if (String(process.env.FANOUT_AUTO_GROUP || '1') === '1') families = buildParentGroups(mySearches);
+    }
+  } catch {}
+  return families;
+}
+
+function computeScheduleList(mySearches) {
+  const families = buildFamilies(mySearches);
+  const parentNames = new Set();
+  for (const fam of (families || [])) {
+    const parent = fam.parent;
+    parent.children = fam.children || [];
+    parentNames.add(parent.channelName);
+  }
+  const toSchedule = [];
+  if (families?.length) {
+    toSchedule.push(...families.map(f => f.parent));
+    for (const r of (mySearches || [])) if (!parentNames.has(r.channelName)) toSchedule.push(r);
+  } else {
+    toSchedule.push(...(mySearches || []));
+  }
+  return toSchedule;
+}
+
+export function rebuildFromList(client, list) {
+  try { stopAll(); } catch {}
+  const toSchedule = computeScheduleList(list || []);
+  toSchedule.forEach((channel) => addSearch(client, channel));
+  edf.start();
+}
+
+export async function rebuildFromDisk(client) {
+  try {
+    const raw = await import('fs');
+    const path = (await import('path')).default;
+    const searches = JSON.parse(raw.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    rebuildFromList(client, searches);
+  } catch (e) {
+    console.warn('[schedule] rebuildFromDisk failed:', e?.message || e);
+  }
+}
 
 //init the article id set, then launch the simultaneous searches
 export const run = async (client, mySearches) => {
@@ -228,34 +279,8 @@ export const run = async (client, mySearches) => {
         }));
     } catch {}
 
-    // Parenting groups (fanout)
-    let families = [];
-    try {
-      if (String(process.env.FANOUT_MODE || '1') === '1') {
-        const explicit = (process.env.FANOUT_PARENT_RULE && process.env.FANOUT_CHILD_RULES)
-          ? buildExplicitFamily(mySearches, process.env.FANOUT_PARENT_RULE, process.env.FANOUT_CHILD_RULES)
-          : null;
-        if (explicit && explicit.length) families = explicit;
-        else if (String(process.env.FANOUT_AUTO_GROUP || '1') === '1') families = buildParentGroups(mySearches);
-      }
-    } catch {}
-
-    const parentNames = new Set();
-    for (const fam of (families || [])) {
-      const parent = fam.parent;
-      parent.children = fam.children || [];
-      parentNames.add(parent.channelName);
-    }
-    const toSchedule = [];
-    if (families?.length) {
-      toSchedule.push(...families.map(f => f.parent));
-      // Add any non-family rule as standalone
-      for (const r of (mySearches || [])) if (!parentNames.has(r.channelName)) toSchedule.push(r);
-    } else {
-      toSchedule.push(...(mySearches || []));
-    }
-
-    // Register rules into EDF then start
+    // Build families and schedule list
+    const toSchedule = computeScheduleList(mySearches);
     toSchedule.forEach((channel) => addSearch(client, channel));
     edf.start();
 

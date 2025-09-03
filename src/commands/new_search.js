@@ -148,11 +148,13 @@ export const execute = async (interaction) => {
             await safeEdit('There was an error starting the monitoring.');
         }
 
-        // schedule immediately using the in-memory scheduler
+        // Rebuild scheduling so parenting/fanout applies immediately
         try {
-            addSearch(interaction.client, search);
+            const mod = await import('../run.js');
+            if (typeof mod.rebuildFromDisk === 'function') await mod.rebuildFromDisk(interaction.client);
+            else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, search);
         } catch (err) {
-            console.error('Live scheduling failed:', err);
+            console.error('Live scheduling rebuild failed:', err);
         }
 
         const embed = new EmbedBuilder()

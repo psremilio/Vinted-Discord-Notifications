@@ -31,18 +31,14 @@ export const execute = async (interaction) => {
 
         await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
 
-        // Stop active polling job immediately if present (optional)
-        let stopped = false;
+        // Rebuild full scheduling to ensure families and jobs update immediately
         try {
             const mod = await import('../run.js');
-            if (typeof mod.removeJob === 'function') {
-                stopped = mod.removeJob(name);
-            }
-        } catch {}
-        if (stopped) {
-            await interaction.editReply({ content: `✅ Search \`${name}\` deleted and stopped immediately.` });
-        } else {
-            await interaction.editReply({ content: `✅ Search \`${name}\` deleted. It will stop after next restart (no running job found).` });
+            if (typeof mod.rebuildFromDisk === 'function') await mod.rebuildFromDisk(interaction.client);
+            await interaction.editReply({ content: `✅ Search \`${name}\` deleted and schedule rebuilt.` });
+        } catch (e) {
+            console.warn('[cmd] rebuild after delete failed:', e?.message || e);
+            await interaction.editReply({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)` });
         }
 
     } catch (error) {
