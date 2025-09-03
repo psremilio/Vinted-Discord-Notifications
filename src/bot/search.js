@@ -1,4 +1,4 @@
-import { fetchRule } from "../net/http.js";
+import { fetchRule, hedgedGet } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKey } from "../utils/dedupe.js";
 import { stats } from "../utils/stats.js";
@@ -69,7 +69,35 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
         try {
             const t0 = Date.now();
             markFetchAttempt();
-            const result = await fetchRule(channel.channelName, apiUrl.href, {
+            const USE_HEDGE = String(process.env.SEARCH_HEDGE || '0') === '1';
+            let result;
+            if (USE_HEDGE) {
+              // Hedged fetch across proxies for lower tail latency
+              const res = await hedgedGet(apiUrl.href, {
+                headers: {
+                  'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                  'Accept': 'application/json, text/plain, */*',
+                  'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+                  'Accept-Encoding': 'gzip, deflate, br',
+                  'DNT': '1',
+                  'Connection': 'keep-alive',
+                  'Referer': channel.url,
+                  'Origin': `https://${url.host}`,
+                  'Sec-Fetch-Dest': 'empty',
+                  'Sec-Fetch-Mode': 'cors',
+                  'Sec-Fetch-Site': 'same-origin',
+                  'Cache-Control': 'no-cache',
+                  'Pragma': 'no-cache',
+                  'X-Requested-With': 'XMLHttpRequest',
+                  'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                  'sec-ch-ua-mobile': '?0',
+                  'sec-ch-ua-platform': '"Windows"',
+                }
+              }, `https://${url.host}`);
+              result = { ok: res && res.status >= 200 && res.status < 300, res };
+            } else {
+              result = await fetchRule(channel.channelName, apiUrl.href, {
                 // emulate a real browser request so Cloudflare is less likely to block us
                 headers: {
                   'User-Agent':
@@ -91,7 +119,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                   'sec-ch-ua-mobile': '?0',
                   'sec-ch-ua-platform': '"Windows"',
                 },
-            });
+              });
+            }
             if (result?.skipped) {
               // token not available → skip this slot without error
               return [];

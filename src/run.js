@@ -115,6 +115,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                   ? Number(process.env.BACKFILL_MAX_AGE_MS || 120000)
                   : Number(process.env.MAX_AGE_MS || 45000);
                 const gated = [];
+                let dropStale = 0, dropGate = 0;
                 for (const it of matched) {
                   let first = now;
                   try { first = recordFirstMatch(childRule.channelName, it.id, now); } catch {}
@@ -124,15 +125,16 @@ export const runSearch = async (client, channel, opts = {}) => {
                   const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || Number(it.createdAt || 0) || 0;
                   const listedAge = createdMs ? (now - createdMs) : 0;
                   if (listedAge > 0 && hardMax > 0 && listedAge > hardMax) {
-                    continue; // hard drop stale
+                    dropStale++; continue; // hard drop stale
                   }
                   if (age <= maxAge) { gated.push(it); continue; }
                   if (age <= priceDropMax) {
                     try { it.__priceDrop = true; } catch {}
                     gated.push(it);
                     try { metrics.price_drop_posted_total?.inc({ rule: String(childRule.channelName) }); } catch {}
-                  }
+                  } else dropGate++;
                 }
+                if (FANOUT_DEBUG) ll('[fanout.child.result]', 'child=', childRule.channelName, 'post=', gated.length, 'drop_stale=', dropStale, 'drop_gate=', dropGate);
                 if (!gated.length) continue;
                 await postArticles(gated, dest, childRule.channelName);
                 // mark seen for child rule after post
