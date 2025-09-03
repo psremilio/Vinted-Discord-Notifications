@@ -37,11 +37,10 @@ export const data = new SlashCommandBuilder()
 const validateUrl = (url) => {
     try {
         const u = new URL(url);
-        // Accept any vinted.* host and any path containing "/catalog"
+        // Accept any vinted.* host and require at least one query parameter
         const isVinted = /(^|\.)vinted\./i.test(u.host);
-        const hasCatalog = /\/catalog(\/|$)/i.test(u.pathname);
         const hasParams = u.search && u.searchParams.toString().length > 0;
-        if (!isVinted || !hasCatalog) return 'invalid-url-with-example';
+        if (!isVinted) return 'invalid-url';
         if (!hasParams) return 'must-have-query-params';
         return true;
     } catch (error) {
