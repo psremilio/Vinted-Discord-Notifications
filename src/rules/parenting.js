@@ -1,4 +1,6 @@
 import { buildParentKey, buildFamilyKey, parseRuleFilters } from './urlNormalizer.js';
+const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
+const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
 
 function scoreBroadness(filters) {
   // Lower score = broader rule. Penalize constraints presence, but prefer
@@ -29,6 +31,7 @@ export function buildParentGroups(rules) {
       if (!groupsByKey.has(key)) groupsByKey.set(key, []);
       const filters = parseRuleFilters(r.url || r.channelUrl || r.ruleUrl || r.link);
       groupsByKey.get(key).push({ rule: r, filters });
+      ll('[fanout.key]', r.channelName, '→', key);
     } catch {}
   }
 
@@ -46,6 +49,7 @@ export function buildParentGroups(rules) {
     const parent = arr[parentIdx];
     const children = arr.filter((_, i) => i !== parentIdx);
     families.push({ parent: parent.rule, parentFilters: parent.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
+    ll('[fanout.pick]', 'parent=', parent.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
   }
   return families;
 }

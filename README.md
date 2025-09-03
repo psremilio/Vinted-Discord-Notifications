@@ -127,3 +127,10 @@ Defaults for key flags:
 - REORDER_WINDOW_MS=8000
 - WEBHOOKS_PER_CHANNEL=4
 - DISCORD_QPS_MIN=60, DISCORD_QPS_MAX=120, DISCORD_QPS_INC=8, DISCORD_QPS_DEC_FACTOR=0.92
+
+Diagnostics:
+- FANOUT_DEBUG=1 (or LOG_FANOUT=1) prints detailed family/fanout logs:
+  - [fanout.key] normalized family key per rule
+  - [fanout.pick] chosen parent and children in each family
+  - [fanout.family/detail/standalone] family overview and non-family rules
+  - [fanout.eval/child] per-fetch match counts per child

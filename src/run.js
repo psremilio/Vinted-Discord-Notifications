@@ -9,7 +9,7 @@ import { metrics } from "./infra/metrics.js";
 import { EdfScheduler } from "./schedule/edf.js";
 import { tierOf } from "./schedule/tiers.js";
 import { buildParentGroups, buildExplicitFamily } from "./rules/parenting.js";
-import { itemMatchesFilters, parseRuleFilters } from "./rules/urlNormalizer.js";
+import { itemMatchesFilters, parseRuleFilters, buildFamilyKey } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
@@ -25,6 +25,8 @@ const NO_JITTER = String(process.env.POLL_NO_JITTER || '0') === '1';
 // Local cache for resolved channels to avoid repeated fetches and invalid targets
 const channelCache = new Map();
 const warnedMissing = new Set();
+const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
+const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
 
 async function getChannelById(client, id) {
     if (!id) return null;
@@ -75,6 +77,12 @@ export const runSearch = async (client, channel, opts = {}) => {
         //if new articles are found post them
         if (articles && articles.length > 0) {
             console.log(`${channel.channelName} => +${articles.length}`);
+            if (FANOUT_DEBUG) {
+              try {
+                const childN = Array.isArray(channel.children) ? channel.children.length : 0;
+                ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'children=', childN);
+              } catch {}
+            }
             // Fanout mode: if children defined on the rule, evaluate and post into their channels
             if (Array.isArray(channel.children) && channel.children.length && String(process.env.FANOUT_MODE || '1') === '1') {
               for (const child of channel.children) {
@@ -83,6 +91,11 @@ export const runSearch = async (client, channel, opts = {}) => {
                 const matched = [];
                 for (const it of articles) {
                   if (itemMatchesFilters(it, filters)) matched.push(it);
+                }
+                if (FANOUT_DEBUG) {
+                  try {
+                    ll('[fanout.eval.child]', 'child=', childRule.channelName, 'matched=', `${matched.length}/${articles.length}`, 'price_from=', filters.priceFrom, 'price_to=', filters.priceTo, 'catalogs=', (filters.catalogs||[]).join(','));
+                  } catch {}
                 }
                 if (!matched.length) continue;
                 const dest = await getChannelById(client, childRule.channelId);
@@ -209,6 +222,20 @@ function buildFamilies(mySearches) {
       else if (String(process.env.FANOUT_AUTO_GROUP || '1') === '1') families = buildParentGroups(mySearches);
     }
   } catch {}
+  if (FANOUT_DEBUG) {
+    try {
+      const famCount = families?.length || 0;
+      ll('[fanout.family]', 'families=', famCount);
+      for (const fam of families || []) {
+        const fk = buildFamilyKey(fam.parent.url);
+        const childNames = (fam.children||[]).map(c => c.rule?.channelName || c.channelName || '');
+        ll('[fanout.family.detail]', 'key=', fk, 'parent=', fam.parent.channelName, 'children=', childNames.join(','));
+      }
+      // Non-family rules
+      const inFam = new Set((families||[]).flatMap(f=> [f.parent.channelName, ...(f.children||[]).map(c=>c.rule?.channelName || c.channelName)]));
+      for (const r of (mySearches||[])) if (!inFam.has(r.channelName)) ll('[fanout.standalone]', r.channelName);
+    } catch {}
+  }
   return families;
 }
 
