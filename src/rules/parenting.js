@@ -65,3 +65,68 @@ export function buildExplicitFamily(rules, parentName, childrenCsv) {
   const children = String(childrenCsv || '').split(',').map(s => s.trim()).filter(Boolean).map(n => byName.get(n)).filter(Boolean);
   return [{ parent, parentFilters: parseRuleFilters(parent.url), children: children.map(rule => ({ rule, filters: parseRuleFilters(rule.url) })) }];
 }
+
+// Zero-config price-family grouping based on canonical signature excluding price
+function normalizeArr(v) { const a = Array.isArray(v) ? v.map(String) : []; return Array.from(new Set(a)).sort(); }
+export function canonicalSignature(rule) {
+  try {
+    const f = parseRuleFilters(rule.url || rule.link || '');
+    const sig = {
+      brand: normalizeArr(f.brandIds),
+      catalog: normalizeArr(f.catalogs),
+      size: normalizeArr(f.sizeIds),
+      status: normalizeArr(f.statusIds),
+      text: String((f.text || '').trim().toLowerCase()),
+      cur: String(f.currency || 'EUR').toUpperCase(),
+    };
+    return `b=${sig.brand.join(',')}|c=${sig.catalog.join(',')}|s=${sig.size.join(',')}|st=${sig.status.join(',')}|q=${sig.text}|cur=${sig.cur}`;
+  } catch { return 'sig:invalid'; }
+}
+
+function pickLeader(members) {
+  // Prefer rule without price_to, else greatest price_to
+  let leader = members.find(m => (m.filters?.priceTo == null));
+  if (!leader) leader = members.slice().sort((a,b)=> (Number(b.filters?.priceTo||0) - Number(a.filters?.priceTo||0)))[0];
+  return leader || members[0];
+}
+
+function onlyDiffersInPrice(a, b) {
+  const keys = ['brandIds','catalogs','sizeIds','statusIds','text','currency'];
+  for (const k of keys) {
+    const va = JSON.stringify(normalizeArr(a[k]));
+    const vb = JSON.stringify(normalizeArr(b[k]));
+    if (va !== vb) return false;
+  }
+  // Require identical price_from; allow only price_to variation
+  const pfA = a.priceFrom ?? null; const pfB = b.priceFrom ?? null;
+  if ((pfA ?? null) !== (pfB ?? null)) return false;
+  return true;
+}
+
+export function buildAutoPriceFamilies(rules) {
+  const bySig = new Map();
+  for (const r of (rules || [])) {
+    const f = parseRuleFilters(r.url || r.link || '');
+    // Guard: search_text without brand → never group
+    if ((f.text || '').trim() && (!Array.isArray(f.brandIds) || f.brandIds.length === 0)) {
+      continue;
+    }
+    const sig = canonicalSignature(r);
+    if (!bySig.has(sig)) bySig.set(sig, []);
+    bySig.get(sig).push({ rule: r, filters: f });
+  }
+  const families = [];
+  for (const [sig, arr] of bySig.entries()) {
+    if (!arr || arr.length < 2) continue; // need at least 2 to form a price family
+    // Validate members differ only by price
+    const leadCandidate = pickLeader(arr);
+    const baseF = leadCandidate.filters;
+    const okMembers = arr.filter(m => onlyDiffersInPrice({ ...m.filters }, { ...baseF }));
+    if (okMembers.length < 2) continue;
+    const leader = pickLeader(okMembers);
+    const children = okMembers.filter(m => m !== leader);
+    families.push({ parent: leader.rule, parentFilters: leader.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
+    ll('[fanout.auto]', 'sig=', sig, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
+  }
+  return families;
+}

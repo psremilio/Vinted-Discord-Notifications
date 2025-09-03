@@ -8,7 +8,7 @@ import { startStats } from "./utils/stats.js";
 import { metrics } from "./infra/metrics.js";
 import { EdfScheduler } from "./schedule/edf.js";
 import { tierOf } from "./schedule/tiers.js";
-import { buildParentGroups, buildExplicitFamily } from "./rules/parenting.js";
+import { buildParentGroups, buildExplicitFamily, buildAutoPriceFamilies, canonicalSignature } from "./rules/parenting.js";
 import { loadFamiliesFromConfig } from "./rules/families.js";
 import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey, debugMatchFailReason, canonicalizeUrl } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
@@ -20,6 +20,10 @@ import { learnFromRules } from "./rules/catalogLearn.js";
 const activeSearches = new Map(); // name -> Timeout
 // In-memory processed store with TTL; keys are per-rule when configured
 let processedStore = createProcessedStore();
+// Family runtime state
+const familiesByParent = new Map(); // parentName -> { parent, children, sig }
+const familyState = new Map(); // sig -> { warmup: number, child: Map<name,{zero:number, quarantined:boolean}> }
+const quarantinedChildren = new Set(); // child rule names to schedule solo
 // Optional env overrides for quick testing
 const OVERRIDE_SEC = Number(process.env.POLL_INTERVAL_SEC || 0);
 const NO_JITTER = String(process.env.POLL_NO_JITTER || '0') === '1';
@@ -149,7 +153,18 @@ export const runSearch = async (client, channel, opts = {}) => {
               const parentHasWildcard2050 = (() => {
                 try { return Array.isArray(parentFilters?.catalogs) && parentFilters.catalogs.map(String).includes('2050'); } catch { return false; }
               })();
-              for (const child of channel.children) {
+              // Optional warmup: let leader run a couple ticks before enabling fanout
+              let fanoutEnabled = true;
+              try {
+                const fam = familiesByParent.get(String(channel.channelName));
+                const sig = fam?.sig;
+                const st = sig ? familyState.get(sig) : null;
+                if (st && st.warmup > 0) { st.warmup -= 1; familyState.set(sig, st); fanoutEnabled = false; }
+              } catch {}
+              if (!fanoutEnabled) {
+                ll('[fanout.warmup]', 'parent=', channel.channelName);
+              }
+              for (const child of (fanoutEnabled ? channel.children : [])) {
                 const childRule = child.rule || child; // tolerate shape
                 const baseFilters = child.filters || parseRuleFilters(childRule.url);
                 // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
@@ -165,6 +180,34 @@ export const runSearch = async (client, channel, opts = {}) => {
                 for (const it of articles) {
                   if (itemMatchesFilters(it, filters)) matched.push(it);
                 }
+                // Quarantine logic: if leader has items but child keeps matching 0 for several cycles
+                try {
+                  const fam = familiesByParent.get(String(channel.channelName));
+                  const sig = fam?.sig;
+                  const st = sig ? familyState.get(sig) : null;
+                  const cname = String(childRule.channelName);
+                  if (sig && st && st.child?.has?.(cname)) {
+                    const rec = st.child.get(cname);
+                    const leaderHas = Array.isArray(articles) && articles.length > 0;
+                    if (leaderHas && matched.length === 0 && typeof filters.priceTo === 'number') {
+                      rec.zero = (rec.zero || 0) + 1;
+                      if (rec.zero >= Number(process.env.MONO_QUARANTINE_THRESHOLD || 3)) {
+                        rec.quarantined = true;
+                        quarantinedChildren.add(cname);
+                        console.warn('[family.quarantine]', 'parent=', channel.channelName, 'child=', cname, 'reason=consecutive_zero_matches');
+                      }
+                    } else if (matched.length > 0) {
+                      rec.zero = 0;
+                      if (rec.quarantined) {
+                        rec.quarantined = false;
+                        quarantinedChildren.delete(cname);
+                        console.log('[family.rejoin]', 'parent=', channel.channelName, 'child=', cname);
+                      }
+                    }
+                    st.child.set(cname, rec);
+                    familyState.set(sig, st);
+                  }
+                } catch {}
                 // Monotonie-Guard: Wenn Preis ≤ child.price_to und Brand/Catalog zum Parent passen,
                 // aber das Child nicht matched → Violation loggen.
                 try {
@@ -350,7 +393,7 @@ function buildFamilies(mySearches) {
   let families = [];
   try {
     if (String(process.env.FANOUT_MODE || '1') === '1') {
-      const strat = String(process.env.PARENTING_STRATEGY || 'mapped');
+      const strat = String(process.env.PARENTING_STRATEGY || 'auto_price');
       // Default: ignore config families for pure URL-based auto-grouping
       const USE_CFG = String(process.env.FANOUT_USE_CONFIG || '0') === '1';
       const allowMismatch = String(process.env.PARENTING_ALLOW_EXPLICIT_MISMATCH || '0') === '1' || strat !== 'exact_url';
@@ -360,6 +403,7 @@ function buildFamilies(mySearches) {
         : null;
       if (configFamilies && configFamilies.length) families = configFamilies;
       else if (explicit && explicit.length) families = explicit;
+      else if (strat === 'auto_price') families = buildAutoPriceFamilies(mySearches);
       else if (String(process.env.FANOUT_AUTO_GROUP || (strat === 'exact_url' ? '0' : '1')) === '1') families = buildParentGroups(mySearches);
     }
   } catch {}
@@ -402,6 +446,22 @@ function buildFamilies(mySearches) {
       for (const r of (mySearches||[])) if (!inFam.has(r.channelName)) ll('[fanout.standalone]', r.channelName);
     } catch {}
   }
+  // Build runtime indices for families and initialize state
+  try {
+    familiesByParent.clear();
+    for (const fam of (families || [])) {
+      const sig = canonicalSignature(fam.parent);
+      familiesByParent.set(String(fam.parent.channelName), { ...fam, sig });
+      if (!familyState.has(sig)) {
+        const childMap = new Map();
+        for (const c of (fam.children || [])) {
+          const nm = String(c.rule?.channelName || c.channelName || '');
+          childMap.set(nm, { zero: 0, quarantined: false });
+        }
+        familyState.set(sig, { warmup: 2, child: childMap });
+      }
+    }
+  } catch {}
   return families;
 }
 
@@ -416,29 +476,18 @@ function computeScheduleList(mySearches) {
     parentNames.add(parent.channelName);
   }
   const toSchedule = [];
-  const SCHEDULE_CHILDREN = String(process.env.FANOUT_SCHEDULE_CHILDREN || '0') === '1';
   if (families?.length) {
     // Always schedule parents
     toSchedule.push(...families.map(f => f.parent));
-    // Optionally schedule children too; default off to reduce duplicate fetches
-    if (SCHEDULE_CHILDREN) {
-      const inFamily = new Set();
-      for (const fam of families) {
-        inFamily.add(fam.parent.channelName);
-        for (const c of (fam.children || [])) inFamily.add(c.rule?.channelName || c.channelName);
-      }
-      for (const r of (mySearches || [])) if (!parentNames.has(r.channelName)) toSchedule.push(r);
-    } else {
-      // Only schedule standalone rules not in any family
-      const inFamily = new Set();
-      for (const fam of families) {
-        inFamily.add(fam.parent.channelName);
-        for (const c of (fam.children || [])) inFamily.add(c.rule?.channelName || c.channelName);
-      }
-      for (const r of (mySearches || [])) {
-        if (!inFamily.has(r.channelName)) toSchedule.push(r);
-      }
+    // Schedule quarantined children solo
+    for (const r of (mySearches || [])) if (quarantinedChildren.has(String(r.channelName))) toSchedule.push(r);
+    // Schedule standalone rules not in any family
+    const inFam = new Set();
+    for (const fam of families) {
+      inFam.add(fam.parent.channelName);
+      for (const c of (fam.children || [])) inFam.add(c.rule?.channelName || c.channelName);
     }
+    for (const r of (mySearches || [])) if (!inFam.has(r.channelName)) toSchedule.push(r);
   } else {
     toSchedule.push(...(mySearches || []));
   }

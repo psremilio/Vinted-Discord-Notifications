@@ -1,8 +1,8 @@
 // Simple in-memory TTL store + dedupe key helpers
 // Allow CROSS_RULE_DEDUP=1 to force global scope
 const CROSS = String(process.env.CROSS_RULE_DEDUP || '0') === '1';
-// Supported scopes: 'per_rule' (default), 'global', 'channel', 'family'
-export const DEDUPE_SCOPE = CROSS ? 'global' : (process.env.DEDUPE_SCOPE || 'per_rule');
+// Supported scopes: 'per_rule', 'global', 'channel', 'family' (default)
+export const DEDUPE_SCOPE = CROSS ? 'global' : (process.env.DEDUPE_SCOPE || 'family');
 export const PROCESSED_TTL_MIN = parseInt(process.env.PROCESSED_TTL_MIN ?? '60', 10);
 export const ttlMs = PROCESSED_TTL_MIN * 60 * 1000;
 
