@@ -10,7 +10,7 @@ import { EdfScheduler } from "./schedule/edf.js";
 import { tierOf } from "./schedule/tiers.js";
 import { buildParentGroups, buildExplicitFamily } from "./rules/parenting.js";
 import { loadFamiliesFromConfig } from "./rules/families.js";
-import { itemMatchesFilters, parseRuleFilters, buildFamilyKey } from "./rules/urlNormalizer.js";
+import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
@@ -28,6 +28,31 @@ const channelCache = new Map();
 const warnedMissing = new Set();
 const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
 const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
+const RULES_DUMP = String(process.env.RULES_DUMP || '1') === '1';
+
+function dumpRulesConfig(searches) {
+  if (!RULES_DUMP && !FANOUT_DEBUG) return;
+  try {
+    const n = (searches || []).length;
+    console.log('[rules.dump] total=%d', n);
+    for (const r of (searches || [])) {
+      try {
+        const url = String(r.url || r.link || '');
+        let host='?', path='?';
+        try { const u = new URL(url); host=u.host; path=u.pathname; } catch {}
+        const f = parseRuleFilters(url);
+        const fkey = buildFamilyKey(url);
+        const pkey = buildParentKey(url);
+        console.log('[rule]', 'name=', r.channelName, 'id=', r.channelId, 'host=', host, 'path=', path);
+        console.log('[rule.url]', url);
+        console.log('[rule.filters]', 'text=', f.text||'', 'currency=', f.currency||'', 'price_from=', f.priceFrom||'', 'price_to=', f.priceTo||'', 'catalogs=', (f.catalogs||[]).join(',')||'');
+        console.log('[rule.keys]', 'familyKey=', fkey, 'parentKey=', pkey);
+      } catch (e) {
+        console.warn('[rules.dump] failed:', e?.message || e);
+      }
+    }
+  } catch {}
+}
 
 async function getChannelById(client, id) {
     if (!id) return null;
@@ -355,6 +380,9 @@ export const run = async (client, mySearches) => {
             }
         }));
     } catch {}
+
+    // Dump configured rules early to diagnose URL/filters/family-keys
+    dumpRulesConfig(mySearches);
 
     // Build families and schedule list
     const toSchedule = computeScheduleList(mySearches);
