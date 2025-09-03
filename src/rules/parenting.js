@@ -24,7 +24,7 @@ export function buildParentGroups(rules) {
   const groupsByKey = new Map();
   for (const r of (rules || [])) {
     try {
-      const strat = String(process.env.PARENTING_STRATEGY || 'exact_url');
+      const strat = String(process.env.PARENTING_STRATEGY || 'mapped');
       // Back-compat: allow FANOUT_AUTO_GROUP=0 to force exact_url behavior
       const autoFamily = (strat !== 'exact_url') && (String(process.env.FANOUT_AUTO_GROUP || '1') === '1');
       const raw = r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link;

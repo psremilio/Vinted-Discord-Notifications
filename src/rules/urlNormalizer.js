@@ -51,7 +51,7 @@ export function buildParentKey(rawUrl, opts = {}) {
 // Family key: broader grouping that intentionally ignores catalogs as well,
 // so variants like shirts/trackpants can form one family under a single parent.
 export function buildFamilyKey(rawUrl) {
-  const strat = String(process.env.PARENTING_STRATEGY || 'exact_url');
+  const strat = String(process.env.PARENTING_STRATEGY || 'mapped');
   if (strat === 'exact_url') return buildParentKey(rawUrl);
   try {
     const u = new URL(String(rawUrl || ''));

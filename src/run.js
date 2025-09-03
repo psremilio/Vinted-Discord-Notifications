@@ -305,9 +305,11 @@ function buildFamilies(mySearches) {
   let families = [];
   try {
     if (String(process.env.FANOUT_MODE || '1') === '1') {
-      const strat = String(process.env.PARENTING_STRATEGY || 'exact_url');
+      const strat = String(process.env.PARENTING_STRATEGY || 'mapped');
+      // Default: ignore config families for pure URL-based auto-grouping
+      const USE_CFG = String(process.env.FANOUT_USE_CONFIG || '0') === '1';
       const allowMismatch = String(process.env.PARENTING_ALLOW_EXPLICIT_MISMATCH || '0') === '1' || strat !== 'exact_url';
-      const configFamilies = allowMismatch ? loadFamiliesFromConfig(mySearches) : [];
+      const configFamilies = USE_CFG ? loadFamiliesFromConfig(mySearches) : [];
       const explicit = allowMismatch && (process.env.FANOUT_PARENT_RULE && process.env.FANOUT_CHILD_RULES)
         ? buildExplicitFamily(mySearches, process.env.FANOUT_PARENT_RULE, process.env.FANOUT_CHILD_RULES)
         : null;
