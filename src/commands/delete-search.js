@@ -34,7 +34,10 @@ export const execute = async (interaction) => {
         // Rebuild full scheduling non-blocking to ensure families/jobs update
         try {
             const mod = await import('../run.js');
-            setTimeout(() => { try { if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client); } catch {} }, 0);
+            setTimeout(() => { try {
+              if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
+              else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
+            } catch {} }, 0);
             try { await interaction.editReply({ content: `✅ Search \`${name}\` deleted and schedule rebuild triggered.` }); } catch { try { await interaction.followUp({ content: `✅ Search \`${name}\` deleted and schedule rebuild triggered.`, ephemeral: true }); } catch {} }
         } catch (e) {
             console.warn('[cmd] rebuild after delete failed:', e?.message || e);

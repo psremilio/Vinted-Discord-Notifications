@@ -138,7 +138,8 @@ export const execute = async (interaction) => {
             const mod = await import('../run.js');
             setTimeout(() => {
                 try {
-                    if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
+                    if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
+                    else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
                     else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, search);
                 } catch {}
             }, 0);

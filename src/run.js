@@ -333,9 +333,22 @@ function computeScheduleList(mySearches) {
 }
 
 export function rebuildFromList(client, list) {
-  try { stopAll(); } catch {}
+  // Zero-downtime diff update: add/update/remove without stopping all
   const toSchedule = computeScheduleList(list || []);
-  toSchedule.forEach((channel) => addSearch(client, channel));
+  const newMap = new Map();
+  for (const r of toSchedule) newMap.set(r.channelName, r);
+  // Update or add
+  for (const [name, rule] of newMap.entries()) {
+    if (activeSearches.has(name)) {
+      try { edf.updateRule(rule); } catch {}
+    } else {
+      addSearch(client, rule);
+    }
+  }
+  // Remove absent
+  for (const name of Array.from(activeSearches.keys())) {
+    if (!newMap.has(name)) removeJob(name);
+  }
   edf.start();
 }
 
@@ -347,6 +360,18 @@ export async function rebuildFromDisk(client) {
     rebuildFromList(client, searches);
   } catch (e) {
     console.warn('[schedule] rebuildFromDisk failed:', e?.message || e);
+  }
+}
+
+// Non-blocking incremental rebuild wrapper for commands
+export async function incrementalRebuildFromDisk(client) {
+  try {
+    const fsmod = await import('fs');
+    const path = await import('path');
+    const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    setTimeout(() => { try { rebuildFromList(client, searches); } catch {} }, 0);
+  } catch (e) {
+    console.warn('[schedule] incrementalRebuildFromDisk failed:', e?.message || e);
   }
 }
 

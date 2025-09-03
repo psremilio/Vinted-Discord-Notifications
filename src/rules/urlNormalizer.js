@@ -121,13 +121,13 @@ export function itemMatchesFilters(item, filters) {
       if (typeof filters.priceTo === 'number' && price > filters.priceTo) return false;
     }
     // Catalogs (if provided)
-    const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '0') === '1';
+    const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '1') === '1';
     if (REQ_CAT && filters.catalogs?.length) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
       if (!cid || !filters.catalogs.includes(cid)) return false;
     }
     // Optional brand enforcement
-    if (String(process.env.FANOUT_ENFORCE_BRAND || '0') === '1' && filters.brandIds?.length) {
+    if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && filters.brandIds?.length) {
       const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
       if (!bid || !filters.brandIds.map(String).includes(bid)) return false;
     }

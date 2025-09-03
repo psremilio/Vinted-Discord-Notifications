@@ -36,6 +36,16 @@ export class EdfScheduler {
 
   removeRule(name) { this.rules.delete(name); }
 
+  // Update rule data in-place without resetting scheduling (zero-downtime)
+  updateRule(rule) {
+    const name = rule.channelName;
+    const st = this.rules.get(name);
+    if (!st) return false;
+    st.rule = rule; // keep targetMs/nextAt/running
+    this.rules.set(name, st);
+    return true;
+  }
+
   start() {
     if (this.timer) return;
     this.timer = setInterval(() => this._tick(), 250);
