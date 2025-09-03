@@ -57,6 +57,8 @@ export function buildFamilyKey(rawUrl) {
     for (const [k, v] of params.entries()) {
       if (STRIP_KEYS.has(k)) continue;
       if (k === 'catalog[]') continue; // ignore catalogs for family grouping
+      if (String(process.env.FANOUT_IGNORE_TEXT || '1') === '1' && k === 'search_text') continue;
+      if (String(process.env.FANOUT_IGNORE_CURRENCY || '1') === '1' && k === 'currency') continue;
       if (ARRAY_KEYS.has(k)) {
         norm[k] = norm[k] || [];
         norm[k].push(v);

@@ -112,8 +112,10 @@ export const runSearch = async (client, channel, opts = {}) => {
                 const maxAge = Number(process.env.MATCH_MAX_AGE_MS || 45000);
                 const priceDropMax = Number(process.env.PRICE_DROP_MAX_AGE_MS || 300000);
                 const hardMax = (stH?.backfillOnUntil && now < stH.backfillOnUntil)
-                  ? Number(process.env.BACKFILL_MAX_AGE_MS || 120000)
-                  : Number(process.env.MAX_AGE_MS || 45000);
+                  ? Number(process.env.BACKFILL_MAX_AGE_MS || 0)
+                  : Number(process.env.MAX_AGE_MS || 0);
+                const ENFORCE_MAX = String(process.env.ENFORCE_MAX_AGE || '0') === '1';
+                const ENFORCE_MATCH = String(process.env.ENFORCE_MATCH_AGE || '0') === '1';
                 const gated = [];
                 let dropStale = 0, dropGate = 0;
                 for (const it of matched) {
@@ -124,11 +126,11 @@ export const runSearch = async (client, channel, opts = {}) => {
                   const age = now - Number(first || now);
                   const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || Number(it.createdAt || 0) || 0;
                   const listedAge = createdMs ? (now - createdMs) : 0;
-                  if (listedAge > 0 && hardMax > 0 && listedAge > hardMax) {
+                  if (ENFORCE_MAX && listedAge > 0 && hardMax > 0 && listedAge > hardMax) {
                     dropStale++; continue; // hard drop stale
                   }
-                  if (age <= maxAge) { gated.push(it); continue; }
-                  if (age <= priceDropMax) {
+                  if (!ENFORCE_MATCH || age <= maxAge) { gated.push(it); continue; }
+                  if (!ENFORCE_MATCH || age <= priceDropMax) {
                     try { it.__priceDrop = true; } catch {}
                     gated.push(it);
                     try { metrics.price_drop_posted_total?.inc({ rule: String(childRule.channelName) }); } catch {}
@@ -154,17 +156,18 @@ export const runSearch = async (client, channel, opts = {}) => {
                   warnedMissing.add(channel.channelId);
                 }
               } else {
-                // Apply hard freshness gate for parent as well
+                // Apply optional hard freshness gate for parent as well
                 const now = Date.now();
                 const stH2 = ruleState.get(channel.channelName);
                 const hardMax = (stH2?.backfillOnUntil && now < stH2.backfillOnUntil)
-                  ? Number(process.env.BACKFILL_MAX_AGE_MS || 120000)
-                  : Number(process.env.MAX_AGE_MS || 45000);
+                  ? Number(process.env.BACKFILL_MAX_AGE_MS || 0)
+                  : Number(process.env.MAX_AGE_MS || 0);
+                const ENFORCE_MAX = String(process.env.ENFORCE_MAX_AGE || '0') === '1';
                 const fresh = [];
                 for (const it of articles) {
                   const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || Number(it.createdAt || 0) || 0;
                   const listedAge = createdMs ? (now - createdMs) : 0;
-                  if (hardMax > 0 && listedAge > hardMax) continue;
+                  if (ENFORCE_MAX && hardMax > 0 && listedAge > hardMax) continue;
                   fresh.push(it);
                 }
                 if (fresh.length) await postArticles(fresh, dest, channel.channelName);
@@ -246,6 +249,27 @@ function buildFamilies(mySearches) {
       if (configFamilies && configFamilies.length) families = configFamilies;
       else if (explicit && explicit.length) families = explicit;
       else if (String(process.env.FANOUT_AUTO_GROUP || '1') === '1') families = buildParentGroups(mySearches);
+    }
+  } catch {}
+  // Fallback: name-based prefixes, if no families built
+  try {
+    if ((!families || families.length === 0) && String(process.env.FANOUT_NAME_PREFIXES || '').trim()) {
+      const prefixes = String(process.env.FANOUT_NAME_PREFIXES).split(',').map(s => s.trim()).filter(Boolean);
+      const byPref = new Map();
+      for (const r of (mySearches || [])) {
+        const name = String(r.channelName || '');
+        const pref = prefixes.find(p => name.toLowerCase().startsWith(p.toLowerCase()));
+        if (!pref) continue;
+        if (!byPref.has(pref)) byPref.set(pref, []);
+        byPref.get(pref).push(r);
+      }
+      for (const [pref, list] of byPref.entries()) {
+        if (!list.length) continue;
+        // Parent heuristic: name containing 'all' else minimal length
+        let parent = list.find(r => /\ball\b|all-|-all/i.test(String(r.channelName))) || list.slice().sort((a,b)=>String(a.channelName).length-String(b.channelName).length)[0];
+        const children = list.filter(r => r !== parent).map(r => ({ rule: r }));
+        families.push({ parent, parentFilters: null, children });
+      }
     }
   } catch {}
   if (FANOUT_DEBUG) {

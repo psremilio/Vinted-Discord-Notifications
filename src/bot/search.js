@@ -11,6 +11,7 @@ const d = (...args) => { if (DEBUG_POLL || String(process.env.LOG_LEVEL||'').toL
 const trace = (...a) => { if (TRACE) console.log('[trace]', ...a); };
 const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
 const recentMs = RECENT_MAX_MIN * 60 * 1000;
+const DISABLE_RECENT = String(process.env.DISABLE_RECENT_FILTER || '0') === '1';
 const firstAgeByRule = new Map(); // rule -> number[]
 function recordFirstAge(rule, ms) {
   try {
@@ -230,7 +231,7 @@ const selectNewArticles = (items, processedStore, channel) => {
   const cutoff = Date.now() - recentMs;
   const filteredArticles = items.filter(({ photo, id, title }) =>
     photo &&
-    (photo.high_resolution?.timestamp || 0) * 1000 > cutoff &&
+    (DISABLE_RECENT || (photo.high_resolution?.timestamp || 0) * 1000 > cutoff) &&
     !processedStore?.has?.(dedupeKey(channel.channelName, id)) &&
     !titleBlacklist.some(word => (title || '').toLowerCase().includes(word))
   );
