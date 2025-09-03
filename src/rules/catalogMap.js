@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { getLearnedChildren } from './catalogLearn.js';
 
 let tree = null; // Map<string, Set<string>> parent -> direct children set
 let closureCache = new Map(); // Map<string, Set<string>> base -> closure
@@ -47,7 +48,8 @@ export function expandCatalogs(ids) {
   for (const id of list) {
     const clos = computeClosureFor(id);
     for (const v of clos) set.add(String(v));
+    // Merge learned children (heuristic) as a fallback to empty static map
+    try { for (const v of getLearnedChildren(id)) set.add(String(v)); } catch {}
   }
   return set.size ? set : new Set(list);
 }
-

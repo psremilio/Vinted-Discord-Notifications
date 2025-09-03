@@ -12,6 +12,7 @@ import { buildParentGroups, buildExplicitFamily } from "./rules/parenting.js";
 import { loadFamiliesFromConfig } from "./rules/families.js";
 import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey, debugMatchFailReason, canonicalizeUrl } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
+import { learnFromRules } from "./rules/catalogLearn.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -397,6 +398,7 @@ function computeScheduleList(mySearches) {
 export function rebuildFromList(client, list) {
   // Zero-downtime diff update: add/update/remove without stopping all
   const toSchedule = computeScheduleList(list || []);
+  try { learnFromRules(list || []); } catch {}
   const newMap = new Map();
   for (const r of toSchedule) newMap.set(r.channelName, r);
   const newKeySet = new Set();
@@ -440,6 +442,7 @@ export async function rebuildFromDisk(client) {
     const fsmod = await import('fs');
     const path = await import('path');
     const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    try { learnFromRules(searches || []); } catch {}
     rebuildFromList(client, searches);
   } catch (e) {
     console.warn('[schedule] rebuildFromDisk failed:', e?.message || e);
@@ -455,6 +458,7 @@ export async function incrementalRebuildFromDisk(client) {
     setTimeout(() => {
       try {
         console.log('[rebuild] mode=incremental');
+        try { learnFromRules(searches || []); } catch {}
         rebuildFromList(client, searches);
       } catch {}
     }, 0);
