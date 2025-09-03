@@ -375,7 +375,11 @@ export function rebuildFromList(client, list) {
   }
   // Remove absent
   for (const name of Array.from(activeSearches.keys())) {
-    if (!newMap.has(name)) removeJob(name);
+    if (!newMap.has(name)) {
+      try { console.log('[rule.deleted]', 'name=', name); } catch {}
+      try { metrics.rules_removed_total?.inc(); } catch {}
+      removeJob(name);
+    }
   }
   edf.start();
   try { metrics.scheduler_rules_total.set(activeSearches.size); } catch {}
@@ -470,7 +474,7 @@ export const run = async (client, mySearches) => {
 // Stop and remove a scheduled job by name, if present
 function removeJob(name) {
     if (!activeSearches.has(name)) return false;
-    try { edf.removeRule(name); } catch {}
+    try { edf.hardRemove?.(name) || edf.removeRule(name); } catch {}
     activeSearches.delete(name);
     console.log(`[schedule] stopped ${name}`);
     try { metrics.rules_active.set(activeSearches.size); } catch {}
@@ -487,12 +491,11 @@ function stopAll() {
 export { addSearch, activeSearches, removeJob, stopAll };
 
 // Restart all searches: stop existing timers and re-schedule from config
-export async function restartAll(client, mySearches) {
-  try { stopAll(); } catch {}
+export async function restartAll(client, _ignored) {
+  // Back-compat shim: always read from disk to avoid stale snapshots
   try {
-    mySearches.forEach((channel, index) => {
-      setTimeout(() => addSearch(client, channel), index * 1000 + 1000);
-    });
+    console.log('[schedule] restartAll → rebuildFromDisk (compat)');
+    await rebuildFromDisk(client);
   } catch (e) {
     console.warn('[schedule] restartAll failed:', e?.message || e);
   }

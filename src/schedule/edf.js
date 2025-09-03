@@ -35,6 +35,13 @@ export class EdfScheduler {
   }
 
   removeRule(name) { this.rules.delete(name); }
+  
+  // Hard remove with guard to avoid rescheduling after in-flight completion
+  hardRemove(name) {
+    const st = this.rules.get(name);
+    if (st) { try { st._deleted = true; } catch {} }
+    this.rules.delete(name);
+  }
 
   // Update rule data in-place without resetting scheduling (zero-downtime)
   updateRule(rule) {
@@ -104,7 +111,7 @@ export class EdfScheduler {
           const PHASE_MS = 10_000;
           const t = Date.now();
           const nextAnchor = Math.floor(t / PHASE_MS) * PHASE_MS + PHASE_MS;
-          st.nextAt = nextAnchor + (st.phaseOffset || 0);
+          if (!st._deleted) st.nextAt = nextAnchor + (st.phaseOffset || 0);
           this.inflight = Math.max(0, this.inflight - 1);
         });
     }

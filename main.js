@@ -191,8 +191,8 @@ function startStallDetector() {
     const tooOld = lastOk && (now - lastOk > 10 * 60 * 1000);
     const tooManyErrors = (state.consecutiveErrors || 0) >= 10;
     if (tooOld || tooManyErrors) {
-      console.warn('[stall] detected — restarting searches');
-      try { const mod = await import('./src/run.js'); await mod.restartAll?.(client, mySearches); } catch {}
+      console.warn('[stall] detected — reloading searches from disk');
+      try { const mod = await import('./src/run.js'); await mod.rebuildFromDisk?.(client); } catch {}
       if (chId) {
         try {
           const ch = await client.channels.fetch(chId).catch(()=>null) || client.channels.cache.get(chId);

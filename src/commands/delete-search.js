@@ -72,6 +72,8 @@ export const execute = async (interaction) => {
             await safeEdit({ content: msg });
             return;
         }
+        const removed = searches[searchIndex];
+        const removedName = String(removed?.channelName || name || '');
         searches.splice(searchIndex, 1);
 
         await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
@@ -83,6 +85,8 @@ export const execute = async (interaction) => {
               if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
               else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
             } catch {} }, 0);
+            // Immediate stop to avoid one more poll cycle while rebuild diff applies
+            try { mod.removeJob?.(removedName); } catch {}
             const tag = name ? `name=\`${name}\`` : (key ? `key=\`${key}\`` : '');
             try { await safeEdit({ content: `✅ Search ${tag} deleted and schedule rebuild triggered.` }); } catch {}
             try { console.log('[cmd.result] /delete_search ok %s', tag); } catch {}

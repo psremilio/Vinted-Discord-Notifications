@@ -82,6 +82,7 @@ export const metrics = {
   // scheduler
   scheduler_reload_events_total: new Counter('scheduler_reload_events_total'),
   scheduler_rules_total: new Gauge('scheduler_rules_total'),
+  rules_removed_total: new Counter('rules_removed_total'),
   // alias for E2E (found->sent)
   e2e_latency_ms_p95: new LabeledGauge('e2e_latency_ms_p95', ['channel']),
   // per-route queue depth
@@ -172,6 +173,7 @@ export function serializeMetrics() {
   // scheduler
   lineHelpType('scheduler_reload_events_total', 'Scheduler rebuild/reload events', 'counter'); out.push(`scheduler_reload_events_total ${metrics.scheduler_reload_events_total.get()}`);
   lineHelpType('scheduler_rules_total', 'Scheduler rules total', 'gauge'); out.push(`scheduler_rules_total ${metrics.scheduler_rules_total.get()}`);
+  lineHelpType('rules_removed_total', 'Rules removed from scheduler', 'counter'); out.push(`rules_removed_total ${metrics.rules_removed_total.get()}`);
   // E2E latency alias
   lineHelpType('e2e_latency_ms_p95', 'End-to-end latency p95 (found->sent) per channel', 'gauge');
   for (const e of metrics.e2e_latency_ms_p95.entries()) out.push(`e2e_latency_ms_p95{channel="${e.labels.channel}"} ${e.value}`);
