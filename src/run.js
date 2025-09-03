@@ -303,8 +303,12 @@ function buildFamilies(mySearches) {
       ll('[fanout.family]', 'families=', famCount);
       for (const fam of families || []) {
         const fk = buildFamilyKey(fam.parent.url);
+        const pk = buildParentKey(fam.parent.url);
         const childNames = (fam.children||[]).map(c => c.rule?.channelName || c.channelName || '');
-        ll('[fanout.family.detail]', 'key=', fk, 'parent=', fam.parent.channelName, 'children=', childNames.join(','));
+        ll('[fanout.family.detail]', 'familyKey=', fk, 'parentKey=', pk, 'parent=', fam.parent.channelName, 'children=', childNames.join(','));
+        if (String(process.env.PARENTING_STRATEGY || 'exact_url') === 'exact_url' && fk !== pk) {
+          console.warn('[fanout.warn] strategy=exact_url but familyKey!=parentKey for', fam.parent.channelName);
+        }
       }
       // Non-family rules
       const inFam = new Set((families||[]).flatMap(f=> [f.parent.channelName, ...(f.children||[]).map(c=>c.rule?.channelName || c.channelName)]));

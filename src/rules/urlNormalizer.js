@@ -3,7 +3,7 @@
 // Also normalizes common aliases and ordering of multi-value params.
 
 const STRIP_KEYS = new Set([
-  'price_from', 'price_to', 'order', 'sort', 'page', '_t', 'time', 'cursor', 'ref', 'utm_source', 'utm_medium', 'utm_campaign', 'search_id'
+  'order', 'sort', 'page', '_t', 'time', 'cursor', 'ref', 'utm_source', 'utm_medium', 'utm_campaign', 'search_id'
 ]);
 const ARRAY_KEYS = new Set([
   'catalog[]', 'size_ids[]', 'brand_ids[]', 'status_ids[]', 'color_ids[]', 'material_ids[]'
@@ -50,38 +50,19 @@ export function buildParentKey(rawUrl) {
 // Family key: broader grouping that intentionally ignores catalogs as well,
 // so variants like shirts/trackpants can form one family under a single parent.
 export function buildFamilyKey(rawUrl) {
+  const strat = String(process.env.PARENTING_STRATEGY || 'exact_url');
+  if (strat === 'exact_url') return buildParentKey(rawUrl);
   try {
     const u = new URL(String(rawUrl || ''));
-    const params = new URLSearchParams(u.search);
-    const norm = {};
-    for (const [k, v] of params.entries()) {
-      if (STRIP_KEYS.has(k)) continue;
-      if (k === 'catalog[]') continue; // ignore catalogs for family grouping
-      if (String(process.env.FANOUT_IGNORE_TEXT || '1') === '1' && k === 'search_text') continue;
-      if (String(process.env.FANOUT_IGNORE_CURRENCY || '1') === '1' && k === 'currency') continue;
-      // treat detail filters as child-level: ignore in family key
-      if (k === 'size_ids[]' || k === 'status_ids[]' || k === 'color_ids[]' || k === 'material_ids[]') continue;
-      if (ARRAY_KEYS.has(k)) {
-        norm[k] = norm[k] || [];
-        norm[k].push(v);
-      } else {
-        norm[k] = String(v || '');
-      }
-    }
-    for (const k of Object.keys(norm)) {
-      if (ARRAY_KEYS.has(k)) norm[k] = normalizeArray(norm[k]);
-    }
+    const p = new URLSearchParams(u.search);
+    const brands = normalizeArray(p.getAll('brand_ids[]'));
+    const cats = normalizeArray(p.getAll('catalog[]'));
+    if (!brands.length && !cats.length) return `${u.host}${u.pathname}?INVALID_NO_SCOPE`;
     const parts = [];
-    const keys = Object.keys(norm).sort();
-    for (const k of keys) {
-      const v = norm[k];
-      if (Array.isArray(v)) parts.push(`${k}=${v.join(',')}`);
-      else parts.push(`${k}=${v}`);
-    }
+    if (brands.length) parts.push(`brand_ids[]=${brands.join(',')}`);
+    if (cats.length) parts.push(`catalog[]=${cats.join(',')}`);
     return `${u.host}${u.pathname}?${parts.join('&')}`;
-  } catch {
-    return String(rawUrl || '');
-  }
+  } catch { return String(rawUrl || ''); }
 }
 
 // Extract rule filters for fanout matching

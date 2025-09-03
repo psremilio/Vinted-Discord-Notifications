@@ -25,13 +25,13 @@ export function buildParentGroups(rules) {
   for (const r of (rules || [])) {
     try {
       const autoFamily = String(process.env.FANOUT_AUTO_GROUP || '1') === '1';
-      const key = autoFamily
-        ? buildFamilyKey(r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link)
-        : buildParentKey(r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link);
+      const raw = r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link;
+      const parentKey = buildParentKey(raw);
+      const key = autoFamily ? buildFamilyKey(raw) : parentKey;
       if (!groupsByKey.has(key)) groupsByKey.set(key, []);
       const filters = parseRuleFilters(r.url || r.channelUrl || r.ruleUrl || r.link);
       groupsByKey.get(key).push({ rule: r, filters });
-      ll('[fanout.key]', r.channelName, '→', key);
+      ll('[fanout.key]', r.channelName, 'canonical_url=', parentKey, 'familyKey=', key);
     } catch {}
   }
 
@@ -49,7 +49,7 @@ export function buildParentGroups(rules) {
     const parent = arr[parentIdx];
     const children = arr.filter((_, i) => i !== parentIdx);
     families.push({ parent: parent.rule, parentFilters: parent.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
-    ll('[fanout.pick]', 'parent=', parent.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
+    ll('[fanout.pick]', 'parent=', parent.rule.channelName, 'children=', (children.map(c=>c.rule.channelName).join(',')) || '');
   }
   return families;
 }
