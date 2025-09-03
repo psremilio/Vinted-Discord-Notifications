@@ -25,7 +25,8 @@ export const execute = async (interaction) => {
     const name = interaction.options.getString('name');
     const urlRaw = interaction.options.getString('url');
     let key = null;
-    try { if (urlRaw) key = buildParentKey(urlRaw); } catch {}
+    let keyNoPrice = null;
+    try { if (urlRaw) { key = buildParentKey(urlRaw); keyNoPrice = buildParentKey(urlRaw, { stripPrice: true }); } } catch {}
 
     try {
         //delete the search that has 'name' as name
@@ -38,13 +39,21 @@ export const execute = async (interaction) => {
                 const k = s.canonicalKey || buildParentKey(String(s.url || ''));
                 if (k === key) { searchIndex = i; break; }
             }
+            // Fuzzy: ignore price bounds if exact key not found
+            if (searchIndex === -1 && keyNoPrice) {
+                for (let i = 0; i < searches.length; i++) {
+                    const s = searches[i] || {};
+                    const k2 = buildParentKey(String(s.url || ''), { stripPrice: true });
+                    if (k2 === keyNoPrice) { searchIndex = i; break; }
+                }
+            }
         }
         if (searchIndex === -1 && name) {
             searchIndex = searches.findIndex(search => String(search.channelName) === String(name));
         }
 
         if (searchIndex === -1) {
-            const msg = key ? `No search matched key ${key}` : `No search found with the name ${name}`;
+            const msg = key ? `No search matched key ${key}${keyNoPrice ? ` (or no_price=${keyNoPrice})` : ''}` : `No search found with the name ${name}`;
             await interaction.editReply({ content: msg });
             return;
         }

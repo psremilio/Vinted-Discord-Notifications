@@ -266,23 +266,20 @@ const selectNewArticles = (items, processedStore, channel) => {
     `firstIds=${filteredArticles.slice(0, 5).map(x => x.id).join(',')}`);
 
   if (filteredArticles.length === 0 && items.length) {
-    const sample = items.slice(0, 5).map(item => {
+    const sample = items.slice(0, 5);
+    for (const item of sample) {
       const hasPhoto = !!item.photo;
       const tsSec = item.photo?.high_resolution?.timestamp || 0;
-      const recent = tsSec * 1000 > cutoff;
-      const notProcessed = !processedStore?.has?.(dedupeKey(channel.channelName, item.id));
-      const notBlacklisted = !titleBlacklist.some(word => (item.title || '').toLowerCase().includes(word));
-      return {
-        id: item.id,
-        price: item.price?.amount,
-        seller: item.user?.id || item.user?.login,
-        hasPhoto,
-        recent,
-        notProcessed,
-        notBlacklisted,
-      };
-    });
-    d(`[debug][rule:${channel.channelName}] sample_reasons=${JSON.stringify(sample)}`);
+      const isRecent = tsSec * 1000 > cutoff;
+      const wasProcessed = !!processedStore?.has?.(dedupeKey(channel.channelName, item.id));
+      const isBlacklisted = titleBlacklist.some(word => (item.title || '').toLowerCase().includes(word));
+      let reason = 'unknown';
+      if (!hasPhoto) reason = 'no_photo';
+      else if (!isRecent) reason = 'too_old';
+      else if (wasProcessed) reason = 'already_processed';
+      else if (isBlacklisted) reason = 'title_blacklist';
+      console.log('[match.debug]', 'rule=', channel.channelName, 'item=', item.id, 'fail=', reason);
+    }
   }
 
   return filteredArticles;

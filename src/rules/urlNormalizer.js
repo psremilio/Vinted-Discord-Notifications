@@ -13,7 +13,7 @@ function normalizeArray(values) {
   return Array.from(new Set(values.filter(Boolean).map(String))).sort();
 }
 
-export function buildParentKey(rawUrl) {
+export function buildParentKey(rawUrl, opts = {}) {
   try {
     const u = new URL(String(rawUrl || ''));
     const params = new URLSearchParams(u.search);
@@ -21,6 +21,7 @@ export function buildParentKey(rawUrl) {
     const norm = {};
     for (const [k, v] of params.entries()) {
       if (STRIP_KEYS.has(k)) continue;
+      if (opts.stripPrice && (k === 'price_from' || k === 'price_to')) continue;
       if (ARRAY_KEYS.has(k)) {
         norm[k] = norm[k] || [];
         norm[k].push(v);
@@ -130,6 +131,10 @@ export function parseRuleFilters(rawUrl) {
 
 // Lightweight match function to check if an item satisfies child filters.
 // We rely on best-effort fields present in the Vinted API item payload.
+import { expandBrandIds } from './brandAliases.js';
+import { expandCatalogs } from './catalogMap.js';
+import { metrics } from '../infra/metrics.js';
+
 export function itemMatchesFilters(item, filters) {
   try {
     // Price bounds (if provided)
@@ -143,12 +148,31 @@ export function itemMatchesFilters(item, filters) {
     const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '1') === '1';
     if (REQ_CAT && filters.catalogs?.length) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
-      if (!cid || !filters.catalogs.includes(cid)) return false;
+      if (!cid) return false;
+      const strat = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
+      if (strat === 'subtree') {
+        const expanded = expandCatalogs(filters.catalogs);
+        if (!expanded.has(cid)) return false;
+        try { metrics.subcatalog_ok_total?.inc(1); } catch {}
+      } else {
+        if (!filters.catalogs.map(String).includes(cid)) return false;
+        try { metrics.catalog_ok_total?.inc(1); } catch {}
+      }
     }
     // Optional brand enforcement
     if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && filters.brandIds?.length) {
       const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
-      if (!bid || !filters.brandIds.map(String).includes(bid)) return false;
+      if (!bid) return false;
+      const strat = String(process.env.BRAND_MATCH_STRATEGY || 'alias_group');
+      if (strat === 'alias_group') {
+        const expanded = expandBrandIds(filters.brandIds);
+        if (!expanded.has(bid)) return false;
+        const orig = new Set(filters.brandIds.map(String));
+        try { (orig.has(bid) ? metrics.brand_ok_total : metrics.brand_alias_ok_total)?.inc(1); } catch {}
+      } else {
+        if (!filters.brandIds.map(String).includes(bid)) return false;
+        try { metrics.brand_ok_total?.inc(1); } catch {}
+      }
     }
     // Optional size enforcement
     if (String(process.env.FANOUT_ENFORCE_SIZE || '0') === '1' && filters.sizeIds?.length) {
@@ -169,5 +193,54 @@ export function itemMatchesFilters(item, filters) {
     return true;
   } catch {
     return false;
+  }
+}
+
+// Return first failing reason for diagnostics (does not mutate metrics)
+export function debugMatchFailReason(item, filters) {
+  try {
+    const priceRaw = item?.price?.amount ?? item?.price_numeric ?? item?.price ?? null;
+    const price = priceRaw != null ? Number(String(priceRaw).replace(/,/, '.')) : NaN;
+    if (!Number.isNaN(price)) {
+      if (typeof filters.priceFrom === 'number' && price < filters.priceFrom) return 'price_out_of_range';
+      if (typeof filters.priceTo === 'number' && price > filters.priceTo) return 'price_out_of_range';
+    }
+    const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '1') === '1';
+    if (REQ_CAT && filters.catalogs?.length) {
+      const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
+      if (!cid) return 'catalog_mismatch';
+      const stratC = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
+      if (stratC === 'subtree') {
+        if (!expandCatalogs(filters.catalogs).has(cid)) return 'catalog_mismatch';
+      } else {
+        if (!filters.catalogs.map(String).includes(cid)) return 'catalog_mismatch';
+      }
+    }
+    if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && filters.brandIds?.length) {
+      const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
+      if (!bid) return 'brand_mismatch';
+      const stratB = String(process.env.BRAND_MATCH_STRATEGY || 'alias_group');
+      if (stratB === 'alias_group') {
+        if (!expandBrandIds(filters.brandIds).has(bid)) return 'brand_mismatch';
+      } else {
+        if (!filters.brandIds.map(String).includes(bid)) return 'brand_mismatch';
+      }
+    }
+    if (String(process.env.FANOUT_ENFORCE_SIZE || '0') === '1' && filters.sizeIds?.length) {
+      const sid = String(item?.size_id ?? item?.size?.id ?? '');
+      if (!sid || !filters.sizeIds.map(String).includes(sid)) return 'size_mismatch';
+    }
+    if (String(process.env.FANOUT_ENFORCE_STATUS || '0') === '1' && filters.statusIds?.length) {
+      const st = String(item?.status_id ?? item?.status ?? '').toLowerCase();
+      if (!st || !filters.statusIds.map(x=>String(x).toLowerCase()).includes(st)) return 'status_mismatch';
+    }
+    if (filters.text) {
+      const t = String(filters.text).toLowerCase().split(/\s+/).filter(Boolean);
+      const hay = `${item?.title || ''} ${item?.description || ''}`.toLowerCase();
+      for (const w of t) if (!hay.includes(w)) return 'text_mismatch';
+    }
+    return null;
+  } catch {
+    return 'unknown';
   }
 }

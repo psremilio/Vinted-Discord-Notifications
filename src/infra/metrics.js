@@ -62,6 +62,10 @@ export const metrics = {
   // fanout + gating + http extras
   parent_fanout_items_total: new LabeledCounter('parent_fanout_items_total', ['parent','child']),
   child_fetch_saved_total: new LabeledCounter('child_fetch_saved_total', ['child']),
+  brand_ok_total: new Counter('brand_ok_total'),
+  brand_alias_ok_total: new Counter('brand_alias_ok_total'),
+  catalog_ok_total: new Counter('catalog_ok_total'),
+  subcatalog_ok_total: new Counter('subcatalog_ok_total'),
   no_token_skips_total: new LabeledCounter('no_token_skips_total', ['rule']),
   fetch_timeout_total: new LabeledCounter('fetch_timeout_total', ['proxy']),
   price_drop_posted_total: new LabeledCounter('price_drop_posted_total', ['rule']),
@@ -138,6 +142,10 @@ export function serializeMetrics() {
   for (const e of metrics.parent_fanout_items_total.entries()) out.push(`parent_fanout_items_total{parent="${e.labels.parent}",child="${e.labels.child}"} ${e.value}`);
   lineHelpType('child_fetch_saved_total', 'Items posted via child fallback fetch', 'counter');
   for (const e of metrics.child_fetch_saved_total.entries()) out.push(`child_fetch_saved_total{child="${e.labels.child}"} ${e.value}`);
+  lineHelpType('brand_ok_total', 'Brand matches (exact)', 'counter'); out.push(`brand_ok_total ${metrics.brand_ok_total.get()}`);
+  lineHelpType('brand_alias_ok_total', 'Brand matches via alias group', 'counter'); out.push(`brand_alias_ok_total ${metrics.brand_alias_ok_total.get()}`);
+  lineHelpType('catalog_ok_total', 'Catalog matches (exact)', 'counter'); out.push(`catalog_ok_total ${metrics.catalog_ok_total.get()}`);
+  lineHelpType('subcatalog_ok_total', 'Catalog matches via subtree', 'counter'); out.push(`subcatalog_ok_total ${metrics.subcatalog_ok_total.get()}`);
   lineHelpType('no_token_skips_total', 'Per-rule fetch skips due to no token', 'counter');
   for (const e of metrics.no_token_skips_total.entries()) out.push(`no_token_skips_total{rule="${e.labels.rule}"} ${e.value}`);
   lineHelpType('fetch_timeout_total', 'Per-proxy fetch timeouts', 'counter');

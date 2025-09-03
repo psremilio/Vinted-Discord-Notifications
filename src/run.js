@@ -10,7 +10,7 @@ import { EdfScheduler } from "./schedule/edf.js";
 import { tierOf } from "./schedule/tiers.js";
 import { buildParentGroups, buildExplicitFamily } from "./rules/parenting.js";
 import { loadFamiliesFromConfig } from "./rules/families.js";
-import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey } from "./rules/urlNormalizer.js";
+import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey, debugMatchFailReason, canonicalizeUrl } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
@@ -43,10 +43,22 @@ function dumpRulesConfig(searches) {
         const f = parseRuleFilters(url);
         const fkey = buildFamilyKey(url);
         const pkey = buildParentKey(url);
+        const pkeyNoPrice = buildParentKey(url, { stripPrice: true });
+        const canUrl = canonicalizeUrl(url);
         console.log('[rule]', 'name=', r.channelName, 'id=', r.channelId, 'host=', host, 'path=', path);
         console.log('[rule.url]', url);
         console.log('[rule.filters]', 'text=', f.text||'', 'currency=', f.currency||'', 'price_from=', f.priceFrom||'', 'price_to=', f.priceTo||'', 'catalogs=', (f.catalogs||[]).join(',')||'');
-        console.log('[rule.keys]', 'familyKey=', fkey, 'parentKey=', pkey);
+        console.log('[rule.keys]', 'familyKey=', fkey, 'parentKey=', pkey, 'parentKey(no_price)=', pkeyNoPrice);
+        try {
+          const u2 = new URL(url);
+          const p2 = new URLSearchParams(u2.search);
+          const types = [];
+          if (p2.getAll('catalog[]').length) types.push('catalog[]=array');
+          if (p2.get('catalog_ids')) types.push('catalog_ids=csv');
+          if (p2.getAll('brand_ids[]').length) types.push('brand_ids[]=array');
+          if (p2.get('brand_ids')) types.push('brand_ids=csv');
+          console.log('[parse.canonical]', 'canonical_url=', canUrl, 'types=', types.join(','));
+        } catch {}
       } catch (e) {
         console.warn('[rules.dump] failed:', e?.message || e);
       }
@@ -122,6 +134,14 @@ export const runSearch = async (client, channel, opts = {}) => {
                   try {
                     ll('[fanout.eval.child]', 'child=', childRule.channelName, 'matched=', `${matched.length}/${articles.length}`, 'price_from=', filters.priceFrom, 'price_to=', filters.priceTo, 'catalogs=', (filters.catalogs||[]).join(','));
                   } catch {}
+                }
+                if (!matched.length && articles.length) {
+                  const sample = articles.slice(0, 5);
+                  for (const it of sample) {
+                    let reason = 'unknown';
+                    try { reason = debugMatchFailReason(it, filters) || 'unknown'; } catch {}
+                    console.log('[match.debug]', 'rule=', childRule.channelName, 'item=', it?.id, 'fail=', reason);
+                  }
                 }
                 if (!matched.length) continue;
                 const dest = await getChannelById(client, childRule.channelId);
