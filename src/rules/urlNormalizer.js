@@ -126,6 +126,21 @@ export function itemMatchesFilters(item, filters) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
       if (!cid || !filters.catalogs.includes(cid)) return false;
     }
+    // Optional brand enforcement
+    if (String(process.env.FANOUT_ENFORCE_BRAND || '0') === '1' && filters.brandIds?.length) {
+      const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
+      if (!bid || !filters.brandIds.map(String).includes(bid)) return false;
+    }
+    // Optional size enforcement
+    if (String(process.env.FANOUT_ENFORCE_SIZE || '0') === '1' && filters.sizeIds?.length) {
+      const sid = String(item?.size_id ?? item?.size?.id ?? '');
+      if (!sid || !filters.sizeIds.map(String).includes(sid)) return false;
+    }
+    // Optional status/condition enforcement
+    if (String(process.env.FANOUT_ENFORCE_STATUS || '0') === '1' && filters.statusIds?.length) {
+      const st = String(item?.status_id ?? item?.status ?? '').toLowerCase();
+      if (!st || !filters.statusIds.map(x=>String(x).toLowerCase()).includes(st)) return false;
+    }
     // Text search (optional, best-effort)
     if (filters.text) {
       const t = String(filters.text).toLowerCase().split(/\s+/).filter(Boolean);
