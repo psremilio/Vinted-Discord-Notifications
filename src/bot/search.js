@@ -1,6 +1,7 @@
 import { fetchRule, hedgedGet } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
-import { dedupeKey } from "../utils/dedupe.js";
+import { dedupeKeyForChannel } from "../utils/dedupe.js";
+import { buildFamilyKey } from "../rules/urlNormalizer.js";
 import { stats } from "../utils/stats.js";
 import { state, markFetchAttempt, markFetchSuccess, markFetchError } from "../state.js";
 import { metrics } from "../infra/metrics.js";
@@ -192,7 +193,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                   }
                   // mark old as processed to avoid later posting, but do not return them
                   for (const it of old) {
-                    try { processedStore.set(dedupeKey(channel.channelName, it.id), Date.now()); } catch {}
+                    try { processedStore.set(dedupeKeyForChannel(channel, it.id, familyKey), Date.now()); } catch {}
                   }
                   if (old.length) { try { metrics.fetch_skipped_total.inc(old.length); } catch {} }
                   filtered = fresh;
@@ -256,10 +257,11 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
 const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
   const cutoff = Date.now() - recentMs;
+  let familyKey = null; try { familyKey = buildFamilyKey(String(channel.url || '')); } catch {}
   const filteredArticles = items.filter(({ photo, id, title }) =>
     photo &&
     (DISABLE_RECENT || (photo.high_resolution?.timestamp || 0) * 1000 > cutoff) &&
-    !processedStore?.has?.(dedupeKey(channel.channelName, id)) &&
+    !processedStore?.has?.(dedupeKeyForChannel(channel, id, familyKey)) &&
     !titleBlacklist.some(word => (title || '').toLowerCase().includes(word))
   );
 
@@ -272,7 +274,7 @@ const selectNewArticles = (items, processedStore, channel) => {
       const hasPhoto = !!item.photo;
       const tsSec = item.photo?.high_resolution?.timestamp || 0;
       const isRecent = tsSec * 1000 > cutoff;
-      const wasProcessed = !!processedStore?.has?.(dedupeKey(channel.channelName, item.id));
+      const wasProcessed = !!processedStore?.has?.(dedupeKeyForChannel(channel, item.id, familyKey));
       const isBlacklisted = titleBlacklist.some(word => (item.title || '').toLowerCase().includes(word));
       let reason = 'unknown';
       if (!hasPhoto) reason = 'no_photo';

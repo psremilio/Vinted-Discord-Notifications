@@ -1,7 +1,8 @@
 // Simple in-memory TTL store + dedupe key helpers
 // Allow CROSS_RULE_DEDUP=1 to force global scope
 const CROSS = String(process.env.CROSS_RULE_DEDUP || '0') === '1';
-export const DEDUPE_SCOPE = CROSS ? 'global' : (process.env.DEDUPE_SCOPE || 'per_rule'); // 'per_rule' | 'global'
+// Supported scopes: 'per_rule' (default), 'global', 'channel', 'family'
+export const DEDUPE_SCOPE = CROSS ? 'global' : (process.env.DEDUPE_SCOPE || 'per_rule');
 export const PROCESSED_TTL_MIN = parseInt(process.env.PROCESSED_TTL_MIN ?? '60', 10);
 export const ttlMs = PROCESSED_TTL_MIN * 60 * 1000;
 
@@ -12,6 +13,25 @@ export function dedupeKey(ruleName, itemId) {
   return (DEDUPE_SCOPE === 'global')
     ? `seen:item:${id}`
     : `seen:rule:${slug(ruleName)}:item:${id}`;
+}
+
+// Compute a dedupe key based on configured scope and the full channel object
+export function dedupeKeyForChannel(channel, itemId, familyKeyOptional) {
+  try {
+    const id = String(itemId ?? '');
+    if (DEDUPE_SCOPE === 'global') return `seen:item:${id}`;
+    if (DEDUPE_SCOPE === 'channel') return `seen:chan:${String(channel?.channelId || channel?.id || '')}:item:${id}`;
+    if (DEDUPE_SCOPE === 'family') {
+      const fk = String(familyKeyOptional || '');
+      if (fk) return `seen:family:${slug(fk)}:item:${id}`;
+      // Fallback to per_rule when no family key provided
+      return `seen:rule:${slug(channel?.channelName || '')}:item:${id}`;
+    }
+    // per_rule
+    return `seen:rule:${slug(channel?.channelName || '')}:item:${id}`;
+  } catch {
+    return dedupeKey(channel?.channelName || '', itemId);
+  }
 }
 
 export function createProcessedStore() {

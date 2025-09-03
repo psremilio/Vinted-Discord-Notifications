@@ -2,7 +2,7 @@ import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { initProxyPool } from "./net/http.js";
 import { startAutoTopUp } from "./net/proxyHealth.js";
-import { createProcessedStore, dedupeKey, ttlMs } from "./utils/dedupe.js";
+import { createProcessedStore, dedupeKeyForChannel, ttlMs } from "./utils/dedupe.js";
 import { limiter } from "./utils/limiter.js";
 import { startStats } from "./utils/stats.js";
 import { metrics } from "./infra/metrics.js";
@@ -191,7 +191,10 @@ export const runSearch = async (client, channel, opts = {}) => {
                   for (const it of sample) {
                     let reason = 'unknown';
                     try { reason = debugMatchFailReason(it, filters) || 'unknown'; } catch {}
-                    console.log('[match.debug]', 'rule=', childRule.channelName, 'item=', it?.id, 'fail=', reason);
+                    const price = (()=>{ try { return normalizedPrice(it, filters?.currency || 'EUR'); } catch { return null; } })();
+                    const bid = String(it?.brand_id ?? it?.brand?.id ?? '');
+                    const cid = String(it?.catalog_id ?? it?.catalog?.id ?? '');
+                    console.log('[match.debug]', 'rule=', childRule.channelName, 'item=', it?.id, 'fail=', reason, 'price=', price, 'price_to=', filters?.priceTo ?? '', 'brand=', bid, 'catalog=', cid);
                   }
                 }
                 if (!matched.length) continue;
@@ -237,8 +240,11 @@ export const runSearch = async (client, channel, opts = {}) => {
                 await postArticles(gated, dest, childRule.channelName);
                 // mark seen for child rule after post
                 gated.forEach(article => {
-                  const key = dedupeKey(childRule.channelName, article.id);
-                  processedStore.set(key, Date.now(), { ttl: ttlMs });
+                  try {
+                    const fk = (()=>{ try { return buildFamilyKey(String(childRule.url || '')); } catch { return null; } })();
+                    const key = dedupeKeyForChannel(childRule, article.id, fk);
+                    processedStore.set(key, Date.now(), { ttl: ttlMs });
+                  } catch {}
                 });
                 try { metrics.parent_fanout_items_total?.inc({ parent: String(channel.channelName), child: String(childRule.channelName) }, gated.length); } catch {}
               }
@@ -268,8 +274,11 @@ export const runSearch = async (client, channel, opts = {}) => {
                 }
                 if (fresh.length) await postArticles(fresh, dest, channel.channelName);
                 articles.forEach(article => {
-                  const key = dedupeKey(channel.channelName, article.id);
-                  processedStore.set(key, Date.now(), { ttl: ttlMs });
+                  try {
+                    const fk = (()=>{ try { return buildFamilyKey(String(channel.url || '')); } catch { return null; } })();
+                    const key = dedupeKeyForChannel(channel, article.id, fk);
+                    processedStore.set(key, Date.now(), { ttl: ttlMs });
+                  } catch {}
                 });
               }
             }
@@ -302,8 +311,11 @@ export const runSearch = async (client, channel, opts = {}) => {
                       const dest = await getChannelById(client, childRule.channelId);
                       if (dest) await postArticles(childArts, dest, childRule.channelName);
                       childArts.forEach(article => {
-                        const key = dedupeKey(childRule.channelName, article.id);
-                        processedStore.set(key, Date.now(), { ttl: ttlMs });
+                        try {
+                          const fk = (()=>{ try { return buildFamilyKey(String(childRule.url || '')); } catch { return null; } })();
+                          const key = dedupeKeyForChannel(childRule, article.id, fk);
+                          processedStore.set(key, Date.now(), { ttl: ttlMs });
+                        } catch {}
                       });
                       try { metrics.child_fetch_saved_total?.inc({ child: String(childRule.channelName) }, childArts.length); } catch {}
                     }
