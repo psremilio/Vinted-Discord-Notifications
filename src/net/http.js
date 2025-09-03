@@ -9,6 +9,36 @@ import { metrics } from '../infra/metrics.js';
 const clientsByProxy = new Map();
 const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
 
+// Sliding-window softfail tracker (60s) to drive gentle hedging adjustments
+const softFails = [];
+const totalReqs = [];
+function _gcWindow(arr) {
+  const cutoff = Date.now() - 60_000;
+  while (arr.length && arr[0] < cutoff) arr.shift();
+}
+function recordOutcome({ ok = false, softfail = false } = {}) {
+  const now = Date.now();
+  totalReqs.push(now); _gcWindow(totalReqs);
+  if (softfail) { softFails.push(now); _gcWindow(softFails); }
+  try {
+    const rate = getSoftfailRate60s();
+    metrics.http_429_rate_60s?.set(Math.round(rate * 100));
+  } catch {}
+}
+function getSoftfailRate60s() {
+  _gcWindow(totalReqs); _gcWindow(softFails);
+  const t = totalReqs.length || 1;
+  return Math.min(1, Math.max(0, softFails.length / t));
+}
+function getHedgeBudget() {
+  const baseN = Math.max(1, Number(process.env.HEDGE_REQUESTS || 2));
+  const maxN = Math.max(baseN, Number(process.env.HEDGE_REQUESTS_MAX || 4));
+  const thr = Math.min(1, Math.max(0, Number(process.env.SOFTFAIL_RATE_BOOST_THR || 0.25)));
+  const rate = getSoftfailRate60s();
+  const bonus = rate > thr ? 1 : 0;
+  return Math.min(maxN, baseN + bonus);
+}
+
 function createClient(proxyStr) {
   const existing = clientsByProxy.get(proxyStr);
   if (existing) return existing;
@@ -131,7 +161,7 @@ export async function getHttp(base) {
 
 // Hedged GET: fire up to HEDGE_REQUESTS with small delay and return the first useful response
 export async function hedgedGet(url, config = {}, base = BASE) {
-  const HEDGE_N = Math.max(1, Number(process.env.HEDGE_REQUESTS || 2));
+  const HEDGE_N = getHedgeBudget();
   const HEDGE_DELAY = Math.max(0, Number(process.env.HEDGE_DELAY_MS || 200));
 
   const attempts = [];
@@ -152,15 +182,18 @@ export async function hedgedGet(url, config = {}, base = BASE) {
           const code = Number(res.status || 0);
           if (!resolved && code >= 200 && code < 300) {
             recordProxySuccess(proxy);
+            recordOutcome({ ok: true });
             resolved = true;
             resolve({ res, proxy });
           } else {
             recordProxyOutcome(proxy, code);
+            recordOutcome({ softfail: true });
             resolve(null);
           }
         } catch (e) {
           // timeouts or network errors
           recordProxyOutcome(proxy, e?.response?.status || 0);
+          recordOutcome({ softfail: true });
           resolve(null);
         }
       }, delayMs);
@@ -336,6 +369,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
             rateCtl.observe(alt, { ok: true, latency: lat2, code: code2 });
             if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] ok-after-retry rule=${ruleId} from=${proxy} alt=${alt} code=${code2} ms=${lat2}`);
             try { stickyMap.record(ruleId, { skipped: false, proxy: alt }); } catch {}
+            try { recordOutcome({ ok: true }); } catch {}
             return { ok: true, res: res2 };
           } else {
             recordProxyOutcome(alt, code2);
@@ -352,6 +386,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     try { stickyMap.failover(ruleId); } catch {}
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
     if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] softfail rule=${ruleId} proxy=${proxy} code=${code}`);
+    try { recordOutcome({ softfail: true }); } catch {}
     return { softFail: true };
   } catch (e) {
     // network error -> try one neighbor if retry tokens are available
@@ -368,6 +403,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
           rateCtl.observe(alt, { ok: true, latency: lat2, code: code2 });
           if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] ok-after-neterr rule=${ruleId} alt=${alt} code=${code2} ms=${lat2}`);
           try { stickyMap.record(ruleId, { skipped: false, proxy: alt }); } catch {}
+          try { recordOutcome({ ok: true }); } catch {}
           return { ok: true, res: res2 };
         }
       } catch {}
@@ -377,6 +413,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     rateCtl.observe(proxy, { fail: true });
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
     if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] net-softfail rule=${ruleId} proxy=${proxy} err=${e?.message||e}`);
+    try { recordOutcome({ softfail: true }); } catch {}
     return { softFail: true };
   }
 }

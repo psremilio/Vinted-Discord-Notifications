@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { addSearch } from '../run.js';
 import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
 import { ensureWebhooksForChannel } from '../infra/webhooksManager.js';
+import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -101,79 +102,63 @@ export const execute = async (interaction) => {
         const canonicalUrl = canonicalizeUrl(urlRaw);
         const canonicalKey = buildParentKey(canonicalUrl);
 
-        //register the search into the json file
-        const searches = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
-        const findByKey = (list, key) => {
-            if (!Array.isArray(list)) return -1;
-            for (let i = 0; i < list.length; i++) {
-                const s = list[i] || {};
-                const k = s.canonicalKey || buildParentKey(String(s.url || ''));
-                if (k === key) return i;
-            }
-            return -1;
-        };
-        const idxByKey = findByKey(searches, canonicalKey);
-        const idxByName = searches.findIndex(s => String(s.channelName) === String(name));
-
-        const next = {
-            channelId: channel_id,
-            channelName: name,
-            url: canonicalUrl,
-            frequency: Number(frequency),
-            titleBlacklist: banned_keywords,
-            canonicalKey,
-        };
-
-        let op = 'created';
-        if (idxByKey !== -1) {
-            // Update existing by canonical key (idempotent)
-            const prev = searches[idxByKey] || {};
-            // Avoid name collision if another search holds the desired name
-            if (idxByName !== -1 && idxByName !== idxByKey) {
-                // keep previous name, update rest
-                next.channelName = prev.channelName;
-            }
-            searches[idxByKey] = { ...prev, ...next };
-            op = 'updated';
-        } else if (idxByName !== -1) {
-            // Update existing by name (backward compatibility)
-            const prev = searches[idxByName] || {};
-            searches[idxByName] = { ...prev, ...next };
-            op = 'updated';
-        } else {
-            searches.push(next);
-            op = 'created';
+        // Enqueue mutation to serialize writes and rebuilds
+        const queued = pendingMutations();
+        if (queued > 0) {
+          try { await safeEdit(`⏳ Eingereiht… (${queued} vor dir)`); } catch {}
         }
 
-        // Apply in-memory immediately to avoid waiting for disk rebuild
-        try {
-          await addSearch(interaction.client, next);
-        } catch (e) {
-          console.warn('[cmd] addSearch immediate failed, will rely on rebuild:', e?.message || e);
-        }
+        enqueueMutation('new_search', async () => {
+          let op = 'created';
+          const searches = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+          const findByKey = (list, key) => {
+              if (!Array.isArray(list)) return -1;
+              for (let i = 0; i < list.length; i++) {
+                  const s = list[i] || {};
+                  const k = s.canonicalKey || buildParentKey(String(s.url || ''));
+                  if (k === key) return i;
+              }
+              return -1;
+          };
+          const idxByKey = findByKey(searches, canonicalKey);
+          const idxByName = searches.findIndex(s => String(s.channelName) === String(name));
 
-        // Respond to user quickly
-        const embed = new EmbedBuilder()
-            .setTitle(op === 'created' ? 'Search created' : 'Search updated')
-            .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
-            .setColor(0x00FF00);
-        embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
-        await safeEdit({ embeds: [embed]});
-        try { console.log('[cmd.result] /new_search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
-        try { console.log('[cmd.latency] /new_search exec_ms=%d', Date.now() - t0); } catch {}
+          const next = {
+              channelId: channel_id,
+              channelName: name,
+              url: canonicalUrl,
+              frequency: Number(frequency),
+              titleBlacklist: banned_keywords,
+              canonicalKey,
+          };
 
-        // Persist + webhooks + scheduler rebuild asynchronously (non-blocking)
-        setTimeout(async () => {
-          try {
-            await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
-          } catch (error) {
-            console.error('[cmd] error saving new search:', error?.message || error);
+          if (idxByKey !== -1) {
+              const prev = searches[idxByKey] || {};
+              if (idxByName !== -1 && idxByName !== idxByKey) {
+                  next.channelName = prev.channelName;
+              }
+              searches[idxByKey] = { ...prev, ...next };
+              op = 'updated';
+          } else if (idxByName !== -1) {
+              const prev = searches[idxByName] || {};
+              searches[idxByName] = { ...prev, ...next };
+              op = 'updated';
+          } else {
+              searches.push(next);
+              op = 'created';
           }
-          // optionally create webhooks for this channel (async)
+
+          try { await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2)); } catch (error) { console.error('[cmd] error saving new search:', error?.message || error); }
+
+          // Apply in-memory update to scheduler
+          try { await addSearch(interaction.client, next); } catch (e) { console.warn('[cmd] addSearch immediate failed, will rely on rebuild:', e?.message || e); }
+
+          // Auto webhooks
           const WANT_AUTO = (interaction.options.getBoolean('auto_webhooks') ?? (String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1'));
           if (WANT_AUTO) {
             try { await ensureWebhooksForChannel(ch, Number(process.env.WEBHOOKS_PER_CHANNEL || 3), String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook')); } catch (e) { console.warn('[webhooks] auto failed:', e?.message || e); }
           }
+
           // Non-blocking diff rebuild to refresh families
           try {
             const mod = await import('../run.js');
@@ -182,8 +167,20 @@ export const execute = async (interaction) => {
           } catch (err) {
             console.error('[cmd] rebuild after create failed:', err?.message || err);
           }
-        }, 0);
 
+          // Respond when done
+          const embed = new EmbedBuilder()
+            .setTitle(op === 'created' ? 'Search created' : 'Search updated')
+            .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
+            .setColor(0x00FF00);
+          embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
+          await safeEdit({ embeds: [embed]});
+          try { console.log('[cmd.result] /new_search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
+          try { console.log('[cmd.latency] /new_search exec_ms=%d', Date.now() - t0); } catch {}
+        }, async (e) => {
+          console.error('Error starting monitoring:', e);
+          await safeEdit('There was an error starting the monitoring.');
+        });
     } catch (error) {
         console.error('Error starting monitoring:', error);
         await safeEdit('There was an error starting the monitoring.');

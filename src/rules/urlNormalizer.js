@@ -48,20 +48,48 @@ export function buildParentKey(rawUrl, opts = {}) {
   }
 }
 
-// Family key: broader grouping that intentionally ignores catalogs as well,
-// so variants like shirts/trackpants can form one family under a single parent.
+// Build a structured family/base key from a Vinted search URL by keeping only
+// stable filters that define a family and intentionally ignoring price bounds
+// and volatile params. Kept (sorted): brand_ids[], catalog[]/catalog_ids[],
+// size_ids[], status_ids[], currency. Ignored: price_from, price_to, search_id,
+// page, order, time (and alias 'sort').
 export function buildFamilyKey(rawUrl) {
-  const strat = String(process.env.PARENTING_STRATEGY || 'mapped');
-  if (strat === 'exact_url') return buildParentKey(rawUrl);
   try {
     const u = new URL(String(rawUrl || ''));
-    const p = new URLSearchParams(u.search);
-    const brands = normalizeArray(p.getAll('brand_ids[]'));
-    const cats = normalizeArray(p.getAll('catalog[]'));
-    if (!brands.length && !cats.length) return `${u.host}${u.pathname}?INVALID_NO_SCOPE`;
+    const params = new URLSearchParams(u.search);
+    // Normalize and collect allowed keys
+    const allowArrKeys = new Map([
+      ['brand_ids[]', []],
+      ['catalog[]', []],
+      ['catalog_ids[]', []],
+      ['size_ids[]', []],
+      ['status_ids[]', []],
+    ]);
+    let currency = '';
+    for (const [k, v] of params.entries()) {
+      const kk = String(k);
+      if (kk === 'price_from' || kk === 'price_to' || kk === 'search_id' || kk === 'page' || kk === 'order' || kk === 'time' || kk === 'sort') {
+        continue;
+      }
+      if (allowArrKeys.has(kk)) {
+        allowArrKeys.get(kk).push(String(v || ''));
+      } else if (kk === 'currency') {
+        currency = String(v || '').toUpperCase();
+      }
+    }
+    // Normalize arrays: merge catalog variants into a single logical field
+    const brands = normalizeArray(allowArrKeys.get('brand_ids[]'));
+    const catsA = normalizeArray(allowArrKeys.get('catalog[]'));
+    const catsB = normalizeArray(allowArrKeys.get('catalog_ids[]'));
+    const catalogs = normalizeArray([...(catsA || []), ...(catsB || [])]);
+    const sizes = normalizeArray(allowArrKeys.get('size_ids[]'));
+    const statuses = normalizeArray(allowArrKeys.get('status_ids[]'));
     const parts = [];
     if (brands.length) parts.push(`brand_ids[]=${brands.join(',')}`);
-    if (cats.length) parts.push(`catalog[]=${cats.join(',')}`);
+    if (catalogs.length) parts.push(`catalog[]=${catalogs.join(',')}`);
+    if (sizes.length) parts.push(`size_ids[]=${sizes.join(',')}`);
+    if (statuses.length) parts.push(`status_ids[]=${statuses.join(',')}`);
+    if (currency) parts.push(`currency=${currency}`);
     return `${u.host}${u.pathname}?${parts.join('&')}`;
   } catch { return String(rawUrl || ''); }
 }

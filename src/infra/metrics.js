@@ -82,6 +82,8 @@ export const metrics = {
   queue_age_ms_p95: new LabeledGauge('queue_age_ms_p95', ['channel']),
   first_age_ms_p95: new LabeledGauge('first_age_ms_p95', ['rule']),
   proxy_fetch_ms_p95: new LabeledGauge('proxy_fetch_ms_p95', ['proxy']),
+  // fanout mismatch counters
+  fanout_skipped_by_mismatch_total: new LabeledCounter('fanout_skipped_by_mismatch_total', ['field']),
   // scheduler
   scheduler_reload_events_total: new Counter('scheduler_reload_events_total'),
   scheduler_rules_total: new Gauge('scheduler_rules_total'),
@@ -179,6 +181,9 @@ export function serializeMetrics() {
   for (const e of metrics.first_age_ms_p95.entries()) out.push(`first_age_ms_p95{rule="${e.labels.rule}"} ${e.value}`);
   lineHelpType('proxy_fetch_ms_p95', 'Per-proxy fetch latency p95 (ms)', 'gauge');
   for (const e of metrics.proxy_fetch_ms_p95.entries()) out.push(`proxy_fetch_ms_p95{proxy="${e.labels.proxy}"} ${e.value}`);
+  // fanout mismatch
+  lineHelpType('fanout_skipped_by_mismatch_total', 'Fanout child skipped due to filter mismatch', 'counter');
+  for (const e of metrics.fanout_skipped_by_mismatch_total.entries()) out.push(`fanout_skipped_by_mismatch_total{field="${e.labels.field}"} ${e.value}`);
   // scheduler
   lineHelpType('scheduler_reload_events_total', 'Scheduler rebuild/reload events', 'counter'); out.push(`scheduler_reload_events_total ${metrics.scheduler_reload_events_total.get()}`);
   lineHelpType('scheduler_rules_total', 'Scheduler rules total', 'gauge'); out.push(`scheduler_rules_total ${metrics.scheduler_rules_total.get()}`);

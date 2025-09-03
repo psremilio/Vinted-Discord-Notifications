@@ -54,6 +54,9 @@ function dumpRulesConfig(searches) {
         console.log('[rule.url]', url);
         console.log('[rule.filters]', 'text=', f.text||'', 'currency=', f.currency||'', 'price_from=', f.priceFrom||'', 'price_to=', f.priceTo||'', 'catalogs=', (f.catalogs||[]).join(',')||'');
         console.log('[rule.keys]', 'familyKey=', fkey, 'parentKey=', pkey, 'parentKey(no_price)=', pkeyNoPrice);
+        if (String(process.env.LOG_FAMILY_MISMATCH || '1') === '1' && fkey !== pkeyNoPrice) {
+          console.warn('[family.mismatch]', 'name=', r.channelName, 'reason=fkey!=parentKey(no_price)');
+        }
         try {
           const u2 = new URL(url);
           const p2 = new URLSearchParams(u2.search);
@@ -164,18 +167,58 @@ export const runSearch = async (client, channel, opts = {}) => {
               if (!fanoutEnabled) {
                 ll('[fanout.warmup]', 'parent=', channel.channelName);
               }
-              for (const child of (fanoutEnabled ? channel.children : [])) {
-                const childRule = child.rule || child; // tolerate shape
-                const baseFilters = child.filters || parseRuleFilters(childRule.url);
-                // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
-                const filters = { ...baseFilters };
-                try {
-                  if (IGNORE_CAT_WHEN_PARENT_NONE && parentFilters && (
-                    !Array.isArray(parentFilters.catalogs) || parentFilters.catalogs.length === 0 || parentHasWildcard2050
-                  )) {
-                    filters.catalogs = [];
-                  }
-                } catch {}
+  for (const child of (fanoutEnabled ? channel.children : [])) {
+    const childRule = child.rule || child; // tolerate shape
+    const baseFilters = child.filters || parseRuleFilters(childRule.url);
+    // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
+    const filters = { ...baseFilters };
+    try {
+      if (IGNORE_CAT_WHEN_PARENT_NONE && parentFilters && (
+        !Array.isArray(parentFilters.catalogs) || parentFilters.catalogs.length === 0 || parentHasWildcard2050
+      )) {
+        filters.catalogs = [];
+      }
+    } catch {}
+    // Gating: ensure brand & catalog equality; size/status subset policy
+    try {
+      const arrEq = (a,b)=>{
+        const A = Array.isArray(a)?a.map(String).sort():[];
+        const B = Array.isArray(b)?b.map(String).sort():[];
+        return A.length===B.length && A.every((x,i)=>x===B[i]);
+      };
+      const isSubset = (sub, sup) => {
+        const S = new Set((Array.isArray(sup)?sup:[]).map(String));
+        for (const v of (Array.isArray(sub)?sub:[])) if (!S.has(String(v))) return false;
+        return true;
+      };
+      if (!arrEq(parentFilters?.brandIds, baseFilters?.brandIds)) {
+        try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'brand_ids' }); } catch {}
+        console.warn('[fanout.skip]', 'reason=brand_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
+        continue;
+      }
+      if (!arrEq(parentFilters?.catalogs, baseFilters?.catalogs)) {
+        try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'catalog' }); } catch {}
+        console.warn('[fanout.skip]', 'reason=catalog_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
+        continue;
+      }
+      // If parent lacks sizes/status → allow any child sizes/status
+      const pSizes = Array.isArray(parentFilters?.sizeIds) ? parentFilters.sizeIds : [];
+      const pStatus = Array.isArray(parentFilters?.statusIds) ? parentFilters.statusIds : [];
+      if (pSizes.length > 0) {
+        if (!isSubset(baseFilters?.sizeIds || [], pSizes)) {
+          try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'size_ids' }); } catch {}
+          console.warn('[fanout.skip]', 'reason=size_subset_violation', 'parent=', channel.channelName, 'child=', childRule.channelName);
+          continue;
+        }
+      }
+      if (pStatus.length > 0) {
+        if (!isSubset(baseFilters?.statusIds || [], pStatus)) {
+          try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'status_ids' }); } catch {}
+          console.warn('[fanout.skip]', 'reason=status_subset_violation', 'parent=', channel.channelName, 'child=', childRule.channelName);
+          continue;
+        }
+      }
+    } catch {}
                 const matched = [];
                 for (const it of articles) {
                   if (itemMatchesFilters(it, filters)) matched.push(it);

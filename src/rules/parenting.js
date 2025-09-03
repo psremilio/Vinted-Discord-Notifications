@@ -76,10 +76,9 @@ export function canonicalSignature(rule) {
       catalog: normalizeArr(f.catalogs),
       size: normalizeArr(f.sizeIds),
       status: normalizeArr(f.statusIds),
-      text: String((f.text || '').trim().toLowerCase()),
       cur: String(f.currency || 'EUR').toUpperCase(),
     };
-    return `b=${sig.brand.join(',')}|c=${sig.catalog.join(',')}|s=${sig.size.join(',')}|st=${sig.status.join(',')}|q=${sig.text}|cur=${sig.cur}`;
+    return `b=${sig.brand.join(',')}|c=${sig.catalog.join(',')}|s=${sig.size.join(',')}|st=${sig.status.join(',')}|cur=${sig.cur}`;
   } catch { return 'sig:invalid'; }
 }
 
@@ -91,7 +90,7 @@ function pickLeader(members) {
 }
 
 function onlyDiffersInPrice(a, b) {
-  const keys = ['brandIds','catalogs','sizeIds','statusIds','text','currency'];
+  const keys = ['brandIds','catalogs','sizeIds','statusIds','currency'];
   for (const k of keys) {
     const va = JSON.stringify(normalizeArr(a[k]));
     const vb = JSON.stringify(normalizeArr(b[k]));
