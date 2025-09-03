@@ -84,6 +84,24 @@ async function getChannelById(client, id) {
 const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number, backfillOnUntil?: number, backfillCooldownUntil?: number, noDataCycles?: number }
 const RULE_MIN_RPM = Math.max(0, Number(process.env.RULE_MIN_RPM || 1));
 
+// Tombstones: prevent re-add races for short window after delete
+const tombstoneNames = new Map(); // name -> untilTs
+const tombstoneKeys = new Map(); // key -> untilTs
+function _isTombstonedName(name) { const until = tombstoneNames.get(String(name)); return !!(until && until > Date.now()); }
+function _isTombstonedKey(key) { const until = tombstoneKeys.get(String(key)); return !!(until && until > Date.now()); }
+function _gcTombstones() {
+  const now = Date.now();
+  for (const [k, ts] of Array.from(tombstoneNames.entries())) if (ts <= now) tombstoneNames.delete(k);
+  for (const [k, ts] of Array.from(tombstoneKeys.entries())) if (ts <= now) tombstoneKeys.delete(k);
+}
+setInterval(_gcTombstones, 30_000).unref?.();
+export function tombstoneRule(name, url, ttlMs = Number(process.env.DELETE_TOMBSTONE_MS || 60_000)) {
+  const until = Date.now() + Math.max(10_000, ttlMs);
+  if (name) tombstoneNames.set(String(name), until);
+  try { const k = buildParentKey(url); tombstoneKeys.set(String(k), until); } catch {}
+  try { console.log('[delete.tombstone]', 'name=', name, 'until=', new Date(until).toISOString()); } catch {}
+}
+
 export const runSearch = async (client, channel, opts = {}) => {
     try {
         // Optional heartbeat dots (disabled by default)
@@ -355,7 +373,14 @@ function computeScheduleList(mySearches) {
   } else {
     toSchedule.push(...(mySearches || []));
   }
-  return toSchedule;
+  // Apply tombstone filter (ignore recently deleted rules by name/key)
+  const filtered = [];
+  for (const r of toSchedule) {
+    if (_isTombstonedName(r.channelName)) { console.warn('[rebuild.skip.tombstone]', 'name=', r.channelName); continue; }
+    try { const k = buildParentKey(r.url); if (_isTombstonedKey(k)) { console.warn('[rebuild.skip.tombstone]', 'key=', k); continue; } } catch {}
+    filtered.push(r);
+  }
+  return filtered;
 }
 
 export function rebuildFromList(client, list) {

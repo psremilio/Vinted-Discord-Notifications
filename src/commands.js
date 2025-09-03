@@ -64,24 +64,24 @@ export const registerCommands = async (client) => {
 export const handleCommands = async (interaction, mySearches) => {
     console.log(`[cmd.interaction] ${interaction.commandName}`);
     try {
-        // Ack ASAP before any heavy work
+        // Ack ASAP before any heavy work (prefer flags=Ephemeral; fallback to ephemeral)
         if (!interaction.deferred && !interaction.replied) {
-            try { await interaction.deferReply({ ephemeral: true }); } catch (e) {
-                try { await interaction.reply({ content: '⏳ …', ephemeral: true }); } catch {}
-            }
+            try { await interaction.deferReply({ flags: 1 << 6 }); }
+            catch (e1) { try { await interaction.deferReply({ ephemeral: true }); }
+            catch (e2) { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} } }
         }
         const name = interaction.commandName;
 
         // Authorization: Admins always allowed. Others must be in allowlist.
         if (name !== 'bot_roles') {
             if (!isAuthorized(interaction)) {
-                try { await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', ephemeral: true }); } catch {}
+                try { await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', flags: 1 << 6 }); } catch {}
                 return;
             }
         } else {
             // bot_roles itself is admin-only
             if (!isAdmin(interaction)) {
-                try { await interaction.followUp({ content: 'Nur Admins dürfen diesen Befehl verwenden.', ephemeral: true }); } catch {}
+                try { await interaction.followUp({ content: 'Nur Admins dürfen diesen Befehl verwenden.', flags: 1 << 6 }); } catch {}
                 return;
             }
         }
@@ -100,15 +100,15 @@ export const handleCommands = async (interaction, mySearches) => {
         if (!module) {
             const msg = `Befehl "${name}" ist (noch) nicht verfügbar.`;
             try {
-                await interaction.followUp({ content: msg, ephemeral: true });
+                await interaction.followUp({ content: msg, flags: 1 << 6 });
             } catch {
-                try { await interaction.reply({ content: msg, ephemeral: true }); } catch {}
+                try { await interaction.reply({ content: msg, flags: 1 << 6 }); } catch {}
             }
             return;
         }
         if (!module || typeof module.execute !== 'function') {
             const msg = `Befehl "${name}" ist (noch) nicht verfügbar.`;
-            try { await interaction.followUp({ content: msg, ephemeral: true }); } catch {}
+            try { await interaction.followUp({ content: msg, flags: 1 << 6 }); } catch {}
             return;
         }
         // Execute command; ensure any long work runs after ack
@@ -116,9 +116,9 @@ export const handleCommands = async (interaction, mySearches) => {
     } catch (error) {
         console.error('\nError handling command:', error);
         try {
-            await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+            await interaction.followUp({ content: 'There was an error while executing this command!', flags: 1 << 6 });
         } catch {
-            try { await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true }); } catch {}
+            try { await interaction.reply({ content: 'There was an error while executing this command!', flags: 1 << 6 }); } catch {}
         }
     }
 }

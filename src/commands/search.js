@@ -46,7 +46,7 @@ const validateUrl = (url) => {
 
 export const execute = async (interaction) => {
   if (!interaction.deferred && !interaction.replied) {
-    try { await interaction.deferReply({ ephemeral: true }); } catch {}
+    try { await interaction.deferReply({ flags: 1 << 6 }); } catch { try { await interaction.deferReply({ ephemeral: true }); } catch {} }
   }
 
   const urlRaw = interaction.options.getString('url');

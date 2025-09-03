@@ -182,6 +182,28 @@ setInterval(() => {
   } catch {}
 }, 1000);
 
+// Purge all queued posts for a given channel (route + reorder buffer)
+export function purgeChannelQueues(channelId) {
+  try {
+    if (!channelId) return;
+    const key = bucketKey({ id: channelId });
+    const b = routeBuckets.get(key);
+    if (b) {
+      b.q = [];
+      b.ids = new Set();
+      routeBuckets.delete(key);
+      try { metrics.route_queue_depth.set({ channel: String(channelId) }, 0); } catch {}
+    }
+    const st = chanBuf.get(channelId);
+    if (st) {
+      try { clearInterval(st.timer); } catch {}
+      chanBuf.delete(channelId);
+      try { metrics.reorder_buffer_depth.set({ channel: String(channelId) }, 0); } catch {}
+    }
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log('[queue.purge]', 'channel=', channelId);
+  } catch {}
+}
+
 async function doSend(job, bucket) {
   const now = Date.now();
   if (discordCooldownUntil > now) {

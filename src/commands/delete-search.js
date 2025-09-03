@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildParentKey } from '../rules/urlNormalizer.js';
+import { tombstoneRule } from '../run.js';
+import { purgeChannelQueues } from '../infra/postQueue.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -25,16 +27,16 @@ export const execute = async (interaction) => {
     // Ensure we have an ack to be able to editReply
     try {
       if (!interaction.deferred && !interaction.replied) {
-        try { await interaction.deferReply({ ephemeral: true }); } catch { try { await interaction.reply({ content: '⏳ …', ephemeral: true }); } catch {} }
+        try { await interaction.deferReply({ flags: 1 << 6 }); } catch { try { await interaction.deferReply({ ephemeral: true }); } catch { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} } }
       }
     } catch {}
 
     async function safeEdit(contentOrOptions) {
       try {
         if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
-        return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true });
+        return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
       } catch (e) {
-        try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true }); } catch {}
+        try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 }); } catch {}
       }
     }
     const name = interaction.options.getString('name');
@@ -44,6 +46,8 @@ export const execute = async (interaction) => {
     try { if (urlRaw) { key = buildParentKey(urlRaw); keyNoPrice = buildParentKey(urlRaw, { stripPrice: true }); } } catch {}
 
     try {
+        let beforeRules = null, afterRules = null;
+        try { const mod = await import('../run.js'); beforeRules = mod.activeSearches?.size ?? null; } catch {}
         //delete the search that has 'name' as name
         const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
 
@@ -77,6 +81,7 @@ export const execute = async (interaction) => {
         searches.splice(searchIndex, 1);
 
         await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
+        try { tombstoneRule(removedName, removed?.url); } catch {}
 
         // Rebuild full scheduling non-blocking to ensure families/jobs update
         try {
@@ -87,8 +92,11 @@ export const execute = async (interaction) => {
             } catch {} }, 0);
             // Immediate stop to avoid one more poll cycle while rebuild diff applies
             try { mod.removeJob?.(removedName); } catch {}
+            try { if (removed?.channelId) purgeChannelQueues(removed.channelId); } catch {}
+            try { afterRules = mod.activeSearches?.size ?? null; } catch {}
             const tag = name ? `name=\`${name}\`` : (key ? `key=\`${key}\`` : '');
-            try { await safeEdit({ content: `✅ Search ${tag} deleted and schedule rebuild triggered.` }); } catch {}
+            const commitMs = Date.now() - t0;
+            try { await safeEdit({ content: `✅ Search ${tag} deleted and schedule rebuild triggered. (commit_ms=${commitMs}, rules_before=${beforeRules}, rules_after=${afterRules})` }); } catch {}
             try { console.log('[cmd.result] /delete_search ok %s', tag); } catch {}
             try { console.log('[cmd.latency] /delete_search exec_ms=%d', Date.now() - t0); } catch {}
         } catch (e) {
