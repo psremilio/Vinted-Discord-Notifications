@@ -2,7 +2,7 @@ import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { initProxyPool } from "./net/http.js";
 import { startAutoTopUp } from "./net/proxyHealth.js";
-import { createProcessedStore, dedupeKeyForChannel, ttlMs } from "./utils/dedupe.js";
+import { createProcessedStore, dedupeKeyForChannel, ttlMs, DEDUPE_SCOPE } from "./utils/dedupe.js";
 import { limiter } from "./utils/limiter.js";
 import { startStats } from "./utils/stats.js";
 import { metrics } from "./infra/metrics.js";
@@ -20,6 +20,7 @@ import { learnFromRules } from "./rules/catalogLearn.js";
 const activeSearches = new Map(); // name -> Timeout
 // In-memory processed store with TTL; keys are per-rule when configured
 let processedStore = createProcessedStore();
+try { console.log('[dedupe.scope]', DEDUPE_SCOPE); } catch {}
 // Family runtime state
 const familiesByParent = new Map(); // parentName -> { parent, children, sig }
 const familyState = new Map(); // sig -> { warmup: number, child: Map<name,{zero:number, quarantined:boolean}> }
@@ -480,6 +481,7 @@ function buildFamilies(mySearches) {
         const pk = buildParentKey(fam.parent.url);
         const childNames = (fam.children||[]).map(c => c.rule?.channelName || c.channelName || '');
         ll('[fanout.family.detail]', 'familyKey=', fk, 'parentKey=', pk, 'parent=', fam.parent.channelName, 'children=', childNames.join(','));
+        try { console.log('[fanout.children]', 'parent=', fam.parent.channelName, 'children_count=', childNames.length); } catch {}
         if (String(process.env.PARENTING_STRATEGY || 'exact_url') === 'exact_url' && fk !== pk) {
           console.warn('[fanout.warn] strategy=exact_url but familyKey!=parentKey for', fam.parent.channelName);
         }

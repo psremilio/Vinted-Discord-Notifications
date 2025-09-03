@@ -126,6 +126,29 @@ async function bootstrapSession(client, base = BASE) {
     }
   } catch (e) {
     console.warn('[proxy] bootstrap failed:', e.code || e.message);
+    // Non-blocking single retry after a short delay
+    setTimeout(async () => {
+      try {
+        const res2 = await axios.get(base, {
+          proxy: false,
+          httpAgent: client.proxyAgent,
+          httpsAgent: client.proxyAgent,
+          timeout: 8000,
+          validateStatus: () => true,
+          headers: {
+            'User-Agent': 'Mozilla/5.0',
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+          }
+        });
+        const setCookie2 = res2.headers['set-cookie'] || [];
+        const cookieHeader2 = setCookie2.map(c => c.split(';')[0]).join('; ');
+        if (cookieHeader2) client.http.defaults.headers.Cookie = cookieHeader2;
+        client.http.defaults.headers.Referer = base.endsWith('/') ? base : base + '/';
+        client.http.defaults.headers.Origin = base.replace(/\/$/, '');
+        client.warmedAt = Date.now();
+        if (PROXY_DEBUG) console.log(`[proxy] session bootstrapped (retry) for ${client.proxyLabel}`);
+      } catch {}
+    }, Math.max(200, Number(process.env.PROXY_BOOTSTRAP_RETRY_DELAY_MS || 500)));
   }
 }
 
