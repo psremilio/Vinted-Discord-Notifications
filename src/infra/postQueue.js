@@ -101,12 +101,12 @@ export async function sendQueued(channel, payload, meta = {}) {
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
-const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl}>, cooldownUntil: number, ids:Set<string>, _rr:number }
+const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl}>, cooldownUntil: number, ids:Set<string>, _rr:number, inflight:number }
 function bucketKey(channel) { return `chan:${channel?.id || 'UNKNOWN'}`; }
 function getBucket(channel) {
   const key = bucketKey(channel);
   let b = routeBuckets.get(key);
-  if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), _rr: 0 }; routeBuckets.set(key, b); }
+  if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), _rr: 0, inflight: 0 }; routeBuckets.set(key, b); }
   return [key, b];
 }
 
@@ -155,18 +155,31 @@ setInterval(() => {
       const b = routeBuckets.get(key);
       if (!b || b.q.length === 0) continue;
       if (b.cooldownUntil > now) continue;
+      // per-bucket dynamic concurrency: 1–3 depending on backlog and cooldown
+      const CHAN_CONC = (!cooldown && b.q.length > 20) ? 3 : (!cooldown && b.q.length > 5) ? 2 : 1;
+      if ((b.inflight || 0) >= CHAN_CONC) continue;
       // priority: createdAt desc, then firstMatchedAt desc, then discoveredAt desc
       b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (Number(bj.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) || (bj.discoveredAt - a.discoveredAt));
       const job = b.q.shift();
       if (job?.itemId) try { b.ids.delete(job.itemId); } catch {}
       slots--;
-      postLimiter.schedule(() => doSend(job, b)).catch(() => {});
+      b.inflight = (b.inflight || 0) + 1;
+      postLimiter.schedule(() => doSend(job, b)).catch(() => {}).finally(() => { b.inflight = Math.max(0, (b.inflight||1) - 1); });
     }
   }
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
     const ready = keys.filter(k => (routeBuckets.get(k)?.q?.length||0)>0).length;
     console.log(`[post.tick] qps=${currentQps} bucketsReady=${ready} slotsLeft=${slots} totalQ=${totalQ} perBucket=${perBucketSends}`);
   }
+  // per-route depth metric
+  try {
+    for (const k of keys) {
+      const b = routeBuckets.get(k);
+      if (!b) continue;
+      const cid = k.replace('chan:','');
+      metrics.route_queue_depth.set({ channel: cid }, b.q.length);
+    }
+  } catch {}
 }, 1000);
 
 async function doSend(job, bucket) {
@@ -179,11 +192,31 @@ async function doSend(job, bucket) {
   }
   try {
     let res;
-    if (job.webhookUrl) {
-      // Send via webhook (route-fanout)
-      res = await sendWebhook(job.webhookUrl, job.payload, job.channel?.id);
+    // Bundling: if backlog high, bundle up to 10 embeds for same route
+    const BUNDLE = (bucket?.q?.length || 0) > 20 && Array.isArray(job?.payload?.embeds);
+    if (BUNDLE) {
+      const embeds = [...(job.payload.embeds || [])].slice(0, 10);
+      const cid = job?.channel?.id;
+      const sameWebhook = job.webhookUrl || null;
+      while (embeds.length < 10 && bucket.q.length) {
+        const next = bucket.q[0];
+        if (!next) break;
+        if ((sameWebhook && next.webhookUrl !== sameWebhook) || next.channel?.id !== cid) break;
+        const take = bucket.q.shift();
+        if (take?.itemId) try { bucket.ids.delete(take.itemId); } catch {}
+        const e2 = (take?.payload?.embeds || []);
+        for (const e of e2) { if (embeds.length < 10) embeds.push(e); else break; }
+      }
+      const bundlePayload = { embeds };
+      if (job.webhookUrl) res = await sendWebhook(job.webhookUrl, bundlePayload, job.channel?.id);
+      else res = await job.channel.send(bundlePayload);
     } else {
-      res = await job.channel.send(job.payload);
+      if (job.webhookUrl) {
+        // Send via webhook (route-fanout)
+        res = await sendWebhook(job.webhookUrl, job.payload, job.channel?.id);
+      } else {
+        res = await job.channel.send(job.payload);
+      }
     }
     const latency = Date.now() - (Number(job.discoveredAt) || now);
     recordPostLatency(latency);
@@ -280,6 +313,7 @@ setInterval(() => {
       const a = arr.slice().sort((x,y)=>x-y);
       const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
       metrics.queue_age_ms_p95.set({ channel: String(cid) }, p95);
+      try { metrics.e2e_latency_ms_p95.set({ channel: String(cid) }, p95); } catch {}
     }
   } catch {}
 }, 60 * 1000);

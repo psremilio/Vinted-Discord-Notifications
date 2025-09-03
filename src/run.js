@@ -337,6 +337,7 @@ export function rebuildFromList(client, list) {
   const toSchedule = computeScheduleList(list || []);
   const newMap = new Map();
   for (const r of toSchedule) newMap.set(r.channelName, r);
+  try { metrics.scheduler_reload_events_total.inc(); } catch {}
   // Update or add
   for (const [name, rule] of newMap.entries()) {
     if (activeSearches.has(name)) {
@@ -350,6 +351,7 @@ export function rebuildFromList(client, list) {
     if (!newMap.has(name)) removeJob(name);
   }
   edf.start();
+  try { metrics.scheduler_rules_total.set(activeSearches.size); } catch {}
 }
 
 export async function rebuildFromDisk(client) {

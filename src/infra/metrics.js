@@ -75,6 +75,13 @@ export const metrics = {
   queue_age_ms_p95: new LabeledGauge('queue_age_ms_p95', ['channel']),
   first_age_ms_p95: new LabeledGauge('first_age_ms_p95', ['rule']),
   proxy_fetch_ms_p95: new LabeledGauge('proxy_fetch_ms_p95', ['proxy']),
+  // scheduler
+  scheduler_reload_events_total: new Counter('scheduler_reload_events_total'),
+  scheduler_rules_total: new Gauge('scheduler_rules_total'),
+  // alias for E2E (found->sent)
+  e2e_latency_ms_p95: new LabeledGauge('e2e_latency_ms_p95', ['channel']),
+  // per-route queue depth
+  route_queue_depth: new LabeledGauge('route_queue_depth', ['channel']),
 };
 
 export function serializeMetrics() {
@@ -154,5 +161,14 @@ export function serializeMetrics() {
   for (const e of metrics.first_age_ms_p95.entries()) out.push(`first_age_ms_p95{rule="${e.labels.rule}"} ${e.value}`);
   lineHelpType('proxy_fetch_ms_p95', 'Per-proxy fetch latency p95 (ms)', 'gauge');
   for (const e of metrics.proxy_fetch_ms_p95.entries()) out.push(`proxy_fetch_ms_p95{proxy="${e.labels.proxy}"} ${e.value}`);
+  // scheduler
+  lineHelpType('scheduler_reload_events_total', 'Scheduler rebuild/reload events', 'counter'); out.push(`scheduler_reload_events_total ${metrics.scheduler_reload_events_total.get()}`);
+  lineHelpType('scheduler_rules_total', 'Scheduler rules total', 'gauge'); out.push(`scheduler_rules_total ${metrics.scheduler_rules_total.get()}`);
+  // E2E latency alias
+  lineHelpType('e2e_latency_ms_p95', 'End-to-end latency p95 (found->sent) per channel', 'gauge');
+  for (const e of metrics.e2e_latency_ms_p95.entries()) out.push(`e2e_latency_ms_p95{channel="${e.labels.channel}"} ${e.value}`);
+  // per-route queue depth
+  lineHelpType('route_queue_depth', 'Per-route queue depth by channel', 'gauge');
+  for (const e of metrics.route_queue_depth.entries()) out.push(`route_queue_depth{channel="${e.labels.channel}"} ${e.value}`);
   return out.join('\n');
 }

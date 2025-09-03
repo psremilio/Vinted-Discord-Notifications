@@ -108,13 +108,23 @@ let clientReady = false;
 let monitorsStarted = false;
 const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
 
-function startMonitorsOnce(where = 'unknown'){
+async function startMonitorsOnce(where = 'unknown'){
   if (monitorsStarted) return;
   if (!clientReady) return;
   monitorsStarted = true;
   console.log(`[start] launching monitors/search… (from=${where}, healthy=${healthyCount?.() ?? 'n/a'})`);
   try { registerCommands(client); } catch {}
-  try { run(client,mySearches); } catch (e) { console.error('[start] run failed', e); }
+  try {
+    const WAIT = String(process.env.WAIT_HEALTHY_START || '1') === '1';
+    if (WAIT) {
+      const t0 = Date.now();
+      const DEADLINE = Number(process.env.WAIT_HEALTHY_DEADLINE_SEC || 20) * 1000;
+      while ((healthyCount?.() || 0) <= 0 && (Date.now() - t0) < DEADLINE) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+    run(client,mySearches);
+  } catch (e) { console.error('[start] run failed', e); }
   try { startHeartbeat(); } catch {}
 }
 
