@@ -278,7 +278,7 @@ const addSearch = (client, search) => {
     const tier = tierOf(search.channelName);
     console.log(`[schedule] ${search.channelName}: EDF tier=${tier}` + (NO_JITTER ? '' : ' (±jitter)'));
     edf.addRule(client, search);
-    activeSearches.set(search.channelName, true);
+    try { const k = buildParentKey(search.url); activeSearches.set(search.channelName, { key: k, url: search.url }); } catch { activeSearches.set(search.channelName, { key: String(search.url||''), url: search.url }); }
     try { metrics.rules_active.set(activeSearches.size); } catch {}
 };
 
@@ -363,12 +363,15 @@ export function rebuildFromList(client, list) {
   const toSchedule = computeScheduleList(list || []);
   const newMap = new Map();
   for (const r of toSchedule) newMap.set(r.channelName, r);
+  const newKeySet = new Set();
+  for (const r of toSchedule) { try { newKeySet.add(buildParentKey(r.url)); } catch { newKeySet.add(String(r.url||'')); } }
   try { metrics.scheduler_reload_events_total.inc(); } catch {}
   try { console.log('[rebuild] applying diff… newRules=%d', newMap.size); } catch {}
   // Update or add
   for (const [name, rule] of newMap.entries()) {
     if (activeSearches.has(name)) {
       try { edf.updateRule(rule); } catch {}
+      try { const k = buildParentKey(rule.url); activeSearches.set(name, { key: k, url: rule.url }); } catch { activeSearches.set(name, { key: String(rule.url||''), url: rule.url }); }
     } else {
       addSearch(client, rule);
     }
@@ -380,6 +383,17 @@ export function rebuildFromList(client, list) {
       try { metrics.rules_removed_total?.inc(); } catch {}
       removeJob(name);
     }
+  }
+  // Additional pruning by canonical key
+  for (const [name, info] of Array.from(activeSearches.entries())) {
+    try {
+      const k = String(info?.key || '');
+      if (k && !newKeySet.has(k)) {
+        console.warn('[rule.deleted.extra]', 'name=', name, 'reason=canonical_key_prune');
+        try { metrics.rules_removed_total?.inc(); } catch {}
+        removeJob(name);
+      }
+    } catch {}
   }
   edf.start();
   try { metrics.scheduler_rules_total.set(activeSearches.size); } catch {}
