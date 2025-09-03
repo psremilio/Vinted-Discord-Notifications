@@ -31,14 +31,14 @@ export const execute = async (interaction) => {
 
         await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
 
-        // Rebuild full scheduling to ensure families and jobs update immediately
+        // Rebuild full scheduling non-blocking to ensure families/jobs update
         try {
             const mod = await import('../run.js');
-            if (typeof mod.rebuildFromDisk === 'function') await mod.rebuildFromDisk(interaction.client);
-            await interaction.editReply({ content: `✅ Search \`${name}\` deleted and schedule rebuilt.` });
+            setTimeout(() => { try { if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client); } catch {} }, 0);
+            try { await interaction.editReply({ content: `✅ Search \`${name}\` deleted and schedule rebuild triggered.` }); } catch { try { await interaction.followUp({ content: `✅ Search \`${name}\` deleted and schedule rebuild triggered.`, ephemeral: true }); } catch {} }
         } catch (e) {
             console.warn('[cmd] rebuild after delete failed:', e?.message || e);
-            await interaction.editReply({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)` });
+            try { await interaction.editReply({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)` }); } catch { try { await interaction.followUp({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)`, ephemeral: true }); } catch {} }
         }
 
     } catch (error) {

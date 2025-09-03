@@ -64,8 +64,11 @@ export const registerCommands = async (client) => {
 export const handleCommands = async (interaction, mySearches) => {
     console.log(`[cmd.interaction] ${interaction.commandName}`);
     try {
+        // Ack ASAP before any heavy work
         if (!interaction.deferred && !interaction.replied) {
-            try { await interaction.deferReply({ ephemeral: true }); } catch {}
+            try { await interaction.deferReply({ ephemeral: true }); } catch (e) {
+                try { await interaction.reply({ content: '⏳ …', ephemeral: true }); } catch {}
+            }
         }
         const name = interaction.commandName;
 
@@ -108,7 +111,8 @@ export const handleCommands = async (interaction, mySearches) => {
             try { await interaction.followUp({ content: msg, ephemeral: true }); } catch {}
             return;
         }
-        await module.execute(interaction, mySearches);
+        // Execute command; ensure any long work runs after ack
+        setTimeout(() => { module.execute(interaction, mySearches).catch(err => console.error('\nError handling command (async):', err)); }, 0);
     } catch (error) {
         console.error('\nError handling command:', error);
         try {

@@ -3,7 +3,7 @@
 // Also normalizes common aliases and ordering of multi-value params.
 
 const STRIP_KEYS = new Set([
-  'price_from', 'price_to', 'order', 'sort', 'page', '_t', 'time', 'cursor', 'ref', 'utm_source', 'utm_medium', 'utm_campaign'
+  'price_from', 'price_to', 'order', 'sort', 'page', '_t', 'time', 'cursor', 'ref', 'utm_source', 'utm_medium', 'utm_campaign', 'search_id'
 ]);
 const ARRAY_KEYS = new Set([
   'catalog[]', 'size_ids[]', 'brand_ids[]', 'status_ids[]', 'color_ids[]', 'material_ids[]'
@@ -59,6 +59,8 @@ export function buildFamilyKey(rawUrl) {
       if (k === 'catalog[]') continue; // ignore catalogs for family grouping
       if (String(process.env.FANOUT_IGNORE_TEXT || '1') === '1' && k === 'search_text') continue;
       if (String(process.env.FANOUT_IGNORE_CURRENCY || '1') === '1' && k === 'currency') continue;
+      // treat detail filters as child-level: ignore in family key
+      if (k === 'size_ids[]' || k === 'status_ids[]' || k === 'color_ids[]' || k === 'material_ids[]') continue;
       if (ARRAY_KEYS.has(k)) {
         norm[k] = norm[k] || [];
         norm[k].push(v);
@@ -87,10 +89,15 @@ export function parseRuleFilters(rawUrl) {
   const u = new URL(String(rawUrl || ''));
   const p = new URLSearchParams(u.search);
   const arr = (k) => p.getAll(k).map(x => String(x || '')).filter(Boolean);
+  // accept multiple param spellings
+  let catalogs = arr('catalog[]');
+  if (!catalogs.length) catalogs = arr('catalog_ids[]');
+  if (!catalogs.length) catalogs = (p.get('catalog_ids') || '').split(',').map(s=>s.trim()).filter(Boolean);
+  if (!catalogs.length) catalogs = (p.get('catalog') || '').split(',').map(s=>s.trim()).filter(Boolean);
   const one = (k) => (p.get(k) || '').trim();
   return {
     text: one('search_text'),
-    catalogs: arr('catalog[]'),
+    catalogs,
     sizeIds: arr('size_ids[]'),
     brandIds: arr('brand_ids[]'),
     statusIds: arr('status_ids[]'),
@@ -107,13 +114,15 @@ export function parseRuleFilters(rawUrl) {
 export function itemMatchesFilters(item, filters) {
   try {
     // Price bounds (if provided)
-    const price = Number(item?.price?.amount ?? item?.price_numeric ?? NaN);
+    const priceRaw = item?.price?.amount ?? item?.price_numeric ?? item?.price ?? null;
+    const price = priceRaw != null ? Number(String(priceRaw).replace(/,/, '.')) : NaN;
     if (!Number.isNaN(price)) {
       if (typeof filters.priceFrom === 'number' && price < filters.priceFrom) return false;
       if (typeof filters.priceTo === 'number' && price > filters.priceTo) return false;
     }
     // Catalogs (if provided)
-    if (filters.catalogs?.length) {
+    const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '0') === '1';
+    if (REQ_CAT && filters.catalogs?.length) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
       if (!cid || !filters.catalogs.includes(cid)) return false;
     }

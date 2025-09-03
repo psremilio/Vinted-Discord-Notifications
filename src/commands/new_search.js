@@ -51,30 +51,16 @@ const validateUrl = (url) => {
 
 export const execute = async (interaction) => {
     const t0 = Date.now();
-    let acked = false;
-    try {
-        if (!interaction.deferred && !interaction.replied) {
-            await interaction.deferReply({ ephemeral: true });
-            acked = true;
-        } else {
-            acked = true;
-        }
-    } catch (e) {
-        // Fallback: try an immediate ephemeral reply via flags
-        try {
-            await interaction.reply({ content: '⏳ wird angelegt…', flags: 1 << 6 });
-            acked = true;
-        } catch (e2) {
-            console.warn('[cmd.ack.fail] new_search', e?.message || e, e2?.message || e2);
-        }
-    }
-    try { console.log('[cmd.latency] /new_search ack_ms=%d', Date.now() - t0); } catch {}
+    // Ack is handled centrally in handleCommands; just log a marker here.
+    try { console.log('[cmd.latency] /new_search ack_ms=%d', 0); } catch {}
 
     async function safeEdit(contentOrOptions) {
         try {
             if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
             return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
-        } catch {}
+        } catch (e) {
+            try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true }); } catch {}
+        }
     }
 
     const url = interaction.options.getString('url');
@@ -148,11 +134,15 @@ export const execute = async (interaction) => {
             await safeEdit('There was an error starting the monitoring.');
         }
 
-        // Rebuild scheduling so parenting/fanout applies immediately
+        // Rebuild scheduling so parenting/fanout applies immediately (non-blocking)
         try {
             const mod = await import('../run.js');
-            if (typeof mod.rebuildFromDisk === 'function') await mod.rebuildFromDisk(interaction.client);
-            else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, search);
+            setTimeout(() => {
+                try {
+                    if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
+                    else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, search);
+                } catch {}
+            }, 0);
         } catch (err) {
             console.error('Live scheduling rebuild failed:', err);
         }
