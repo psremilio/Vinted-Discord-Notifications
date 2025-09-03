@@ -165,6 +165,22 @@ export const runSearch = async (client, channel, opts = {}) => {
                 for (const it of articles) {
                   if (itemMatchesFilters(it, filters)) matched.push(it);
                 }
+                // Monotonie-Guard: Wenn Preis ≤ child.price_to und Brand/Catalog zum Parent passen,
+                // aber das Child nicht matched → Violation loggen.
+                try {
+                  const cTo = typeof filters.priceTo === 'number' ? filters.priceTo : null;
+                  if (cTo != null) {
+                    for (const it of articles) {
+                      const price = normalizedPrice(it, filters?.currency || 'EUR');
+                      const bcOk = brandCatalogMatches(it, parentFilters || {});
+                      if (!Number.isNaN(price) && bcOk && price <= cTo && !matched.includes(it)) {
+                        const reason = debugMatchFailReason(it, filters) || 'unknown';
+                        try { metrics.mono_violation_total?.inc({ parent: String(channel.channelName), child: String(childRule.channelName) }); } catch {}
+                        console.warn('[mono_violation]', 'parent=', channel.channelName, 'child=', childRule.channelName, 'item=', it?.id, 'price=', price, 'brand=', String(it?.brand_id ?? it?.brand?.id ?? ''), 'catalog=', String(it?.catalog_id ?? it?.catalog?.id ?? ''), 'reason=', reason);
+                      }
+                    }
+                  }
+                } catch {}
                 if (FANOUT_DEBUG) {
                   try {
                     ll('[fanout.eval.child]', 'child=', childRule.channelName, 'matched=', `${matched.length}/${articles.length}`, 'price_from=', filters.priceFrom, 'price_to=', filters.priceTo, 'catalogs=', (filters.catalogs||[]).join(','));
@@ -379,6 +395,8 @@ function buildFamilies(mySearches) {
 
 function computeScheduleList(mySearches) {
   const families = buildFamilies(mySearches);
+  // Audit price families for missing buckets (e.g., 30€)
+  try { auditPriceFamilies(mySearches, families); } catch {}
   const parentNames = new Set();
   for (const fam of (families || [])) {
     const parent = fam.parent;
@@ -420,6 +438,31 @@ function computeScheduleList(mySearches) {
     filtered.push(r);
   }
   return filtered;
+}
+
+// Audit price-bucket coverage for families (e.g. ensure 30€ bucket exists)
+function auditPriceFamilies(searches, families) {
+  try {
+    const wantBuckets = (String(process.env.PRICE_BUCKETS || '10,15,20,30').split(',').map(s=>Number(s.trim())).filter(n=>Number.isFinite(n)));
+    const wantSet = new Set(wantBuckets);
+    for (const fam of (families || [])) {
+      const parent = fam.parent;
+      const childPriceTos = new Set();
+      for (const c of (fam.children || [])) {
+        const f = c.filters || parseRuleFilters(c.rule?.url || c.url || '');
+        if (typeof f.priceTo === 'number') childPriceTos.add(f.priceTo);
+      }
+      // Only consider as price family if at least one child has price_to
+      if (childPriceTos.size) {
+        for (const b of wantSet) {
+          if (!childPriceTos.has(b)) {
+            try { metrics.missing_price_bucket_total?.inc({ parent: String(parent.channelName), bucket: String(b) }); } catch {}
+            console.warn('[price_bucket.missing]', 'parent=', parent.channelName, 'bucket=', b);
+          }
+        }
+      }
+    }
+  } catch {}
 }
 
 export function rebuildFromList(client, list) {

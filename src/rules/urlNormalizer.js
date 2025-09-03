@@ -135,7 +135,7 @@ import { expandBrandIds } from './brandAliases.js';
 import { expandCatalogs } from './catalogMap.js';
 import { metrics } from '../infra/metrics.js';
 
-function normalizedPrice(item, preferredCurrency) {
+export function normalizedPrice(item, preferredCurrency) {
   try {
     const priceObj = item?.price || {};
     const raw = priceObj.amount ?? item?.price_numeric ?? item?.price ?? null;
@@ -270,4 +270,60 @@ export function debugMatchFailReason(item, filters) {
   } catch {
     return 'unknown';
   }
+}
+
+// Brand+Catalog only matcher (ignores price and other filters)
+export function brandCatalogMatches(item, filters) {
+  try {
+    // Catalogs
+    const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '1') === '1';
+    const catalogs = Array.isArray(filters?.catalogs) ? filters.catalogs.map(String) : [];
+    const HAS_WILDCARD_2050 = catalogs.includes('2050');
+    if (REQ_CAT && catalogs.length && !HAS_WILDCARD_2050) {
+      const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
+      if (!cid) return false;
+      const strat = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
+      if (strat === 'subtree') {
+        if (!expandCatalogs(catalogs).has(cid)) return false;
+      } else if (!catalogs.includes(cid)) return false;
+    }
+    // Brand
+    if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && (filters?.brandIds?.length)) {
+      const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
+      if (!bid) return false;
+      const strat = String(process.env.BRAND_MATCH_STRATEGY || 'alias_group');
+      if (strat === 'alias_group') {
+        if (!expandBrandIds(filters.brandIds).has(bid)) return false;
+      } else if (!filters.brandIds.map(String).includes(bid)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Canonicalize URL ignoring a set of keys (e.g., price_to)
+export function canonicalizeUrlExcept(rawUrl, ignoreKeys = []) {
+  try {
+    const u = new URL(String(rawUrl || ''));
+    const params = new URLSearchParams(u.search);
+    const norm = {};
+    for (const [k, v] of params.entries()) {
+      if (ignoreKeys.includes(k)) continue;
+      if (ARRAY_KEYS.has(k)) {
+        norm[k] = norm[k] || [];
+        norm[k].push(v);
+      } else {
+        norm[k] = String(v || '');
+      }
+    }
+    for (const k of Object.keys(norm)) if (ARRAY_KEYS.has(k)) norm[k] = normalizeArray(norm[k]);
+    const keys = Object.keys(norm).sort();
+    const parts = [];
+    for (const k of keys) {
+      const v = norm[k];
+      if (Array.isArray(v)) parts.push(`${k}=${v.join(',')}`); else parts.push(`${k}=${v}`);
+    }
+    return `${u.host}${u.pathname}?${parts.join('&')}`;
+  } catch { return String(rawUrl || ''); }
 }
