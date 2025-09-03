@@ -41,8 +41,12 @@ export const execute = async (interaction) => {
         try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 }); } catch {}
       }
     }
-    const name = interaction.options.getString('name');
-    const urlRaw = interaction.options.getString('url');
+    if (!interaction) {
+      try { console.error('[cmd.error] /delete_search interaction=undefined'); } catch {}
+      return;
+    }
+    const name = interaction.options?.getString?.('name');
+    const urlRaw = interaction.options?.getString?.('url');
     let key = null;
     let keyNoPrice = null;
     try { if (urlRaw) { key = buildParentKey(urlRaw); keyNoPrice = buildParentKey(urlRaw, { stripPrice: true }); } } catch {}

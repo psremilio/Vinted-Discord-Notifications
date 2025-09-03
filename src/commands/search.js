@@ -45,8 +45,18 @@ const validateUrl = (url) => {
 };
 
 export const execute = async (interaction) => {
-  if (!interaction.deferred && !interaction.replied) {
-    try { await interaction.deferReply({ flags: 1 << 6 }); } catch { try { await interaction.deferReply({ ephemeral: true }); } catch {} }
+  if (!interaction?.deferred && !interaction?.replied) {
+    try { await interaction.deferReply({ flags: 1 << 6 }); }
+    catch { try { await interaction.deferReply({ ephemeral: true }); } catch { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} } }
+  }
+
+  async function safeEdit(contentOrOptions) {
+    try {
+      if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
+      return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
+    } catch (e) {
+      try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 }); } catch {}
+    }
   }
 
   const urlRaw = interaction.options.getString('url');
@@ -68,14 +78,15 @@ export const execute = async (interaction) => {
     const isAllowedType = allowedTypes.has(ch?.type);
     const canSend = !!ch?.permissionsFor?.(interaction.client.user)?.has?.(PermissionsBitField.Flags.SendMessages);
     if (!channel_id || !isAllowedType || !canSend) {
-      await interaction.followUp({ content: 'Dieser Kanal ist ungeeignet. Bitte nutze einen Textkanal, in dem der Bot schreiben darf.' });
+      try { console.warn('[cmd.warn] /search invalid_channel', { id: channel_id || null, type: ch?.type, canSend }); } catch {}
+      await safeEdit({ content: 'Dieser Kanal ist ungeeignet. Bitte nutze einen Textkanal, in dem der Bot schreiben darf.' });
       return;
     }
   } catch {}
 
   const validation = validateUrl(urlRaw);
   if (validation !== true) {
-    await interaction.followUp({ content: validation });
+    await safeEdit({ content: validation });
     return;
   }
 
@@ -119,7 +130,7 @@ export const execute = async (interaction) => {
       fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
     } catch (e) {
       console.error('\nError saving new search (alias):', e);
-      await interaction.followUp({ content: 'There was an error starting the monitoring.' });
+      await safeEdit({ content: 'There was an error starting the monitoring.' });
     }
     try {
       // Prefer incremental rebuild so updates apply immediately
@@ -140,10 +151,10 @@ export const execute = async (interaction) => {
       .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
       .setColor(0x00FF00);
     embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
-    await interaction.followUp({ embeds: [embed] });
+    await safeEdit({ embeds: [embed] });
     try { console.log('[cmd.result] /search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
   } catch (err) {
     console.error('Error starting monitoring (alias):', err);
-    await interaction.followUp({ content: 'There was an error starting the monitoring.' });
+    await safeEdit({ content: 'There was an error starting the monitoring.' });
   }
 };

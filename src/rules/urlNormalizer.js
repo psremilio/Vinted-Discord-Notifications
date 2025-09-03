@@ -77,13 +77,28 @@ export function buildFamilyKey(rawUrl) {
         currency = String(v || '').toUpperCase();
       }
     }
+    // Also support CSV variants (e.g., brand_ids=1,2,3; catalog_ids=...; size_ids=...; status_ids=...; catalog=...)
+    const csv = (key) => String(params.get(key) || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
     // Normalize arrays: merge catalog variants into a single logical field
-    const brands = normalizeArray(allowArrKeys.get('brand_ids[]'));
+    const brands = normalizeArray([
+      ...allowArrKeys.get('brand_ids[]'),
+      ...csv('brand_ids'),
+    ]);
     const catsA = normalizeArray(allowArrKeys.get('catalog[]'));
     const catsB = normalizeArray(allowArrKeys.get('catalog_ids[]'));
-    const catalogs = normalizeArray([...(catsA || []), ...(catsB || [])]);
-    const sizes = normalizeArray(allowArrKeys.get('size_ids[]'));
-    const statuses = normalizeArray(allowArrKeys.get('status_ids[]'));
+    const catsCsv = normalizeArray(csv('catalog_ids').length ? csv('catalog_ids') : csv('catalog'));
+    const catalogs = normalizeArray([...(catsA || []), ...(catsB || []), ...(catsCsv || [])]);
+    const sizes = normalizeArray([
+      ...allowArrKeys.get('size_ids[]'),
+      ...csv('size_ids'),
+    ]);
+    const statuses = normalizeArray([
+      ...allowArrKeys.get('status_ids[]'),
+      ...csv('status_ids'),
+    ]);
     const parts = [];
     if (brands.length) parts.push(`brand_ids[]=${brands.join(',')}`);
     if (catalogs.length) parts.push(`catalog[]=${catalogs.join(',')}`);

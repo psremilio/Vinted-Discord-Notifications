@@ -53,7 +53,15 @@ const validateUrl = (url) => {
 
 export const execute = async (interaction) => {
     const t0 = Date.now();
-    // Ack is handled centrally in handleCommands; just log a marker here.
+    // Ensure we have an ack to enable editReply/followUp safely
+    try {
+      if (!interaction?.deferred && !interaction?.replied) {
+        try { await interaction.deferReply({ flags: 1 << 6 }); }
+        catch { try { await interaction.deferReply({ ephemeral: true }); } catch { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} } }
+      }
+    } catch (e) {
+      try { console.warn('[cmd.warn] /new_search failed to defer:', e?.message || e); } catch {}
+    }
     try { console.log('[cmd.latency] /new_search ack_ms=%d', 0); } catch {}
 
     async function safeEdit(contentOrOptions) {
@@ -65,14 +73,18 @@ export const execute = async (interaction) => {
         }
     }
 
-    const urlRaw = interaction.options.getString('url');
+    if (!interaction) {
+      try { console.error('[cmd.error] /new_search interaction=undefined'); } catch {}
+      return;
+    }
+    const urlRaw = interaction.options?.getString?.('url');
     const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
     // Normalize and clamp frequency to avoid too aggressive polling
     const freqRaw = interaction.options.getString('frequency');
     let frequency = Number.parseInt(freqRaw ?? '10', 10);
     if (!Number.isFinite(frequency)) frequency = 10;
     frequency = Math.min(Math.max(frequency, 5), 3600); // 5s–1h
-    const name = interaction.options.getString('name');
+    const name = interaction.options?.getString?.('name');
     const ch = interaction.channel;
     const channel_id = ch?.id;
 
@@ -87,6 +99,7 @@ export const execute = async (interaction) => {
         const isAllowedType = allowedTypes.has(ch?.type);
         const canSend = !!ch?.permissionsFor?.(interaction.client.user)?.has?.(PermissionsBitField.Flags.SendMessages);
         if (!channel_id || !isAllowedType || !canSend) {
+            try { console.warn('[cmd.warn] /new_search invalid_channel', { id: channel_id || null, type: ch?.type, canSend }); } catch {}
             await safeEdit('Dieser Kanal ist für Benachrichtigungen ungeeignet. Bitte führe den Befehl in einem Textkanal aus, in dem der Bot schreiben darf.');
             return;
         }
