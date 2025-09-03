@@ -14,10 +14,10 @@ export const data = new SlashCommandBuilder()
 
 export const execute = async (interaction) => {
   if (!interaction.deferred && !interaction.replied) {
-    try { await interaction.deferReply({ ephemeral: true }); } catch {}
+    try { await interaction.deferReply({ flags: 1 << 6 }); } catch {}
   }
   if (!isAdmin(interaction)) {
-    try { await interaction.followUp({ content: 'Nur Admins dürfen diese Aktion ausführen.', ephemeral: true }); } catch {}
+    try { await interaction.followUp({ content: 'Nur Admins dürfen diese Aktion ausführen.', flags: 1 << 6 }); } catch {}
     return;
   }
 
@@ -26,22 +26,22 @@ export const execute = async (interaction) => {
     if (sub === 'add') {
       const role = interaction.options.getRole('role');
       const after = addAllowed(role.id);
-      await interaction.followUp({ content: `Rolle <@&${role.id}> hinzugefügt. Aktuell erlaubt: ${after.map(id => `<@&${id}>`).join(', ') || '—'}`, ephemeral: true });
+      await interaction.followUp({ content: `Rolle <@&${role.id}> hinzugefügt. Aktuell erlaubt: ${after.map(id => `<@&${id}>`).join(', ') || '—'}`, flags: 1 << 6 });
     } else if (sub === 'remove') {
       const role = interaction.options.getRole('role');
       const after = removeAllowed(role.id);
-      await interaction.followUp({ content: `Rolle <@&${role.id}> entfernt. Aktuell erlaubt: ${after.map(id => `<@&${id}>`).join(', ') || '—'}`, ephemeral: true });
+      await interaction.followUp({ content: `Rolle <@&${role.id}> entfernt. Aktuell erlaubt: ${after.map(id => `<@&${id}>`).join(', ') || '—'}`, flags: 1 << 6 });
     } else if (sub === 'list') {
       const list = listAllowed();
-      await interaction.followUp({ content: `Erlaubte Rollen: ${list.map(id => `<@&${id}>`).join(', ') || '—'}`, ephemeral: true });
+      await interaction.followUp({ content: `Erlaubte Rollen: ${list.map(id => `<@&${id}>`).join(', ') || '—'}`, flags: 1 << 6 });
     } else if (sub === 'reset') {
       resetAllowed();
-      await interaction.followUp({ content: 'Alle erlaubten Rollen wurden gelöscht. Nur Admins dürfen Befehle nutzen.', ephemeral: true });
+      await interaction.followUp({ content: 'Alle erlaubten Rollen wurden gelöscht. Nur Admins dürfen Befehle nutzen.', flags: 1 << 6 });
     } else {
-      await interaction.followUp({ content: 'Unbekannter Unterbefehl.', ephemeral: true });
+      await interaction.followUp({ content: 'Unbekannter Unterbefehl.', flags: 1 << 6 });
     }
   } catch (e) {
-    await interaction.followUp({ content: `Fehler: ${e?.message || e}`, ephemeral: true });
+    await interaction.followUp({ content: `Fehler: ${e?.message || e}`, flags: 1 << 6 });
   }
 };
 
