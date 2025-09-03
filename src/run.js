@@ -196,7 +196,7 @@ const addSearch = (client, search) => {
     activeSearches.set(search.channelName, true);
     try { metrics.rules_active.set(activeSearches.size); } catch {}
 };
-export { addSearch };
+
 
 function buildFamilies(mySearches) {
   let families = [];
