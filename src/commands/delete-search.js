@@ -22,6 +22,21 @@ export const data = new SlashCommandBuilder()
 
 export const execute = async (interaction) => {
     const t0 = Date.now();
+    // Ensure we have an ack to be able to editReply
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        try { await interaction.deferReply({ ephemeral: true }); } catch { try { await interaction.reply({ content: '⏳ …', ephemeral: true }); } catch {} }
+      }
+    } catch {}
+
+    async function safeEdit(contentOrOptions) {
+      try {
+        if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
+        return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true });
+      } catch (e) {
+        try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true }); } catch {}
+      }
+    }
     const name = interaction.options.getString('name');
     const urlRaw = interaction.options.getString('url');
     let key = null;
@@ -54,7 +69,7 @@ export const execute = async (interaction) => {
 
         if (searchIndex === -1) {
             const msg = key ? `No search matched key ${key}${keyNoPrice ? ` (or no_price=${keyNoPrice})` : ''}` : `No search found with the name ${name}`;
-            await interaction.editReply({ content: msg });
+            await safeEdit({ content: msg });
             return;
         }
         searches.splice(searchIndex, 1);
@@ -69,20 +84,16 @@ export const execute = async (interaction) => {
               else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
             } catch {} }, 0);
             const tag = name ? `name=\`${name}\`` : (key ? `key=\`${key}\`` : '');
-            try { await interaction.editReply({ content: `✅ Search ${tag} deleted and schedule rebuild triggered.` }); } catch { try { await interaction.followUp({ content: `✅ Search ${tag} deleted and schedule rebuild triggered.`, ephemeral: true }); } catch {} }
+            try { await safeEdit({ content: `✅ Search ${tag} deleted and schedule rebuild triggered.` }); } catch {}
             try { console.log('[cmd.result] /delete_search ok %s', tag); } catch {}
             try { console.log('[cmd.latency] /delete_search exec_ms=%d', Date.now() - t0); } catch {}
         } catch (e) {
             console.warn('[cmd] rebuild after delete failed:', e?.message || e);
-            try { await interaction.editReply({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)` }); } catch { try { await interaction.followUp({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)`, ephemeral: true }); } catch {} }
+            try { await safeEdit({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)` }); } catch {}
         }
 
     } catch (error) {
         console.error('\nError deleting the search:', error);
-        try {
-            await interaction.followUp({ content: 'There was an error deleting the search.'});
-        } catch {
-            try { await interaction.editReply({ content: 'There was an error deleting the search.'}); } catch {}
-        }
+        try { await safeEdit({ content: 'There was an error deleting the search.'}); } catch {}
     }
 }
