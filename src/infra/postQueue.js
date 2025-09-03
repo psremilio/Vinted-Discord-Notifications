@@ -4,7 +4,8 @@ import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksMan
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
-const REORDER_WINDOW_MS = Math.max(0, Number(process.env.REORDER_WINDOW_MS || 12000));
+const REORDER_WINDOW_MS = Math.max(0, Number(process.env.REORDER_WINDOW_MS || 8000));
+const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 120000));
 
 export const postLimiter = new Bottleneck({
   maxConcurrent: CONC,
@@ -48,8 +49,12 @@ function flushChannel(id) {
   st.buf = rest;
   try { metrics.reorder_buffer_depth.set({ channel: id }, st.buf.length); } catch {}
   if (!eligible.length) return;
-  // Neueste zuerst: priorisiere neuere Listings (createdAt, dann discoveredAt)
-  eligible.sort((a, b) => (Number(b.createdAt||0) - Number(a.createdAt||0)) || (b.discoveredAt - a.discoveredAt));
+  // Neueste zuerst: createdAt, dann firstMatchedAt, dann discoveredAt
+  eligible.sort((a, b) =>
+    (Number(b.createdAt||0) - Number(a.createdAt||0)) ||
+    (Number(b.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) ||
+    (b.discoveredAt - a.discoveredAt)
+  );
   // Backlog-aware Flushgröße: min( max(3, ceil(queue/10)), 12 )
   const totalBacklog = eligible.length + st.buf.length;
   const dyn = Math.min(12, Math.max(3, Math.ceil(totalBacklog / 10)));
@@ -57,7 +62,7 @@ function flushChannel(id) {
   const keep = eligible.slice(dyn);
   // Nicht geflushedes zurück in Buffer legen
   st.buf = keep.concat(st.buf);
-  for (const job of slice) enqueueRoute(job.channel, job.payload, job.discoveredAt, job.createdAt);
+  for (const job of slice) enqueueRoute(job.channel, job.payload, job.discoveredAt, job.createdAt, job.itemId, job.firstMatchedAt);
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
     console.log(`[post.flush] channel=${id} released=${slice.length} remain=${st.buf.length} backlog=${totalBacklog}`);
   }
@@ -76,14 +81,19 @@ export async function sendQueued(channel, payload, meta = {}) {
   // Optional per-channel reorder window
   const discoveredAt = Number(meta?.discoveredAt || Date.now());
   const createdAt = Number(meta?.createdAt || Date.now());
+  const firstMatchedAt = meta?.firstMatchedAt ? Number(meta.firstMatchedAt) : undefined;
+  // Drop if too old on enqueue to avoid late spam
+  if (POST_MAX_AGE_MS > 0 && createdAt && (Date.now() - createdAt) > POST_MAX_AGE_MS) {
+    return;
+  }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
   if (REORDER_WINDOW_MS > 0 && channel?.id) {
     const st = ensureChannelBuffer(channel);
-    st.buf.push({ discoveredAt, createdAt, channel, payload, itemId });
+    st.buf.push({ discoveredAt, createdAt, firstMatchedAt, channel, payload, itemId });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
     return;
   }
-  enqueueRoute(channel, payload, discoveredAt, createdAt, itemId);
+  enqueueRoute(channel, payload, discoveredAt, createdAt, itemId, firstMatchedAt);
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
@@ -102,9 +112,10 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   let itemId = payload?.embeds?.[0]?.data?.fields?.find?.(f => /`\d+`/.test(f?.value || ''))?.value?.replace(/`/g,'');
   // prefer explicit meta if provided in route (we pass via meta.itemId earlier)
   if (typeof arguments[4] === 'string') itemId = arguments[4];
+  const firstMatchedAt = typeof arguments[5] === 'number' ? arguments[5] : undefined;
   const idKey = itemId ? String(itemId) : null;
   if (idKey && b.ids.has(idKey)) return; // already queued
-  const job = { channel, payload, discoveredAt, createdAt, itemId: idKey };
+  const job = { channel, payload, discoveredAt, createdAt, firstMatchedAt, itemId: idKey };
   // If webhooks configured for this channel, pick next webhook URL (round-robin by length)
   const webhooks = channel?.id ? getWebhooksForChannelId(channel.id) : null;
   if (webhooks && webhooks.length) {
@@ -140,8 +151,8 @@ setInterval(() => {
       const b = routeBuckets.get(key);
       if (!b || b.q.length === 0) continue;
       if (b.cooldownUntil > now) continue;
-      // priority: newest first by createdAt desc then discoveredAt desc
-      b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (bj.discoveredAt - a.discoveredAt));
+      // priority: createdAt desc, then firstMatchedAt desc, then discoveredAt desc
+      b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (Number(bj.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) || (bj.discoveredAt - a.discoveredAt));
       const job = b.q.shift();
       if (job?.itemId) try { b.ids.delete(job.itemId); } catch {}
       slots--;
@@ -172,6 +183,7 @@ async function doSend(job, bucket) {
     }
     const latency = Date.now() - (Number(job.discoveredAt) || now);
     recordPostLatency(latency);
+    try { metrics.post_age_ms_histogram.set({ channel: String(job?.channel?.id || '') }, Math.max(0, now - Number(job.createdAt || now))); } catch {}
     try { metrics.discord_cooldown_active.set(0); } catch {}
     return res;
   } catch (e) {
@@ -227,10 +239,10 @@ async function sendWebhook(url, payload, channelId) {
 // Auto-tune QPS based on recent 429s
 let last429 = 0;
 let currentQps = QPS;
-const MAX_QPS = Math.max(QPS, Number(process.env.DISCORD_QPS_MAX || 50));
-const MIN_QPS = Math.max(5, Number(process.env.DISCORD_QPS_MIN || 20));
-const INC_STEP = Math.max(1, Number(process.env.DISCORD_QPS_INC || 2));
-const DEC_FACTOR = Number(process.env.DISCORD_QPS_DEC_FACTOR || 0.85);
+const MAX_QPS = Math.max(QPS, Number(process.env.DISCORD_QPS_MAX || 120));
+const MIN_QPS = Math.max(5, Number(process.env.DISCORD_QPS_MIN || 60));
+const INC_STEP = Math.max(1, Number(process.env.DISCORD_QPS_INC || 8));
+const DEC_FACTOR = Number(process.env.DISCORD_QPS_DEC_FACTOR || 0.92);
 
 setInterval(() => {
   try {

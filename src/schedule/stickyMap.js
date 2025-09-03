@@ -87,8 +87,8 @@ class StickyMap extends EventEmitter {
 
   _rebalanceSkew() {
     const now = Date.now();
-    const THRESH = Number(process.env.RULE_SKIP_RATIO_THRESH || 0.3);
-    const COOLDOWN_MS = Number(process.env.RULE_REASSIGN_COOLDOWN_MS || 5 * 60 * 1000);
+    const THRESH = Number(process.env.STARVATION_SKIP_RATIO || process.env.RULE_SKIP_RATIO_THRESH || 0.3);
+    const COOLDOWN_MS = Number(process.env.STARVATION_OVERRIDE_TTL_MS || process.env.RULE_REASSIGN_COOLDOWN_MS || 5 * 60 * 1000);
     for (const [ruleId, arr] of this.ruleSkips.entries()) {
       if (!arr.length) continue;
       const total = arr.length;
@@ -116,3 +116,14 @@ class StickyMap extends EventEmitter {
 const sticky = new StickyMap();
 setInterval(() => { try { sticky._rebalanceSkew(); } catch {} }, 60 * 1000).unref?.();
 export const stickyMap = sticky;
+
+// expose approximate skip ratio for a rule over 3 minutes
+export function getRuleSkipRatio(ruleId) {
+  try {
+    const arr = stickyMap.ruleSkips?.get?.(ruleId) || [];
+    if (!arr.length) return 0;
+    const total = arr.length;
+    const skip = arr.filter(x => x.skipped).length;
+    return total ? skip / total : 0;
+  } catch { return 0; }
+}

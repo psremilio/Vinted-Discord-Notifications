@@ -8,6 +8,9 @@ import { startStats } from "./utils/stats.js";
 import { metrics } from "./infra/metrics.js";
 import { EdfScheduler } from "./schedule/edf.js";
 import { tierOf } from "./schedule/tiers.js";
+import { buildParentGroups, buildExplicitFamily } from "./rules/parenting.js";
+import { itemMatchesFilters, parseRuleFilters } from "./rules/urlNormalizer.js";
+import { recordFirstMatch } from "./bot/matchStore.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
@@ -38,7 +41,7 @@ async function getChannelById(client, id) {
     return ch;
 }
 
-const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number, backfillOnUntil?: number, backfillCooldownUntil?: number }
+const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number, backfillOnUntil?: number, backfillCooldownUntil?: number, noDataCycles?: number }
 const RULE_MIN_RPM = Math.max(0, Number(process.env.RULE_MIN_RPM || 1));
 
 export const runSearch = async (client, channel, opts = {}) => {
@@ -72,24 +75,74 @@ export const runSearch = async (client, channel, opts = {}) => {
         //if new articles are found post them
         if (articles && articles.length > 0) {
             console.log(`${channel.channelName} => +${articles.length}`);
-            const dest = await getChannelById(client, channel.channelId);
-            if (!dest) {
-                if (!warnedMissing.has(channel.channelId)) {
-                    console.warn(`[post] no valid targets for ${channel.channelName} (${channel.channelId})`);
-                    warnedMissing.add(channel.channelId);
+            // Fanout mode: if children defined on the rule, evaluate and post into their channels
+            if (Array.isArray(channel.children) && channel.children.length && String(process.env.FANOUT_MODE || '1') === '1') {
+              for (const child of channel.children) {
+                const childRule = child.rule || child; // tolerate shape
+                const filters = child.filters || parseRuleFilters(childRule.url);
+                const matched = [];
+                for (const it of articles) {
+                  if (itemMatchesFilters(it, filters)) matched.push(it);
                 }
-            } else {
+                if (!matched.length) continue;
+                const dest = await getChannelById(client, childRule.channelId);
+                if (!dest) {
+                  if (!warnedMissing.has(childRule.channelId)) {
+                    console.warn(`[post] no valid targets for child ${childRule.channelName} (${childRule.channelId})`);
+                    warnedMissing.add(childRule.channelId);
+                  }
+                  continue;
+                }
+                // annotate firstMatchedAt and apply match-age gate / optional price-drop label
+                const now = Date.now();
+                const maxAge = Number(process.env.MATCH_MAX_AGE_MS || 45000);
+                const priceDropMax = Number(process.env.PRICE_DROP_MAX_AGE_MS || 300000);
+                const gated = [];
+                for (const it of matched) {
+                  let first = now;
+                  try { first = recordFirstMatch(childRule.channelName, it.id, now); } catch {}
+                  try { it.__firstMatchedAt = first; } catch {}
+                  try { metrics.parent_child_drift_ms_histogram?.set({ family: String(channel.channelName) }, Math.max(0, Number(first||now) - Number(it.discoveredAt || now))); } catch {}
+                  const age = now - Number(first || now);
+                  if (age <= maxAge) { gated.push(it); continue; }
+                  if (age <= priceDropMax) {
+                    try { it.__priceDrop = true; } catch {}
+                    gated.push(it);
+                    try { metrics.price_drop_posted_total?.inc({ rule: String(childRule.channelName) }); } catch {}
+                  }
+                }
+                if (!gated.length) continue;
+                await postArticles(gated, dest, childRule.channelName);
+                // mark seen for child rule after post
+                gated.forEach(article => {
+                  const key = dedupeKey(childRule.channelName, article.id);
+                  processedStore.set(key, Date.now(), { ttl: ttlMs });
+                });
+                try { metrics.parent_fanout_items_total?.inc({ parent: String(channel.channelName), child: String(childRule.channelName) }, gated.length); } catch {}
+              }
+            }
+            // Also post to parent rule's channel as usual, unless FANOUT suppresses it
+            if (String(process.env.FANOUT_SUPPRESS_PARENT_POST || '0') !== '1') {
+              const dest = await getChannelById(client, channel.channelId);
+              if (!dest) {
+                if (!warnedMissing.has(channel.channelId)) {
+                  console.warn(`[post] no valid targets for ${channel.channelName} (${channel.channelId})`);
+                  warnedMissing.add(channel.channelId);
+                }
+              } else {
                 await postArticles(articles, dest, channel.channelName);
-                // Commit-on-post: mark seen only after posting succeeds
                 articles.forEach(article => {
                   const key = dedupeKey(channel.channelName, article.id);
                   processedStore.set(key, Date.now(), { ttl: ttlMs });
                 });
-                // reset streak on success
-                st.noNewStreak = 0;
+              }
             }
+            // reset streak on success
+            st.noNewStreak = 0;
+            st.noDataCycles = 0;
         } else {
             st.noNewStreak = (st.noNewStreak || 0) + 1;
+            st.noDataCycles = (st.noDataCycles || 0) + 1;
             const thr = Number(process.env.NO_NEW_THRESHOLD || 6);
             if (st.noNewStreak >= thr) {
                 const now = Date.now();
@@ -101,6 +154,27 @@ export const runSearch = async (client, channel, opts = {}) => {
                     st.backfillCooldownUntil = now + 2 * minMs; // ensure off-period later
                 }
                 st.noNewStreak = 0;
+            }
+            // Optional: allow child to fetch once if parent had 2 consecutive cycles without data
+            if (String(process.env.FANOUT_CHILD_FALLBACK || '0') === '1' && Array.isArray(channel.children) && channel.children.length) {
+              if ((st.noDataCycles || 0) >= 2) {
+                for (const child of channel.children) {
+                  const childRule = child.rule || child;
+                  try {
+                    const childArts = await limiter.schedule(() => vintedSearch(childRule, processedStore, { ...opts, backfillPages: 1 }));
+                    if (childArts?.length) {
+                      const dest = await getChannelById(client, childRule.channelId);
+                      if (dest) await postArticles(childArts, dest, childRule.channelName);
+                      childArts.forEach(article => {
+                        const key = dedupeKey(childRule.channelName, article.id);
+                        processedStore.set(key, Date.now(), { ttl: ttlMs });
+                      });
+                      try { metrics.child_fetch_saved_total?.inc({ child: String(childRule.channelName) }, childArts.length); } catch {}
+                    }
+                  } catch {}
+                }
+                st.noDataCycles = 0;
+              }
             }
         }
     } catch (err) {
@@ -154,8 +228,35 @@ export const run = async (client, mySearches) => {
         }));
     } catch {}
 
+    // Parenting groups (fanout)
+    let families = [];
+    try {
+      if (String(process.env.FANOUT_MODE || '1') === '1') {
+        const explicit = (process.env.FANOUT_PARENT_RULE && process.env.FANOUT_CHILD_RULES)
+          ? buildExplicitFamily(mySearches, process.env.FANOUT_PARENT_RULE, process.env.FANOUT_CHILD_RULES)
+          : null;
+        if (explicit && explicit.length) families = explicit;
+        else if (String(process.env.FANOUT_AUTO_GROUP || '1') === '1') families = buildParentGroups(mySearches);
+      }
+    } catch {}
+
+    const parentNames = new Set();
+    for (const fam of (families || [])) {
+      const parent = fam.parent;
+      parent.children = fam.children || [];
+      parentNames.add(parent.channelName);
+    }
+    const toSchedule = [];
+    if (families?.length) {
+      toSchedule.push(...families.map(f => f.parent));
+      // Add any non-family rule as standalone
+      for (const r of (mySearches || [])) if (!parentNames.has(r.channelName)) toSchedule.push(r);
+    } else {
+      toSchedule.push(...(mySearches || []));
+    }
+
     // Register rules into EDF then start
-    (mySearches || []).forEach((channel) => addSearch(client, channel));
+    toSchedule.forEach((channel) => addSearch(client, channel));
     edf.start();
 
     // Periodic cleanup of expired dedupe entries

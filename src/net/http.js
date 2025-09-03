@@ -17,12 +17,19 @@ function createClient(proxyStr) {
   const port = Number(portStr);
 
   // Create HTTPS proxy agent for proper tunneling
-  const proxyAgent = new HttpsProxyAgent(`http://${host}:${port}`);
+  const proxyAgent = new HttpsProxyAgent({
+    protocol: 'http:',
+    host,
+    port,
+    keepAlive: true,
+    maxSockets: Number(process.env.HTTP_MAX_SOCKETS || 64),
+    maxFreeSockets: Number(process.env.HTTP_MAX_FREE_SOCKETS || 32),
+  });
 
   const http = axios.create({
     withCredentials: true,
     maxRedirects: 5,
-    timeout: 15000,
+    timeout: Number(process.env.FETCH_TIMEOUT_MS || 4000),
     proxy: false, // Disable axios proxy handling
     httpAgent: proxyAgent,
     httpsAgent: proxyAgent, // Use our custom agent
@@ -97,7 +104,7 @@ export async function getHttp(base) {
   const MAX_TRIES = 6;
   for (let i = 0; i < MAX_TRIES; i++) {
     const p = getProxy();
-    if (!p) {
+  if (!p) {
       await new Promise(r => setTimeout(r, 150 + i * 100));
       continue;
     }
@@ -185,7 +192,10 @@ export async function initProxyPool() {
 export async function get(url, config = {}) {
   const { http, proxy } = await getHttp();
   try {
-    return await http.get(url, config);
+    const res = await http.get(url, config);
+    const dateHeader = res?.headers?.['date'];
+    if (dateHeader) res._serverNow = new Date(dateHeader);
+    return res;
   } catch (e) {
     if (e.response && e.response.status === 401) {
       markBadInPool(proxy);
@@ -194,21 +204,57 @@ export async function get(url, config = {}) {
   }
 }
 
-// Low-level fetch via a specific proxy, with latency measurement
-export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 12000)) {
+// Low-level fetch via a specific proxy, with latency measurement and EWMA tracking
+const ewmaByProxy = new Map(); // proxy -> { value, alpha }
+export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 4000)) {
   const client = createClient(proxy);
   await bootstrapSession(client);
   const t0 = Date.now();
-  const res = await client.http.get(url, { ...config, timeout, validateStatus: () => true });
+  let res;
+  try {
+    res = await client.http.get(url, { ...config, timeout, validateStatus: () => true });
+  } catch (e) {
+    // timeout or network error
+    const err = e;
+    const latency = Date.now() - t0;
+    try { metrics.fetch_timeout_total?.inc({ proxy }); } catch {}
+    throw Object.assign(new Error('timeout'), { latency, cause: err });
+  }
   const latency = Date.now() - t0;
+  const dateHeader = res?.headers?.['date'];
+  if (dateHeader) res._serverNow = new Date(dateHeader);
+  // EWMA
+  try {
+    const s = ewmaByProxy.get(proxy) || { value: latency, alpha: Number(process.env.EWMA_ALPHA || 0.2) };
+    s.value = s.alpha * latency + (1 - s.alpha) * (s.value || latency);
+    ewmaByProxy.set(proxy, s);
+    if (metrics?.proxy_latency_ewma_ms) metrics.proxy_latency_ewma_ms.set({ proxy }, Math.round(s.value));
+  } catch {}
   return { res, latency };
 }
 
 // Sticky-per-proxy fetch with AIMD and token buckets
+const timeoutsByProxy = new Map(); // proxy -> [ts,...]
+function recordTimeout(proxy) {
+  try {
+    const arr = timeoutsByProxy.get(proxy) || [];
+    const now = Date.now();
+    arr.push(now);
+    // keep last 60s
+    const cutoff = now - 60_000;
+    while (arr.length && arr[0] < cutoff) arr.shift();
+    timeoutsByProxy.set(proxy, arr);
+    if (arr.length >= Number(process.env.PROXY_FAIL_MAX || 3)) {
+      markBadInPool(proxy);
+    }
+  } catch {}
+}
+
 export async function fetchRule(ruleId, url, opts = {}) {
   const proxy = stickyMap.assign(ruleId);
   if (!proxy) {
     metrics.fetch_skipped_total.inc();
+    try { metrics.no_token_skips_total?.inc({ rule: String(ruleId) }); } catch {}
     try { stickyMap.record(ruleId, { skipped: true, proxy: null }); } catch {}
     if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} reason=no-proxy`);
     return { skipped: true };
@@ -216,13 +262,14 @@ export async function fetchRule(ruleId, url, opts = {}) {
   const buckets = getBuckets(proxy, rateCtl);
   if (!buckets || !buckets.main.take(1)) {
     metrics.fetch_skipped_total.inc();
+    try { metrics.no_token_skips_total?.inc({ rule: String(ruleId) }); } catch {}
     rateCtl.observe(proxy, { skipped: true });
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
     if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-token`);
     return { skipped: true };
   }
   try {
-    const { res, latency } = await doFetchWithProxy(proxy, url, opts, 12000);
+    const { res, latency } = await doFetchWithProxy(proxy, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
     const code = Number(res?.status || 0);
     if (code === 429 || code === 403) {
       // treat as fail for controller, but return softFail path below
@@ -235,13 +282,31 @@ export async function fetchRule(ruleId, url, opts = {}) {
       try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
       return { ok: true, res };
     }
+    // Token refresh + single retry on same proxy for 401/403 if enabled
+    const RETRY_ON_401 = String(process.env.TOKEN_RETRY_ON_401 || '1') === '1';
+    if (RETRY_ON_401 && (code === 401 || code === 403)) {
+      const delay = Math.max(0, Number(process.env.TOKEN_RETRY_DELAY_MS || 300));
+      await new Promise(r => setTimeout(r, delay));
+      try { await bootstrapSession(createClient(proxy)); } catch {}
+      try {
+        const { res: res3, latency: lat3 } = await doFetchWithProxy(proxy, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
+        const code3 = Number(res3?.status || 0);
+        if (code3 >= 200 && code3 < 300) {
+          metrics.fetch_ok_total.inc();
+          recordProxySuccess(proxy);
+          rateCtl.observe(proxy, { ok: true, latency: lat3, code: code3 });
+          try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
+          return { ok: true, res: res3 };
+        }
+      } catch {}
+    }
     // failed or rate limited -> consider retry on neighbor if tokens allow
     const retry = getBuckets(proxy, rateCtl).retry;
     if (retry && retry.take(1)) {
       const alt = stickyMap.next(proxy);
       if (alt) {
         try {
-          const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, 12000);
+          const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
           const code2 = Number(res2?.status || 0);
           if (code2 >= 200 && code2 < 300) {
             metrics.fetch_ok_total.inc();
@@ -270,10 +335,11 @@ export async function fetchRule(ruleId, url, opts = {}) {
   } catch (e) {
     // network error -> try one neighbor if retry tokens are available
     const retry = getBuckets(proxy, rateCtl).retry;
+    if (String(e?.message || '').includes('timeout')) recordTimeout(proxy);
     if (retry && retry.take(1)) {
       const alt = stickyMap.next(proxy);
       try {
-        const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, 12000);
+        const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
         const code2 = Number(res2?.status || 0);
         if (code2 >= 200 && code2 < 300) {
           metrics.fetch_ok_total.inc();

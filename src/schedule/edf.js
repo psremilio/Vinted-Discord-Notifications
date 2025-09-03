@@ -1,5 +1,7 @@
 // Minimal EDF scheduler for rule polling
 import { tierOf, TIER_TARGET_SEC } from './tiers.js';
+import { getRuleSkipRatio } from './stickyMap.js';
+import { metrics } from '../infra/metrics.js';
 
 function jitter(ms, spread = 0.2) {
   const k = 1 - spread + Math.random() * (2 * spread);
@@ -9,7 +11,7 @@ function jitter(ms, spread = 0.2) {
 export class EdfScheduler {
   constructor(runFn) {
     this.runFn = runFn; // async (client, rule)
-    this.rules = new Map(); // name -> { rule, tier, targetMs, nextAt, running }
+    this.rules = new Map(); // name -> { rule, tier, targetMs, nextAt, running, phaseOffset }
     this.timer = null;
     this.client = null;
     this.inflight = 0;
@@ -20,8 +22,16 @@ export class EdfScheduler {
     const name = rule.channelName;
     const tier = tierOf(name);
     const targetMs = Math.max(1000, Math.floor((TIER_TARGET_SEC[tier] || 12) * 1000));
-    const nextAt = Date.now() + jitter(targetMs);
-    this.rules.set(name, { rule, tier, targetMs, nextAt, running: false });
+    // Phase anchor: fixed 10s grid with per-rule offset + jitter ±1s
+    const PHASE_MS = 10_000;
+    const h = [...String(name)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 0);
+    const baseOffset = h % PHASE_MS; // 0..9999
+    const jitterMs = Math.floor((Math.random() * 2000) - 1000); // ±1s
+    const phaseOffset = Math.max(0, Math.min(PHASE_MS - 1, baseOffset + jitterMs));
+    const now = Date.now();
+    const nextAnchor = Math.floor(now / PHASE_MS) * PHASE_MS + PHASE_MS;
+    const nextAt = nextAnchor + phaseOffset;
+    this.rules.set(name, { rule, tier, targetMs, nextAt, running: false, phaseOffset });
   }
 
   removeRule(name) { this.rules.delete(name); }
@@ -46,7 +56,17 @@ export class EdfScheduler {
     let best = null;
     for (const st of this.rules.values()) {
       if (st.running) continue;
-      if (!best || st.nextAt < best.nextAt) best = st;
+      // catch-up bonus: shift effective nextAt earlier for starved rules
+      let effNext = st.nextAt;
+      try {
+        const ratio = getRuleSkipRatio(st.rule.channelName);
+        const thr = Number(process.env.STARVATION_SKIP_RATIO || 0.3);
+        if (ratio > thr) {
+          const w = Math.max(1, Number(process.env.CATCHUP_BONUS_WEIGHT || 2));
+          effNext -= w * 1000; // up to a few seconds earlier
+        }
+      } catch {}
+      if (!best || effNext < best._effNextAt) { best = st; best._effNextAt = effNext; }
     }
     if (!best) return null;
     if (best.nextAt > now) return null;
@@ -63,11 +83,18 @@ export class EdfScheduler {
       this.inflight++;
       dispatched++;
       // fire-and-forget; limiter in runFn enforces real concurrency
+      const ratio = (()=>{ try { return getRuleSkipRatio(st.rule.channelName); } catch { return 0; } })();
+      const thr = Number(process.env.STARVATION_SKIP_RATIO || 0.3);
+      if (ratio > thr) { try { metrics.rule_catchup_grants_total?.inc(); } catch {} }
       this.runFn(this.client, st.rule)
         .catch(() => {})
         .finally(() => {
           st.running = false;
-          st.nextAt = Date.now() + jitter(st.targetMs);
+          // schedule to next phase anchor respecting per-rule offset
+          const PHASE_MS = 10_000;
+          const t = Date.now();
+          const nextAnchor = Math.floor(t / PHASE_MS) * PHASE_MS + PHASE_MS;
+          st.nextAt = nextAnchor + (st.phaseOffset || 0);
           this.inflight = Math.max(0, this.inflight - 1);
         });
     }

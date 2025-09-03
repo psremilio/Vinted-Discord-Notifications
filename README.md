@@ -106,3 +106,24 @@ If you want to use autobuy you will need to clone this branch, then add your ses
 You need to get the tokens from your browser storage, AFTER having logged-in with the account you want to use for your purchases
 
 Don't hesitate to contact me on discord (@thewwk) or open an issue here if you have any concerns or requests!
+
+Acceptance & Flags:
+--------------------
+
+At startup the bot logs acceptance gates and exposes them via `/metrics` so you can verify targets on dashboards:
+
+- post_age_ms_p95 < 15000
+- match_age_ms_p95 < 45000
+- http_429_rate_60s < 0.05
+- parent_child_drift_ms_p95 ≈ 0 (active families)
+- no_token_skips_rate_60s ≈ 0
+
+Defaults for key flags:
+
+- FANOUT_MODE=1, FANOUT_AUTO_GROUP=1
+- TOKEN_PREFETCH=1, TOKEN_RETRY_ON_401=1, TOKEN_RETRY_DELAY_MS=300
+- FETCH_TIMEOUT_MS=4000
+- POST_MAX_AGE_MS=120000
+- REORDER_WINDOW_MS=8000
+- WEBHOOKS_PER_CHANNEL=4
+- DISCORD_QPS_MIN=60, DISCORD_QPS_MAX=120, DISCORD_QPS_INC=8, DISCORD_QPS_DEC_FACTOR=0.92

@@ -59,6 +59,18 @@ export const metrics = {
   discord_webhook_send_ok_total: new LabeledCounter('discord_webhook_send_ok_total', ['channel']),
   discord_webhook_send_429_total: new LabeledCounter('discord_webhook_send_429_total', ['channel']),
   discord_webhook_cooldowns_total: new LabeledCounter('discord_webhook_cooldowns_total', ['channel']),
+  // fanout + gating + http extras
+  parent_fanout_items_total: new LabeledCounter('parent_fanout_items_total', ['parent','child']),
+  child_fetch_saved_total: new LabeledCounter('child_fetch_saved_total', ['child']),
+  no_token_skips_total: new LabeledCounter('no_token_skips_total', ['rule']),
+  fetch_timeout_total: new LabeledCounter('fetch_timeout_total', ['proxy']),
+  price_drop_posted_total: new LabeledCounter('price_drop_posted_total', ['rule']),
+  rule_catchup_grants_total: new Counter('rule_catchup_grants_total'),
+  // pseudo-histograms
+  match_age_ms_histogram: new LabeledGauge('match_age_ms_histogram', ['rule']),
+  post_age_ms_histogram: new LabeledGauge('post_age_ms_histogram', ['channel']),
+  parent_child_drift_ms_histogram: new LabeledGauge('parent_child_drift_ms_histogram', ['family']),
+  proxy_latency_ewma_ms: new LabeledGauge('proxy_latency_ewma_ms', ['proxy']),
 };
 
 export function serializeMetrics() {
@@ -110,5 +122,26 @@ export function serializeMetrics() {
   for (const e of metrics.discord_webhook_send_429_total.entries()) out.push(`discord_webhook_send_429_total{channel="${e.labels.channel}"} ${e.value}`);
   lineHelpType('discord_webhook_cooldowns_total', 'Webhook cooldowns by channel', 'counter');
   for (const e of metrics.discord_webhook_cooldowns_total.entries()) out.push(`discord_webhook_cooldowns_total{channel="${e.labels.channel}"} ${e.value}`);
+  // fanout + gating + http extras
+  lineHelpType('parent_fanout_items_total', 'Items fanned out from parent to child', 'counter');
+  for (const e of metrics.parent_fanout_items_total.entries()) out.push(`parent_fanout_items_total{parent="${e.labels.parent}",child="${e.labels.child}"} ${e.value}`);
+  lineHelpType('child_fetch_saved_total', 'Items posted via child fallback fetch', 'counter');
+  for (const e of metrics.child_fetch_saved_total.entries()) out.push(`child_fetch_saved_total{child="${e.labels.child}"} ${e.value}`);
+  lineHelpType('no_token_skips_total', 'Per-rule fetch skips due to no token', 'counter');
+  for (const e of metrics.no_token_skips_total.entries()) out.push(`no_token_skips_total{rule="${e.labels.rule}"} ${e.value}`);
+  lineHelpType('fetch_timeout_total', 'Per-proxy fetch timeouts', 'counter');
+  for (const e of metrics.fetch_timeout_total.entries()) out.push(`fetch_timeout_total{proxy="${e.labels.proxy}"} ${e.value}`);
+  lineHelpType('price_drop_posted_total', 'Posts labeled as price drop', 'counter');
+  for (const e of metrics.price_drop_posted_total.entries()) out.push(`price_drop_posted_total{rule="${e.labels.rule}"} ${e.value}`);
+  lineHelpType('rule_catchup_grants_total', 'Catch-up grant count', 'counter'); out.push(`rule_catchup_grants_total ${metrics.rule_catchup_grants_total.get()}`);
+  // pseudo-histograms
+  lineHelpType('match_age_ms_histogram', 'Match age sample (ms) per rule', 'gauge');
+  for (const e of metrics.match_age_ms_histogram.entries()) out.push(`match_age_ms_histogram{rule="${e.labels.rule}"} ${e.value}`);
+  lineHelpType('post_age_ms_histogram', 'Post age sample (ms) per channel', 'gauge');
+  for (const e of metrics.post_age_ms_histogram.entries()) out.push(`post_age_ms_histogram{channel="${e.labels.channel}"} ${e.value}`);
+  lineHelpType('parent_child_drift_ms_histogram', 'Parent-child drift sample (ms) per family', 'gauge');
+  for (const e of metrics.parent_child_drift_ms_histogram.entries()) out.push(`parent_child_drift_ms_histogram{family="${e.labels.family}"} ${e.value}`);
+  lineHelpType('proxy_latency_ewma_ms', 'Per-proxy EWMA latency (ms)', 'gauge');
+  for (const e of metrics.proxy_latency_ewma_ms.entries()) out.push(`proxy_latency_ewma_ms{proxy="${e.labels.proxy}"} ${e.value}`);
   return out.join('\n');
 }

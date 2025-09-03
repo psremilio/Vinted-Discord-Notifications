@@ -2,7 +2,7 @@ import { PermissionsBitField } from 'discord.js';
 import { get as getStore, add as addStore, load as loadStore } from './webhooksStore.js';
 
 const AUTO_ON = String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1';
-const WEBHOOKS_PER_CHANNEL = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 3));
+const WEBHOOKS_PER_CHANNEL = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 4));
 const WEBHOOK_NAME_PREFIX = String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook');
 
 let ENV_MAP = null;
@@ -48,4 +48,3 @@ export function getWebhooksForChannelId(channelId) {
   const envUrls = ENV_MAP && Array.isArray(ENV_MAP[channelId]) ? ENV_MAP[channelId] : [];
   return Array.from(new Set([...storeUrls, ...envUrls])).filter(Boolean);
 }
-

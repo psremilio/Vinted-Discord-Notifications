@@ -38,6 +38,15 @@ function logEnvReadiness() {
 }
 logEnvReadiness();
 
+// Acceptance gates
+try {
+  console.log('[acceptance] post_age_ms_p95 < 15000');
+  console.log('[acceptance] match_age_ms_p95 < 45000');
+  console.log('[acceptance] http_429_rate_60s < 0.05');
+  console.log('[acceptance] parent_child_drift_ms_p95 ≈ 0');
+  console.log('[acceptance] no_token_skips_rate_60s ≈ 0');
+} catch {}
+
 // Mini HTTP keepalive + health endpoint so process never idles out
 const PORT = Number(process.env.PORT || 8080);
 try {

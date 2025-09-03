@@ -3,6 +3,7 @@ import { buildListingEmbed } from '../embeds.js';
 import { stats } from '../utils/stats.js';
 import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
+import { metrics } from '../infra/metrics.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === "function";
 async function sendToTargetsSafely(targets, payload, meta = {}) {
@@ -50,7 +51,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
         const ts = item.photo?.high_resolution?.timestamp; // seconds
         const listing = {
             id: item.id,
-            title: item.title,
+            title: (item.__priceDrop ? '[PRICE DROP] ' : '') + (item.title || ''),
             url: item.url,
             brand: item.brand_title,
             size: item.size_title,
@@ -72,7 +73,18 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
             components: [row],
         };
         // pass discoveredAt & createdAt through to postQueue for ordering
-        const meta = { discoveredAt: item.discoveredAt || Date.now(), createdAt: listing.createdAt || Date.now(), itemId: String(item.id) };
+        const meta = {
+          discoveredAt: item.discoveredAt || Date.now(),
+          createdAt: listing.createdAt || Date.now(),
+          firstMatchedAt: Number(item.__firstMatchedAt || 0) || undefined,
+          itemId: String(item.id)
+        };
+        try {
+          if (meta.firstMatchedAt) {
+            const age = Math.max(0, Date.now() - Number(meta.firstMatchedAt));
+            metrics.match_age_ms_histogram?.set({ rule: String(ruleName || '') }, age);
+          }
+        } catch {}
         await sendToTargetsSafely(targets, payload, meta);
         try {
           console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
