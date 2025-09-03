@@ -146,16 +146,22 @@ export function itemMatchesFilters(item, filters) {
     }
     // Catalogs (if provided)
     const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '1') === '1';
-    if (REQ_CAT && filters.catalogs?.length) {
+    // Treat catalog id 2050 as a broad/top-level bucket (brand "all")
+    // and do not enforce catalog matching when present. This avoids
+    // false negatives during parent→child fanout where children often
+    // use catalog=2050 as a catch‑all.
+    const catalogs = Array.isArray(filters.catalogs) ? filters.catalogs.map(String) : [];
+    const HAS_WILDCARD_2050 = catalogs.includes('2050');
+    if (REQ_CAT && catalogs.length && !HAS_WILDCARD_2050) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
       if (!cid) return false;
       const strat = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
       if (strat === 'subtree') {
-        const expanded = expandCatalogs(filters.catalogs);
+        const expanded = expandCatalogs(catalogs);
         if (!expanded.has(cid)) return false;
         try { metrics.subcatalog_ok_total?.inc(1); } catch {}
       } else {
-        if (!filters.catalogs.map(String).includes(cid)) return false;
+        if (!catalogs.includes(cid)) return false;
         try { metrics.catalog_ok_total?.inc(1); } catch {}
       }
     }
@@ -206,14 +212,16 @@ export function debugMatchFailReason(item, filters) {
       if (typeof filters.priceTo === 'number' && price > filters.priceTo) return 'price_out_of_range';
     }
     const REQ_CAT = String(process.env.FANOUT_REQUIRE_CATALOG_MATCH || '1') === '1';
-    if (REQ_CAT && filters.catalogs?.length) {
+    const catalogs = Array.isArray(filters.catalogs) ? filters.catalogs.map(String) : [];
+    const HAS_WILDCARD_2050 = catalogs.includes('2050');
+    if (REQ_CAT && catalogs.length && !HAS_WILDCARD_2050) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
       if (!cid) return 'catalog_mismatch';
       const stratC = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
       if (stratC === 'subtree') {
-        if (!expandCatalogs(filters.catalogs).has(cid)) return 'catalog_mismatch';
+        if (!expandCatalogs(catalogs).has(cid)) return 'catalog_mismatch';
       } else {
-        if (!filters.catalogs.map(String).includes(cid)) return 'catalog_mismatch';
+        if (!catalogs.includes(cid)) return 'catalog_mismatch';
       }
     }
     if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && filters.brandIds?.length) {

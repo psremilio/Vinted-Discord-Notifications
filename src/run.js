@@ -144,13 +144,20 @@ export const runSearch = async (client, channel, opts = {}) => {
             if (Array.isArray(channel.children) && channel.children.length && String(process.env.FANOUT_MODE || '1') === '1') {
               const parentFilters = (() => { try { return parseRuleFilters(channel.url); } catch { return null; } })();
               const IGNORE_CAT_WHEN_PARENT_NONE = String(process.env.FANOUT_CHILD_IGNORE_CATALOG_WHEN_PARENT_HAS_NONE || '1') === '1';
+              // Treat parent catalog=2050 as effectively "no catalog constraint"
+              // to avoid over-filtering children when the parent is a broad "all" search.
+              const parentHasWildcard2050 = (() => {
+                try { return Array.isArray(parentFilters?.catalogs) && parentFilters.catalogs.map(String).includes('2050'); } catch { return false; }
+              })();
               for (const child of channel.children) {
                 const childRule = child.rule || child; // tolerate shape
                 const baseFilters = child.filters || parseRuleFilters(childRule.url);
                 // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
                 const filters = { ...baseFilters };
                 try {
-                  if (IGNORE_CAT_WHEN_PARENT_NONE && parentFilters && (!Array.isArray(parentFilters.catalogs) || parentFilters.catalogs.length === 0)) {
+                  if (IGNORE_CAT_WHEN_PARENT_NONE && parentFilters && (
+                    !Array.isArray(parentFilters.catalogs) || parentFilters.catalogs.length === 0 || parentHasWildcard2050
+                  )) {
                     filters.catalogs = [];
                   }
                 } catch {}
@@ -379,9 +386,29 @@ function computeScheduleList(mySearches) {
     parentNames.add(parent.channelName);
   }
   const toSchedule = [];
+  const SCHEDULE_CHILDREN = String(process.env.FANOUT_SCHEDULE_CHILDREN || '0') === '1';
   if (families?.length) {
+    // Always schedule parents
     toSchedule.push(...families.map(f => f.parent));
-    for (const r of (mySearches || [])) if (!parentNames.has(r.channelName)) toSchedule.push(r);
+    // Optionally schedule children too; default off to reduce duplicate fetches
+    if (SCHEDULE_CHILDREN) {
+      const inFamily = new Set();
+      for (const fam of families) {
+        inFamily.add(fam.parent.channelName);
+        for (const c of (fam.children || [])) inFamily.add(c.rule?.channelName || c.channelName);
+      }
+      for (const r of (mySearches || [])) if (!parentNames.has(r.channelName)) toSchedule.push(r);
+    } else {
+      // Only schedule standalone rules not in any family
+      const inFamily = new Set();
+      for (const fam of families) {
+        inFamily.add(fam.parent.channelName);
+        for (const c of (fam.children || [])) inFamily.add(c.rule?.channelName || c.channelName);
+      }
+      for (const r of (mySearches || [])) {
+        if (!inFamily.has(r.channelName)) toSchedule.push(r);
+      }
+    }
   } else {
     toSchedule.push(...(mySearches || []));
   }

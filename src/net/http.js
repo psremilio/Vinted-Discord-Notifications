@@ -113,7 +113,10 @@ export async function getHttp(base) {
     return { http: client.http, proxy: p };
   }
 
-  if (process.env.ALLOW_DIRECT === '1') {
+  // Optional direct fallback when no proxies are immediately available.
+  // Enabled by ALLOW_DIRECT=1 or (by default) ALLOW_DIRECT_ON_EMPTY=1.
+  const DIRECT_OK = String(process.env.ALLOW_DIRECT || '0') === '1' || String(process.env.ALLOW_DIRECT_ON_EMPTY || '1') === '1';
+  if (DIRECT_OK) {
     const http = axios.create({
       withCredentials: true,
       maxRedirects: 5,

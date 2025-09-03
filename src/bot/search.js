@@ -70,7 +70,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
         try {
             const t0 = Date.now();
             markFetchAttempt();
-            const USE_HEDGE = String(process.env.SEARCH_HEDGE || '0') === '1';
+            // Enable hedged requests by default to cut tail latency across proxies
+            const USE_HEDGE = String(process.env.SEARCH_HEDGE || '1') === '1';
             let result;
             if (USE_HEDGE) {
               try {
