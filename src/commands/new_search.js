@@ -100,20 +100,9 @@ export const execute = async (interaction) => {
     try {
         const canonicalUrl = canonicalizeUrl(urlRaw);
         const canonicalKey = buildParentKey(canonicalUrl);
-        // optionally create webhooks for this channel
-        const WANT_AUTO = (interaction.options.getBoolean('auto_webhooks') ?? (String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1'));
-        let createdHooks = 0;
-        if (WANT_AUTO) {
-            try {
-                const urls = await ensureWebhooksForChannel(ch, Number(process.env.WEBHOOKS_PER_CHANNEL || 3), String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook'));
-                createdHooks = Array.isArray(urls) ? urls.length : 0;
-            } catch (e) {
-                console.warn('[webhooks] auto failed:', e?.message || e);
-            }
-        }
 
         //register the search into the json file
-        const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const searches = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
         const findByKey = (list, key) => {
             if (!Array.isArray(list)) return -1;
             for (let i = 0; i < list.length; i++) {
@@ -156,40 +145,44 @@ export const execute = async (interaction) => {
             op = 'created';
         }
 
-        try{
-            fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
-        } catch (error) {
-            console.error('\nError saving new search:', error);
-            await safeEdit('There was an error starting the monitoring.');
-        }
-
-        // Rebuild scheduling so parenting/fanout applies immediately (non-blocking)
+        // Apply in-memory immediately to avoid waiting for disk rebuild
         try {
-            const mod = await import('../run.js');
-            setTimeout(() => {
-                try {
-                    if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
-                    else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
-                    else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, next);
-                } catch {}
-            }, 0);
-        } catch (err) {
-            console.error('Live scheduling rebuild failed:', err);
+          await addSearch(interaction.client, next);
+        } catch (e) {
+          console.warn('[cmd] addSearch immediate failed, will rely on rebuild:', e?.message || e);
         }
 
+        // Respond to user quickly
         const embed = new EmbedBuilder()
             .setTitle(op === 'created' ? 'Search created' : 'Search updated')
             .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
             .setColor(0x00FF00);
-
-        if (createdHooks) {
-            embed.addFields({ name: 'Webhooks', value: `Aktiviert (${createdHooks})`, inline: true });
-        }
         embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
-
         await safeEdit({ embeds: [embed]});
         try { console.log('[cmd.result] /new_search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
         try { console.log('[cmd.latency] /new_search exec_ms=%d', Date.now() - t0); } catch {}
+
+        // Persist + webhooks + scheduler rebuild asynchronously (non-blocking)
+        setTimeout(async () => {
+          try {
+            await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
+          } catch (error) {
+            console.error('[cmd] error saving new search:', error?.message || error);
+          }
+          // optionally create webhooks for this channel (async)
+          const WANT_AUTO = (interaction.options.getBoolean('auto_webhooks') ?? (String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1'));
+          if (WANT_AUTO) {
+            try { await ensureWebhooksForChannel(ch, Number(process.env.WEBHOOKS_PER_CHANNEL || 3), String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook')); } catch (e) { console.warn('[webhooks] auto failed:', e?.message || e); }
+          }
+          // Non-blocking diff rebuild to refresh families
+          try {
+            const mod = await import('../run.js');
+            if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
+            else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
+          } catch (err) {
+            console.error('[cmd] rebuild after create failed:', err?.message || err);
+          }
+        }, 0);
 
     } catch (error) {
         console.error('Error starting monitoring:', error);

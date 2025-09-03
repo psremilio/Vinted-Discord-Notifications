@@ -49,7 +49,7 @@ export const execute = async (interaction) => {
         let beforeRules = null, afterRules = null;
         try { const mod = await import('../run.js'); beforeRules = mod.activeSearches?.size ?? null; } catch {}
         //delete the search that has 'name' as name
-        const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const searches = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
 
         let searchIndex = -1;
         if (key) {
@@ -80,29 +80,26 @@ export const execute = async (interaction) => {
         const removedName = String(removed?.channelName || name || '');
         searches.splice(searchIndex, 1);
 
-        await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
-        try { tombstoneRule(removedName, removed?.url); } catch {}
-
-        // Rebuild full scheduling non-blocking to ensure families/jobs update
+        // Immediate in-memory stop to unblock quickly
         try {
-            const mod = await import('../run.js');
-            setTimeout(() => { try {
-              if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
-              else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
-            } catch {} }, 0);
-            // Immediate stop to avoid one more poll cycle while rebuild diff applies
-            try { mod.removeJob?.(removedName); } catch {}
-            try { if (removed?.channelId) purgeChannelQueues(removed.channelId); } catch {}
-            try { afterRules = mod.activeSearches?.size ?? null; } catch {}
-            const tag = name ? `name=\`${name}\`` : (key ? `key=\`${key}\`` : '');
-            const commitMs = Date.now() - t0;
-            try { await safeEdit({ content: `✅ Search ${tag} deleted and schedule rebuild triggered. (commit_ms=${commitMs}, rules_before=${beforeRules}, rules_after=${afterRules})` }); } catch {}
-            try { console.log('[cmd.result] /delete_search ok %s', tag); } catch {}
-            try { console.log('[cmd.latency] /delete_search exec_ms=%d', Date.now() - t0); } catch {}
-        } catch (e) {
-            console.warn('[cmd] rebuild after delete failed:', e?.message || e);
-            try { await safeEdit({ content: `✅ Search \`${name}\` deleted. (Rebuild failed, restart may be needed)` }); } catch {}
-        }
+          const mod = await import('../run.js');
+          try { mod.removeJob?.(removedName); } catch {}
+          try { if (removed?.channelId) purgeChannelQueues(removed.channelId); } catch {}
+          try { afterRules = mod.activeSearches?.size ?? null; } catch {}
+        } catch {}
+
+        const tag = name ? `name=\`${name}\`` : (key ? `key=\`${key}\`` : '');
+        const commitMs = Date.now() - t0;
+        try { await safeEdit({ content: `✅ Search ${tag} deleted (in-memory). Persisting & rebalancing in background… (commit_ms=${commitMs}, rules_before=${beforeRules}, rules_after=${afterRules})` }); } catch {}
+        try { console.log('[cmd.result] /delete_search ok %s', tag); } catch {}
+        try { console.log('[cmd.latency] /delete_search exec_ms=%d', Date.now() - t0); } catch {}
+
+        // Persist + non-blocking diff rebuild in background
+        setTimeout(async () => {
+          try { await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2)); } catch (e) { console.warn('[cmd] save after delete failed:', e?.message || e); }
+          try { tombstoneRule(removedName, removed?.url); } catch {}
+          try { const mod = await import('../run.js'); if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client); else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client); } catch (e) { console.warn('[cmd] rebuild after delete failed:', e?.message || e); }
+        }, 0);
 
     } catch (error) {
         console.error('\nError deleting the search:', error);
