@@ -135,11 +135,31 @@ import { expandBrandIds } from './brandAliases.js';
 import { expandCatalogs } from './catalogMap.js';
 import { metrics } from '../infra/metrics.js';
 
+function normalizedPrice(item, preferredCurrency) {
+  try {
+    const priceObj = item?.price || {};
+    const raw = priceObj.amount ?? item?.price_numeric ?? item?.price ?? null;
+    const cur = String(priceObj.currency_code || '').toUpperCase();
+    const want = String(preferredCurrency || 'EUR').toUpperCase();
+    // Prefer converted_amount when targeting EUR
+    if (want === 'EUR' && typeof priceObj.converted_amount === 'number') {
+      return Number(priceObj.converted_amount);
+    }
+    // If item already in preferred currency use raw amount
+    if (cur && want && cur === want && raw != null) {
+      return Number(String(raw).replace(/,/, '.'));
+    }
+    // Fallback: raw
+    return raw != null ? Number(String(raw).replace(/,/, '.')) : NaN;
+  } catch {
+    return NaN;
+  }
+}
+
 export function itemMatchesFilters(item, filters) {
   try {
-    // Price bounds (if provided)
-    const priceRaw = item?.price?.amount ?? item?.price_numeric ?? item?.price ?? null;
-    const price = priceRaw != null ? Number(String(priceRaw).replace(/,/, '.')) : NaN;
+    // Price bounds (if provided) — normalize to requested currency (default EUR)
+    const price = normalizedPrice(item, filters?.currency || 'EUR');
     if (!Number.isNaN(price)) {
       if (typeof filters.priceFrom === 'number' && price < filters.priceFrom) return false;
       if (typeof filters.priceTo === 'number' && price > filters.priceTo) return false;
@@ -205,8 +225,7 @@ export function itemMatchesFilters(item, filters) {
 // Return first failing reason for diagnostics (does not mutate metrics)
 export function debugMatchFailReason(item, filters) {
   try {
-    const priceRaw = item?.price?.amount ?? item?.price_numeric ?? item?.price ?? null;
-    const price = priceRaw != null ? Number(String(priceRaw).replace(/,/, '.')) : NaN;
+    const price = normalizedPrice(item, filters?.currency || 'EUR');
     if (!Number.isNaN(price)) {
       if (typeof filters.priceFrom === 'number' && price < filters.priceFrom) return 'price_out_of_range';
       if (typeof filters.priceTo === 'number' && price > filters.priceTo) return 'price_out_of_range';
