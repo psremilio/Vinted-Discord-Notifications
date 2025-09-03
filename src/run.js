@@ -141,9 +141,18 @@ export const runSearch = async (client, channel, opts = {}) => {
             }
             // Fanout mode: if children defined on the rule, evaluate and post into their channels
             if (Array.isArray(channel.children) && channel.children.length && String(process.env.FANOUT_MODE || '1') === '1') {
+              const parentFilters = (() => { try { return parseRuleFilters(channel.url); } catch { return null; } })();
+              const IGNORE_CAT_WHEN_PARENT_NONE = String(process.env.FANOUT_CHILD_IGNORE_CATALOG_WHEN_PARENT_HAS_NONE || '1') === '1';
               for (const child of channel.children) {
                 const childRule = child.rule || child; // tolerate shape
-                const filters = child.filters || parseRuleFilters(childRule.url);
+                const baseFilters = child.filters || parseRuleFilters(childRule.url);
+                // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
+                const filters = { ...baseFilters };
+                try {
+                  if (IGNORE_CAT_WHEN_PARENT_NONE && parentFilters && (!Array.isArray(parentFilters.catalogs) || parentFilters.catalogs.length === 0)) {
+                    filters.catalogs = [];
+                  }
+                } catch {}
                 const matched = [];
                 for (const it of articles) {
                   if (itemMatchesFilters(it, filters)) matched.push(it);
