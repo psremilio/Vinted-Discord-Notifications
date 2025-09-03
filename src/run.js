@@ -281,6 +281,7 @@ export const run = async (client, mySearches) => {
 // Stop and remove a scheduled job by name, if present
 function removeJob(name) {
     if (!activeSearches.has(name)) return false;
+    try { edf.removeRule(name); } catch {}
     activeSearches.delete(name);
     console.log(`[schedule] stopped ${name}`);
     try { metrics.rules_active.set(activeSearches.size); } catch {}

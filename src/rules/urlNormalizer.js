@@ -47,6 +47,39 @@ export function buildParentKey(rawUrl) {
   }
 }
 
+// Family key: broader grouping that intentionally ignores catalogs as well,
+// so variants like shirts/trackpants can form one family under a single parent.
+export function buildFamilyKey(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || ''));
+    const params = new URLSearchParams(u.search);
+    const norm = {};
+    for (const [k, v] of params.entries()) {
+      if (STRIP_KEYS.has(k)) continue;
+      if (k === 'catalog[]') continue; // ignore catalogs for family grouping
+      if (ARRAY_KEYS.has(k)) {
+        norm[k] = norm[k] || [];
+        norm[k].push(v);
+      } else {
+        norm[k] = String(v || '');
+      }
+    }
+    for (const k of Object.keys(norm)) {
+      if (ARRAY_KEYS.has(k)) norm[k] = normalizeArray(norm[k]);
+    }
+    const parts = [];
+    const keys = Object.keys(norm).sort();
+    for (const k of keys) {
+      const v = norm[k];
+      if (Array.isArray(v)) parts.push(`${k}=${v.join(',')}`);
+      else parts.push(`${k}=${v}`);
+    }
+    return `${u.host}${u.pathname}?${parts.join('&')}`;
+  } catch {
+    return String(rawUrl || '');
+  }
+}
+
 // Extract rule filters for fanout matching
 export function parseRuleFilters(rawUrl) {
   const u = new URL(String(rawUrl || ''));
@@ -82,23 +115,7 @@ export function itemMatchesFilters(item, filters) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
       if (!cid || !filters.catalogs.includes(cid)) return false;
     }
-    // Brand
-    if (filters.brandIds?.length) {
-      const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
-      if (!bid || !filters.brandIds.includes(bid)) return false;
-    }
-    // Size
-    if (filters.sizeIds?.length) {
-      const sid = String(item?.size_id ?? item?.size?.id ?? '');
-      if (!sid || !filters.sizeIds.includes(sid)) return false;
-    }
-    // Status/condition
-    if (filters.statusIds?.length) {
-      const st = String(item?.status_id ?? item?.status ?? '').toLowerCase();
-      if (!st || !filters.statusIds.map(String).includes(st)) return false;
-    }
-    // Colors / materials are best-effort; skip if fields absent
-    // Text search: ensure words appear in title (best-effort)
+    // Text search (optional, best-effort)
     if (filters.text) {
       const t = String(filters.text).toLowerCase().split(/\s+/).filter(Boolean);
       const hay = `${item?.title || ''} ${item?.description || ''}`.toLowerCase();
@@ -109,4 +126,3 @@ export function itemMatchesFilters(item, filters) {
     return false;
   }
 }
-

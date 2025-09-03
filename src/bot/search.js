@@ -35,13 +35,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
     const ids = handleParams(url);
     const apiUrl = new URL(`https://${url.host}/api/v2/catalog/items`);
     
-    // Add more randomization to the time parameter
-    const timeOffset = Math.floor(Math.random() * 300) - 150; // -150 to +150 seconds
-    const currentTime = Math.floor(Date.now() / 1000) + timeOffset;
-    
     const baseParams = {
         per_page: '96',
-        time: currentTime,
         search_text: ids.text,
         catalog_ids: ids.catalog,
         price_from: ids.min,

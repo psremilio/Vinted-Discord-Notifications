@@ -1,17 +1,20 @@
-import { buildParentKey, parseRuleFilters } from './urlNormalizer.js';
+import { buildParentKey, buildFamilyKey, parseRuleFilters } from './urlNormalizer.js';
 
 function scoreBroadness(filters) {
-  // Lower score = broader rule
+  // Lower score = broader rule. Penalize constraints presence, but prefer
+  // larger catalog sets (broader coverage) when catalogs exist.
   let s = 0;
   if (typeof filters.priceFrom === 'number') s += 2;
   if (typeof filters.priceTo === 'number') s += 2;
   if (filters.text) s += 1;
-  if (filters.catalogs?.length) s += Math.min(3, filters.catalogs.length);
-  if (filters.brandIds?.length) s += Math.min(3, filters.brandIds.length);
-  if (filters.sizeIds?.length) s += Math.min(2, filters.sizeIds.length);
+  if (filters.brandIds?.length) s += 1;
+  if (filters.sizeIds?.length) s += 1;
   if (filters.statusIds?.length) s += 1;
-  if (filters.colorIds?.length) s += 1;
-  if (filters.materialIds?.length) s += 1;
+  if (filters.colorIds?.length) s += 0.5;
+  if (filters.materialIds?.length) s += 0.5;
+  // catalogs present → small penalty, but subtract a tiny tie-breaker favoring more catalogs
+  const cLen = (filters.catalogs?.length || 0);
+  if (cLen > 0) s += 0.5 - Math.min(0.49, cLen * 0.01);
   return s;
 }
 
@@ -19,7 +22,10 @@ export function buildParentGroups(rules) {
   const groupsByKey = new Map();
   for (const r of (rules || [])) {
     try {
-      const key = buildParentKey(r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link);
+      const autoFamily = String(process.env.FANOUT_AUTO_GROUP || '1') === '1';
+      const key = autoFamily
+        ? buildFamilyKey(r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link)
+        : buildParentKey(r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link);
       if (!groupsByKey.has(key)) groupsByKey.set(key, []);
       const filters = parseRuleFilters(r.url || r.channelUrl || r.ruleUrl || r.link);
       groupsByKey.get(key).push({ rule: r, filters });
@@ -53,4 +59,3 @@ export function buildExplicitFamily(rules, parentName, childrenCsv) {
   const children = String(childrenCsv || '').split(',').map(s => s.trim()).filter(Boolean).map(n => byName.get(n)).filter(Boolean);
   return [{ parent, parentFilters: parseRuleFilters(parent.url), children: children.map(rule => ({ rule, filters: parseRuleFilters(rule.url) })) }];
 }
-
