@@ -171,23 +171,18 @@ export function buildAutoPriceFamilies(rules) {
   for (const [key, g] of groups.entries()) {
     const arr = g.members || [];
     if (arr.length < 2) continue; // need at least 2 price variants
-    // Pick parent: prefer a clean non-price anchor with canonical URL equal to computed parent URL
-    const isClean = (f) => !(Number.isFinite(f.priceFrom) || Number.isFinite(f.priceTo)) &&
-      !(Array.isArray(f.sizeIds) && f.sizeIds.length) &&
-      !(Array.isArray(f.statusIds) && f.statusIds.length) &&
-      !(Array.isArray(f.colorIds) && f.colorIds.length) &&
-      !(Array.isArray(f.materialIds) && f.materialIds.length);
+    // Pick parent: prefer a non-price anchor ("all"), regardless of size/status; diffs are enforced later at runtime
+    const noPrice = (f) => !(Number.isFinite(f.priceFrom) || Number.isFinite(f.priceTo));
     const countFilters = (f) => (Number.isFinite(f.priceFrom)?1:0) + (Number.isFinite(f.priceTo)?1:0) +
       ((Array.isArray(f.sizeIds)&&f.sizeIds.length)?1:0) + ((Array.isArray(f.statusIds)&&f.statusIds.length)?1:0) +
       ((Array.isArray(f.colorIds)&&f.colorIds.length)?1:0) + ((Array.isArray(f.materialIds)&&f.materialIds.length)?1:0);
-    // 1) Try anchors matching parent URL canon and clean
-    let leader = (g.anchors || []).find(a => {
-      try { const p = getParentURLFromChild(a.rule.url || a.rule.link || '', 'price'); return p === g.parentCanonUrl && isClean(a.filters); } catch { return false; }
-    });
-    // 2) Any clean anchor
-    if (!leader) leader = (g.anchors || []).find(a => isClean(a.filters));
-    // 3) Fallback to clean member (rare if a price rule is actually clean)
-    if (!leader) leader = arr.find(m => isClean(m.filters));
+    // 1) Any non-price anchor (same family key by construction)
+    let leader = (g.anchors || []).find(a => noPrice(a.filters));
+    // 2) Fallback: least filtered anchor
+    if (!leader && (g.anchors || []).length) {
+      leader = g.anchors.slice().sort((a,b)=> countFilters(a.filters)-countFilters(b.filters))[0];
+    }
+    // 3) Fallback to least filtered member that's not pure price-only (still avoid picking a price child as parent)
     // 4) Fallback: member with fewest filters but not pure price-only
     if (!leader) {
       const cand = arr.slice().sort((a,b)=> countFilters(a.filters)-countFilters(b.filters))[0];
