@@ -210,7 +210,8 @@ export function canonicalizeForFamily(rawUrl) {
     for (const [kRaw, v] of u.searchParams.entries()) {
       const k = String(kRaw || '').toLowerCase();
       if (k === 'brand_ids[]' || k === 'brand_ids' || k === 'brand_id' || k === 'brand') pushNum(brands, v);
-      if (k === 'catalog_ids[]' || k === 'catalog_ids' || k === 'catalog_id' || k === 'catalog') pushNum(catalogs, v);
+      // Accept both catalog_ids[] and catalog[] spellings (and CSV/alias forms)
+      if (k === 'catalog_ids[]' || k === 'catalog_ids' || k === 'catalog_id' || k === 'catalog' || k === 'catalog[]') pushNum(catalogs, v);
       if (k === 'currency') currency = String(v || '').toUpperCase();
     }
     // 3) Normalize values: treat 2050 as no-catalog (wildcard), sort+dedupe
