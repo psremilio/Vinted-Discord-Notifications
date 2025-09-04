@@ -149,22 +149,29 @@ function onlyDiffersByDimension(a, b, dim) {
 
 export function buildAutoPriceFamilies(rules) {
   // Strict URL-based grouping: group by brand+catalog(+currency) ignoring price/size/status
-  const groups = new Map(); // key -> { parentCanonUrl, members: [{rule, filters, canon}] }
+  // Include non-price "anchor" rules as parent candidates so that "all" can be chosen as parent.
+  const groups = new Map(); // key -> { parentCanonUrl, members: [{rule, filters, canon}], anchors: [{rule, filters}] }
   for (const r of (rules || [])) {
-    const canon = canonicalizeSearchURL(r.url || r.link || '');
+    const url = r.url || r.link || '';
+    const canon = canonicalizeSearchURL(url);
     const dim = familyDimensionFromCanon(canon);
-    if (dim !== 'price') continue;
-    const key = buildFamilyKeyFromURL(r.url || r.link || '', 'price');
+    const key = buildFamilyKeyFromURL(url, 'price');
     if (!key) continue;
-    const parentUrlCanon = getParentURLFromChild(r.url || r.link || '', 'price');
-    if (!groups.has(key)) groups.set(key, { parentCanonUrl: parentUrlCanon, members: [] });
-    groups.get(key).members.push({ rule: r, filters: parseRuleFilters(r.url || r.link || ''), canon });
+    const parentUrlCanon = getParentURLFromChild(url, 'price');
+    if (!groups.has(key)) groups.set(key, { parentCanonUrl: parentUrlCanon, members: [], anchors: [] });
+    const filters = parseRuleFilters(url);
+    if (dim === 'price') {
+      groups.get(key).members.push({ rule: r, filters, canon });
+    } else {
+      // Keep as potential parent anchor (same family key, but not price-dimension)
+      groups.get(key).anchors.push({ rule: r, filters });
+    }
   }
   const families = [];
   for (const [key, g] of groups.entries()) {
     const arr = g.members || [];
     if (arr.length < 2) continue; // need at least 2 price variants
-    // Pick parent: rule whose canonicalized URL equals parentCanonUrl (if any)
+    // Pick parent: prefer a clean non-price anchor with canonical URL equal to computed parent URL
     const isClean = (f) => !(Number.isFinite(f.priceFrom) || Number.isFinite(f.priceTo)) &&
       !(Array.isArray(f.sizeIds) && f.sizeIds.length) &&
       !(Array.isArray(f.statusIds) && f.statusIds.length) &&
@@ -173,12 +180,16 @@ export function buildAutoPriceFamilies(rules) {
     const countFilters = (f) => (Number.isFinite(f.priceFrom)?1:0) + (Number.isFinite(f.priceTo)?1:0) +
       ((Array.isArray(f.sizeIds)&&f.sizeIds.length)?1:0) + ((Array.isArray(f.statusIds)&&f.statusIds.length)?1:0) +
       ((Array.isArray(f.colorIds)&&f.colorIds.length)?1:0) + ((Array.isArray(f.materialIds)&&f.materialIds.length)?1:0);
-    let leader = arr.find(m => {
-      try { const p = getParentURLFromChild(m.rule.url || m.rule.link || '', 'price'); return p === g.parentCanonUrl && isClean(m.filters); } catch { return false; }
+    // 1) Try anchors matching parent URL canon and clean
+    let leader = (g.anchors || []).find(a => {
+      try { const p = getParentURLFromChild(a.rule.url || a.rule.link || '', 'price'); return p === g.parentCanonUrl && isClean(a.filters); } catch { return false; }
     });
+    // 2) Any clean anchor
+    if (!leader) leader = (g.anchors || []).find(a => isClean(a.filters));
+    // 3) Fallback to clean member (rare if a price rule is actually clean)
     if (!leader) leader = arr.find(m => isClean(m.filters));
+    // 4) Fallback: member with fewest filters but not pure price-only
     if (!leader) {
-      // Fallback: fewest filters but not pure price-only
       const cand = arr.slice().sort((a,b)=> countFilters(a.filters)-countFilters(b.filters))[0];
       const purePrice = (f) => (Number.isFinite(f.priceFrom) || Number.isFinite(f.priceTo)) &&
         !(Array.isArray(f.sizeIds)&&f.sizeIds.length) && !(Array.isArray(f.statusIds)&&f.statusIds.length) &&
@@ -189,7 +200,8 @@ export function buildAutoPriceFamilies(rules) {
       // No acceptable parent → skip this family (avoid price child as parent)
       continue;
     }
-    const children = arr.filter(m => m !== leader);
+    // Children are strictly the price members
+    const children = arr.filter(m => (m.rule !== leader.rule));
     families.push({ parent: leader.rule, parentFilters: leader.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
     ll('[fanout.auto.url]', 'key=', key, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
   }
