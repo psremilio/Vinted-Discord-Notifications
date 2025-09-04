@@ -89,6 +89,7 @@ function createClient(proxyStr) {
 }
 
 const PROXY_DEBUG = String(process.env.DEBUG_PROXY || '0') === '1';
+const bootstrapFailCounts = new Map(); // proxyLabel -> count
 
 async function bootstrapSession(client, base = BASE) {
   const TTL = 45 * 60 * 1000; // 45 minutes
@@ -151,6 +152,20 @@ async function bootstrapSession(client, base = BASE) {
         if (PROXY_DEBUG) console.log(`[proxy] session bootstrapped (retry) for ${client.proxyLabel}`);
       } catch {}
     }, retryDelay);
+    // Circuit-breaker on repeated bootstrap failures
+    try {
+      const key = String(client.proxyLabel || '');
+      if (key) {
+        const c = (bootstrapFailCounts.get(key) || 0) + 1;
+        bootstrapFailCounts.set(key, c);
+        const MAX = Math.max(2, Number(process.env.PROXY_BOOTSTRAP_FAIL_MAX || 3));
+        if (c >= MAX) {
+          console.warn(`[proxy] bootstrap circuit-breaker: marking proxy bad after ${c} fails → ${key}`);
+          try { markBadInPool(key); } catch {}
+          bootstrapFailCounts.set(key, 0);
+        }
+      }
+    } catch {}
   }
 }
 

@@ -10,6 +10,9 @@ export const state = {
   version: process.env.npm_package_version || 'dev',
 };
 
+// Track recent soft-fail events per rule to make quarantine and zero-match logic aware
+const lastSoftFailByRule = new Map(); // ruleId -> timestamp
+
 export function markFetchAttempt() {
   state.lastFetchAt = new Date();
 }
@@ -28,3 +31,13 @@ export function markPosted() {
   state.lastPostAt = new Date();
 }
 
+export function recordSoftFail(ruleId) {
+  try { lastSoftFailByRule.set(String(ruleId), Date.now()); } catch {}
+}
+
+export function hadSoftFailRecently(ruleId, windowMs = 30 * 1000) {
+  try {
+    const ts = lastSoftFailByRule.get(String(ruleId)) || 0;
+    return ts > 0 && (Date.now() - ts) <= Math.max(1000, Number(windowMs || 0));
+  } catch { return false; }
+}

@@ -12,6 +12,7 @@ import { buildParentGroups, buildExplicitFamily, buildAutoPriceFamilies, canonic
 import { loadFamiliesFromConfig } from "./rules/families.js";
 import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey, debugMatchFailReason, canonicalizeUrl } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
+import { hadSoftFailRecently } from "./state.js";
 import { learnFromRules } from "./rules/catalogLearn.js";
 
 // Map of channel names that are already scheduled.  addSearch() consults
@@ -173,6 +174,14 @@ export const runSearch = async (client, channel, opts = {}) => {
     const baseFilters = child.filters || parseRuleFilters(childRule.url);
     // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
     const filters = { ...baseFilters };
+    // Inherit missing filters from parent (brand/catalog/size/status/currency)
+    try {
+      if ((!Array.isArray(filters.brandIds) || filters.brandIds.length === 0) && Array.isArray(parentFilters?.brandIds)) filters.brandIds = parentFilters.brandIds;
+      if ((!Array.isArray(filters.catalogs) || filters.catalogs.length === 0) && Array.isArray(parentFilters?.catalogs)) filters.catalogs = parentFilters.catalogs;
+      if ((!Array.isArray(filters.sizeIds) || filters.sizeIds.length === 0) && Array.isArray(parentFilters?.sizeIds)) filters.sizeIds = parentFilters.sizeIds;
+      if ((!Array.isArray(filters.statusIds) || filters.statusIds.length === 0) && Array.isArray(parentFilters?.statusIds)) filters.statusIds = parentFilters.statusIds;
+      if (!filters.currency && parentFilters?.currency) filters.currency = parentFilters.currency;
+    } catch {}
     try {
       if (IGNORE_CAT_WHEN_PARENT_NONE && parentFilters && (
         !Array.isArray(parentFilters.catalogs) || parentFilters.catalogs.length === 0 || parentHasWildcard2050
@@ -236,7 +245,9 @@ export const runSearch = async (client, channel, opts = {}) => {
                   if (sig && st && st.child?.has?.(cname)) {
                     const rec = st.child.get(cname);
                     const leaderHas = Array.isArray(articles) && articles.length > 0;
-                    if (leaderHas && matched.length === 0 && typeof filters.priceTo === 'number') {
+                    // Softfail-aware zero-match increment: skip when recent soft-fail observed
+                    const hadSoftFail = hadSoftFailRecently(channel.channelName, 30_000);
+                    if (leaderHas && matched.length === 0 && typeof filters.priceTo === 'number' && !hadSoftFail) {
                       rec.zero = (rec.zero || 0) + 1;
                       if (rec.zero >= Number(process.env.MONO_QUARANTINE_THRESHOLD || 3)) {
                         rec.quarantined = true;
@@ -284,7 +295,9 @@ export const runSearch = async (client, channel, opts = {}) => {
                     const price = (()=>{ try { return normalizedPrice(it, filters?.currency || 'EUR'); } catch { return null; } })();
                     const bid = String(it?.brand_id ?? it?.brand?.id ?? '');
                     const cid = String(it?.catalog_id ?? it?.catalog?.id ?? '');
-                    console.log('[match.debug]', 'rule=', childRule.channelName, 'item=', it?.id, 'fail=', reason, 'price=', price, 'price_to=', filters?.priceTo ?? '', 'brand=', bid, 'catalog=', cid);
+                    const title = String(it?.title || '').toLowerCase();
+                    const titleBrand = /(nike|adidas|lacoste|ralph\s*lauren|reebok|puma|new\s*balance|dr\.?\s*martens)/i.test(title);
+                    console.log('[match.debug]', 'rule=', childRule.channelName, 'item=', it?.id, 'fail=', reason, 'price=', price, 'price_to=', filters?.priceTo ?? '', 'brand=', bid, 'catalog=', cid, 'titleBrand=', titleBrand, 'childCats=', (filters?.catalogs||[]).join(','));
                   }
                 }
                 if (!matched.length) continue;

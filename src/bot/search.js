@@ -3,7 +3,7 @@ import { handleParams } from "./handle-params.js";
 import { dedupeKeyForChannel } from "../utils/dedupe.js";
 import { buildFamilyKey } from "../rules/urlNormalizer.js";
 import { stats } from "../utils/stats.js";
-import { state, markFetchAttempt, markFetchSuccess, markFetchError } from "../state.js";
+import { state, markFetchAttempt, markFetchSuccess, markFetchError, recordSoftFail } from "../state.js";
 import { metrics } from "../infra/metrics.js";
 
 const DEBUG_POLL = process.env.DEBUG_POLL === '1';
@@ -156,6 +156,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             }
             if (result?.softFail) {
               // soft failure counted by controller → no retry within this page
+              try { recordSoftFail(channel.channelName); } catch {}
               return [];
             }
             const res = result.res;

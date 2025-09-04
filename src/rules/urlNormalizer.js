@@ -242,30 +242,36 @@ export function itemMatchesFilters(item, filters) {
     const HAS_WILDCARD_2050 = catalogs.includes('2050');
     if (REQ_CAT && catalogs.length && !HAS_WILDCARD_2050) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
-      if (!cid) return false;
-      const strat = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
-      if (strat === 'subtree') {
-        const expanded = expandCatalogs(catalogs);
-        if (!expanded.has(cid)) return false;
-        try { metrics.subcatalog_ok_total?.inc(1); } catch {}
+      if (!cid) {
+        if (String(process.env.RELAX_ON_MISSING_CATALOG || '1') !== '1') return false;
       } else {
-        if (!catalogs.includes(cid)) return false;
-        try { metrics.catalog_ok_total?.inc(1); } catch {}
+        const strat = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
+        if (strat === 'subtree') {
+          const expanded = expandCatalogs(catalogs);
+          if (!expanded.has(cid)) return false;
+          try { metrics.subcatalog_ok_total?.inc(1); } catch {}
+        } else {
+          if (!catalogs.includes(cid)) return false;
+          try { metrics.catalog_ok_total?.inc(1); } catch {}
+        }
       }
     }
     // Optional brand enforcement
     if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && filters.brandIds?.length) {
       const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
-      if (!bid) return false;
-      const strat = String(process.env.BRAND_MATCH_STRATEGY || 'alias_group');
-      if (strat === 'alias_group') {
-        const expanded = expandBrandIds(filters.brandIds);
-        if (!expanded.has(bid)) return false;
-        const orig = new Set(filters.brandIds.map(String));
-        try { (orig.has(bid) ? metrics.brand_ok_total : metrics.brand_alias_ok_total)?.inc(1); } catch {}
+      if (!bid) {
+        if (String(process.env.RELAX_ON_MISSING_BRAND || '1') !== '1') return false;
       } else {
-        if (!filters.brandIds.map(String).includes(bid)) return false;
-        try { metrics.brand_ok_total?.inc(1); } catch {}
+        const strat = String(process.env.BRAND_MATCH_STRATEGY || 'alias_group');
+        if (strat === 'alias_group') {
+          const expanded = expandBrandIds(filters.brandIds);
+          if (!expanded.has(bid)) return false;
+          const orig = new Set(filters.brandIds.map(String));
+          try { (orig.has(bid) ? metrics.brand_ok_total : metrics.brand_alias_ok_total)?.inc(1); } catch {}
+        } else {
+          if (!filters.brandIds.map(String).includes(bid)) return false;
+          try { metrics.brand_ok_total?.inc(1); } catch {}
+        }
       }
     }
     // Optional size enforcement
@@ -303,7 +309,7 @@ export function debugMatchFailReason(item, filters) {
     const HAS_WILDCARD_2050 = catalogs.includes('2050');
     if (REQ_CAT && catalogs.length && !HAS_WILDCARD_2050) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
-      if (!cid) return 'catalog_mismatch';
+      if (!cid) return String(process.env.RELAX_ON_MISSING_CATALOG || '1') === '1' ? null : 'catalog_mismatch';
       const stratC = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
       if (stratC === 'subtree') {
         if (!expandCatalogs(catalogs).has(cid)) return 'catalog_mismatch';
@@ -313,7 +319,7 @@ export function debugMatchFailReason(item, filters) {
     }
     if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && filters.brandIds?.length) {
       const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
-      if (!bid) return 'brand_mismatch';
+      if (!bid) return String(process.env.RELAX_ON_MISSING_BRAND || '1') === '1' ? null : 'brand_mismatch';
       const stratB = String(process.env.BRAND_MATCH_STRATEGY || 'alias_group');
       if (stratB === 'alias_group') {
         if (!expandBrandIds(filters.brandIds).has(bid)) return 'brand_mismatch';
@@ -349,20 +355,24 @@ export function brandCatalogMatches(item, filters) {
     const HAS_WILDCARD_2050 = catalogs.includes('2050');
     if (REQ_CAT && catalogs.length && !HAS_WILDCARD_2050) {
       const cid = String(item?.catalog_id ?? item?.catalog?.id ?? '');
-      if (!cid) return false;
+      if (!cid && String(process.env.RELAX_ON_MISSING_CATALOG || '1') !== '1') return false;
       const strat = String(process.env.CATALOG_MATCH_STRATEGY || 'subtree');
-      if (strat === 'subtree') {
-        if (!expandCatalogs(catalogs).has(cid)) return false;
-      } else if (!catalogs.includes(cid)) return false;
+      if (cid) {
+        if (strat === 'subtree') {
+          if (!expandCatalogs(catalogs).has(cid)) return false;
+        } else if (!catalogs.includes(cid)) return false;
+      }
     }
     // Brand
     if (String(process.env.FANOUT_ENFORCE_BRAND || '1') === '1' && (filters?.brandIds?.length)) {
       const bid = String(item?.brand_id ?? item?.brand?.id ?? '');
-      if (!bid) return false;
+      if (!bid && String(process.env.RELAX_ON_MISSING_BRAND || '1') !== '1') return false;
       const strat = String(process.env.BRAND_MATCH_STRATEGY || 'alias_group');
-      if (strat === 'alias_group') {
-        if (!expandBrandIds(filters.brandIds).has(bid)) return false;
-      } else if (!filters.brandIds.map(String).includes(bid)) return false;
+      if (bid) {
+        if (strat === 'alias_group') {
+          if (!expandBrandIds(filters.brandIds).has(bid)) return false;
+        } else if (!filters.brandIds.map(String).includes(bid)) return false;
+      }
     }
     return true;
   } catch {
