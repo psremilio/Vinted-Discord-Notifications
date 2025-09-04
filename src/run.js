@@ -239,6 +239,19 @@ export const runSearch = async (client, channel, opts = {}) => {
         for (const v of (Array.isArray(sub)?sub:[])) if (!S.has(String(v))) return false;
         return true;
       };
+      // Allowed-dimension guard: child may differ from parent in exactly one of: price_to OR size_ids OR status_ids
+      const priceEq = ((filters?.priceFrom ?? null) === (parentFilters?.priceFrom ?? null)) && ((filters?.priceTo ?? null) === (parentFilters?.priceTo ?? null));
+      const priceOnly = ((filters?.priceTo ?? null) !== (parentFilters?.priceTo ?? null)) && ((filters?.priceFrom ?? null) === (parentFilters?.priceFrom ?? null));
+      const sizeEq = arrEq(filters?.sizeIds, parentFilters?.sizeIds || []);
+      const statusEq = arrEq(filters?.statusIds, parentFilters?.statusIds || []);
+      const diffs = [];
+      if (!priceEq) diffs.push('price');
+      if (!sizeEq) diffs.push('size');
+      if (!statusEq) diffs.push('status');
+      if (diffs.length > 1 || (diffs.length === 1 && diffs[0] === 'price' && !priceOnly)) {
+        console.warn('[family.dim_mismatch]', 'parent=', channel.channelName, 'child=', childRule.channelName, 'diff=', diffs.join(','));
+        continue;
+      }
       const pBrands = Array.isArray(parentFilters?.brandIds) ? parentFilters.brandIds : [];
       if (pBrands.length > 0 && !arrEq(pBrands, baseFilters?.brandIds)) {
         try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'brand_ids' }); } catch {}
