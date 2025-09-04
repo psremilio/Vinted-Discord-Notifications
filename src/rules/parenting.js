@@ -2,6 +2,23 @@ import { buildParentKey, buildFamilyKey, parseRuleFilters } from './urlNormalize
 const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
 const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
 
+function hasPrice(filters) { return Number.isFinite(filters?.priceFrom) || Number.isFinite(filters?.priceTo); }
+function hasSize(filters) { return Array.isArray(filters?.sizeIds) && filters.sizeIds.length > 0; }
+function hasStatus(filters) { return Array.isArray(filters?.statusIds) && filters.statusIds.length > 0; }
+function hasCatalog(filters) { return Array.isArray(filters?.catalogs) && filters.catalogs.length > 0; }
+export function familyMode(filters) {
+  if (hasPrice(filters)) return 'price';
+  if (hasSize(filters)) return 'size';
+  if (hasStatus(filters)) return 'status';
+  return 'none';
+}
+export function shouldFanoutByFilters(filters) {
+  const needCatalog = String(process.env.FAMILY_REQUIRE_CATALOG || '1') === '1';
+  const mode = familyMode(filters);
+  const ok = (mode !== 'none') && (!needCatalog || hasCatalog(filters));
+  return { ok, mode };
+}
+
 function scoreBroadness(filters) {
   // Lower score = broader rule. Penalize constraints presence, but prefer
   // larger catalog sets (broader coverage) when catalogs exist.
@@ -32,6 +49,9 @@ export function buildParentGroups(rules) {
       const key = autoFamily ? buildFamilyKey(raw) : parentKey;
       if (!groupsByKey.has(key)) groupsByKey.set(key, []);
       const filters = parseRuleFilters(r.url || r.channelUrl || r.ruleUrl || r.link);
+      // Apply family gating: only group non-price dimensions (size/status) here.
+      const gate = shouldFanoutByFilters(filters);
+      if (!gate.ok || gate.mode === 'price') continue;
       groupsByKey.get(key).push({ rule: r, filters });
       ll('[fanout.key]', r.channelName, 'canonical_url=', parentKey, 'familyKey=', key);
     } catch {}

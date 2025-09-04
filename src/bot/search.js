@@ -1,7 +1,7 @@
 import { fetchRule, hedgedGet } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKeyForChannel } from "../utils/dedupe.js";
-import { buildFamilyKey } from "../rules/urlNormalizer.js";
+import { buildFamilyKey, canonicalizeUrl } from "../rules/urlNormalizer.js";
 import { stats } from "../utils/stats.js";
 import { state, markFetchAttempt, markFetchSuccess, markFetchError, recordSoftFail } from "../state.js";
 import { metrics } from "../infra/metrics.js";
@@ -164,7 +164,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             const ct = String(res.headers['content-type'] || '').toLowerCase();
             if (res.status >= 200 && res.status < 300 && ct.includes('application/json')) {
               const items = Array.isArray(res.data?.items) ? res.data.items : [];
-              d(`[debug][rule:${channel.channelName}] scraped=${items.length} page=${page}`);
+              d(`[debug][rule:${channel.channelName}] scraped=${items.length} page=${page} canonical_url=${canonicalizeUrl(channel.url)}`);
               trace('resp', { rule: channel.channelName, page, first: items[0] && { id: items[0].id, at: items[0]?.photo?.high_resolution?.timestamp }, got: items.length });
               const dur = Date.now() - t0;
               stats.ok += 1;

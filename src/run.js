@@ -74,6 +74,17 @@ function dumpRulesConfig(searches) {
       }
     }
   } catch {}
+  // Gating: only structured dimensions (price/size/status). No brand-only families.
+  try {
+    const gated = [];
+    for (const fam of (families || [])) {
+      const filters = parseRuleFilters(fam.parent?.url || '');
+      const g = shouldFanoutByFilters(filters);
+      if (!g.ok) continue;
+      gated.push(fam);
+    }
+    families = gated;
+  } catch {}
 }
 
 async function getChannelById(client, id) {
@@ -146,11 +157,15 @@ export const runSearch = async (client, channel, opts = {}) => {
             if (FANOUT_DEBUG) {
               try {
                 const childN = Array.isArray(channel.children) ? channel.children.length : 0;
-                ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'children=', childN);
+                ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'children=', childN, 'parent_url=', canonicalizeUrl(channel.url));
               } catch {}
             }
             // Fanout mode: if children defined on the rule, evaluate and post into their channels
             if (Array.isArray(channel.children) && channel.children.length && String(process.env.FANOUT_MODE || '1') === '1') {
+              const MIN_PARENT = Math.max(1, Number(process.env.FAMILY_MIN_PARENT_MATCHES || 3));
+              if (articles.length < MIN_PARENT) {
+                ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'parent_url=', canonicalizeUrl(channel.url), 'skip=too_few_parent_matches');
+              } else {
               const parentFilters = (() => { try { return parseRuleFilters(channel.url); } catch { return null; } })();
               const IGNORE_CAT_WHEN_PARENT_NONE = String(process.env.FANOUT_CHILD_IGNORE_CATALOG_WHEN_PARENT_HAS_NONE || '1') === '1';
               // Treat parent catalog=2050 as effectively "no catalog constraint"
@@ -166,9 +181,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                 const st = sig ? familyState.get(sig) : null;
                 if (st && st.warmup > 0) { st.warmup -= 1; familyState.set(sig, st); fanoutEnabled = false; }
               } catch {}
-              if (!fanoutEnabled) {
-                ll('[fanout.warmup]', 'parent=', channel.channelName);
-              }
+              if (!fanoutEnabled) ll('[fanout.warmup]', 'parent=', channel.channelName, 'parent_url=', canonicalizeUrl(channel.url));
   for (const child of (fanoutEnabled ? channel.children : [])) {
     const childRule = child.rule || child; // tolerate shape
     const baseFilters = child.filters || parseRuleFilters(childRule.url);
@@ -232,6 +245,7 @@ export const runSearch = async (client, channel, opts = {}) => {
         }
       }
     } catch {}
+                ll('[fanout.eval.child]', 'child=', childRule.channelName, 'child_url=', canonicalizeUrl(childRule.url));
                 const matched = [];
                 for (const it of articles) {
                   if (itemMatchesFilters(it, filters)) matched.push(it);
@@ -284,7 +298,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                 } catch {}
                 if (FANOUT_DEBUG) {
                   try {
-                    ll('[fanout.eval.child]', 'child=', childRule.channelName, 'matched=', `${matched.length}/${articles.length}`, 'price_from=', filters.priceFrom, 'price_to=', filters.priceTo, 'catalogs=', (filters.catalogs||[]).join(','));
+                    ll('[fanout.eval.child]', 'child=', childRule.channelName, 'child_url=', canonicalizeUrl(childRule.url), 'matched=', `${matched.length}/${articles.length}`, 'price_from=', filters.priceFrom, 'price_to=', filters.priceTo, 'catalogs=', (filters.catalogs||[]).join(','));
                   } catch {}
                 }
                 if (!matched.length && articles.length) {
@@ -350,6 +364,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                   } catch {}
                 });
                 try { metrics.parent_fanout_items_total?.inc({ parent: String(channel.channelName), child: String(childRule.channelName) }, gated.length); } catch {}
+              }
               }
             }
             // Also post to parent rule's channel as usual, unless FANOUT suppresses it
@@ -496,7 +511,7 @@ function buildFamilies(mySearches) {
         const fk = buildFamilyKey(fam.parent.url);
         const pk = buildParentKey(fam.parent.url);
         const childNames = (fam.children||[]).map(c => c.rule?.channelName || c.channelName || '');
-        ll('[fanout.family.detail]', 'familyKey=', fk, 'parentKey=', pk, 'parent=', fam.parent.channelName, 'children=', childNames.join(','));
+        ll('[fanout.family.detail]', 'familyKey=', fk, 'parentKey=', pk, 'parent=', fam.parent.channelName, 'parent_url=', canonicalizeUrl(fam.parent.url), 'children=', childNames.join(','));
         try { console.log('[fanout.children]', 'parent=', fam.parent.channelName, 'children_count=', childNames.length); } catch {}
         if (String(process.env.PARENTING_STRATEGY || 'exact_url') === 'exact_url' && fk !== pk) {
           console.warn('[fanout.warn] strategy=exact_url but familyKey!=parentKey for', fam.parent.channelName);

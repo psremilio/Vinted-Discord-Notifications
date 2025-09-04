@@ -101,7 +101,7 @@ export function buildFamilyKey(rawUrl) {
     ]);
     const parts = [];
     if (brands.length) parts.push(`brand_ids[]=${brands.join(',')}`);
-    if (catalogs.length) parts.push(`catalog[]=${catalogs.join(',')}`);
+    if (catalogs.length) parts.push(`catalog[]=${catalogs.join(',')}`); else parts.push('no_catalog=1');
     if (sizes.length) parts.push(`size_ids[]=${sizes.join(',')}`);
     if (statuses.length) parts.push(`status_ids[]=${statuses.join(',')}`);
     if (currency) parts.push(`currency=${currency}`);
