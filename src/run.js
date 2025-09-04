@@ -265,6 +265,24 @@ export const runSearch = async (client, channel, opts = {}) => {
         console.warn('[fanout.skip]', 'reason=catalog_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
         continue;
       }
+      // Enforce equality for all other filters: text, color_ids, material_ids
+      const pText = String(parentFilters?.text || '');
+      const cText = String(baseFilters?.text || '');
+      if (pText !== cText) {
+        try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'text' }); } catch {}
+        console.warn('[fanout.skip]', 'reason=text_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
+        continue;
+      }
+      if (!arrEq(parentFilters?.colorIds || [], baseFilters?.colorIds || [])) {
+        try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'color_ids' }); } catch {}
+        console.warn('[fanout.skip]', 'reason=color_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
+        continue;
+      }
+      if (!arrEq(parentFilters?.materialIds || [], baseFilters?.materialIds || [])) {
+        try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'material_ids' }); } catch {}
+        console.warn('[fanout.skip]', 'reason=material_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
+        continue;
+      }
       // If parent lacks sizes/status → allow any child sizes/status
       const pSizes = Array.isArray(parentFilters?.sizeIds) ? parentFilters.sizeIds : [];
       const pStatus = Array.isArray(parentFilters?.statusIds) ? parentFilters.statusIds : [];

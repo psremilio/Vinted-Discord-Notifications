@@ -133,6 +133,9 @@ function onlyDiffersByDimension(a, b, dim) {
   if (!eqArr(a.catalogs, b.catalogs)) return false;
   if (String(a.currency||'EUR').toUpperCase() !== String(b.currency||'EUR').toUpperCase()) return false;
   if (String(a.text||'') !== String(b.text||'')) return false;
+  // Enforce equality for other filters as requested: color/material must match
+  if (!eqArr(a.colorIds, b.colorIds)) return false;
+  if (!eqArr(a.materialIds, b.materialIds)) return false;
   if (dim === 'size') {
     if (!eqArr(a.statusIds, b.statusIds)) return false;
     if ((a.priceFrom ?? null) !== (b.priceFrom ?? null) || (a.priceTo ?? null) !== (b.priceTo ?? null)) return false;
