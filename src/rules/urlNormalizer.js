@@ -147,6 +147,92 @@ export function canonicalizeUrl(rawUrl) {
   }
 }
 
+// Canonical structured URL used for strict URL-based family grouping
+export function canonicalizeSearchURL(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || ''));
+    const p = new URLSearchParams(u.search);
+    const arr = (k) => p.getAll(k).map(x => String(x || '')).filter(Boolean);
+    const csv = (k) => String(p.get(k) || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const normalize = (xs) => Array.from(new Set((xs || []).map(String))).sort();
+    const number = (s) => {
+      const clean = String(s || '').replace(/[^\d.,-]/g, '').replace(',', '.');
+      const n = parseFloat(clean);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    // Normalize brand/catalog/size/status
+    let brandIds = normalize([...arr('brand_ids[]'), ...csv('brand_ids'), ...csv('brand_id'), ...csv('brand')]);
+    let catalogs = normalize([...arr('catalog[]'), ...arr('catalog_ids[]'), ...csv('catalog_ids'), ...csv('catalog'), ...csv('catalog_id')]);
+    // 2050 as no-catalog wildcard → treat as empty
+    if (catalogs.length === 1 && catalogs[0] === '2050') catalogs = [];
+    const sizeIds = normalize([...arr('size_ids[]'), ...csv('size_ids'), ...csv('size_id'), ...csv('size')]);
+    const statusIds = normalize([...arr('status_ids[]'), ...csv('status_ids'), ...csv('status_id'), ...csv('status')]);
+    const currency = String(p.get('currency') || 'EUR').toUpperCase();
+    const priceFrom = number(p.get('price_from') || p.get('priceMin') || p.get('min_price'));
+    const priceTo = number(p.get('price_to') || p.get('priceMax') || p.get('max_price'));
+    const text = String(p.get('search_text') || p.get('text') || '').trim();
+    return {
+      host: u.host.toLowerCase(),
+      path: u.pathname,
+      brandIds, catalogs, sizeIds, statusIds, currency, priceFrom, priceTo, text,
+    };
+  } catch {
+    return { host: '', path: '', brandIds: [], catalogs: [], sizeIds: [], statusIds: [], currency: 'EUR', priceFrom: undefined, priceTo: undefined, text: '' };
+  }
+}
+
+export function familyDimensionFromCanon(canon) {
+  if (Number.isFinite(canon?.priceFrom) || Number.isFinite(canon?.priceTo)) return 'price';
+  if (Array.isArray(canon?.sizeIds) && canon.sizeIds.length > 0) return 'size';
+  if (Array.isArray(canon?.statusIds) && canon.statusIds.length > 0) return 'status';
+  return 'none';
+}
+
+export function stringifyCanon(canon) {
+  try {
+    const parts = [];
+    const pushArr = (k, arr) => { if (Array.isArray(arr) && arr.length) parts.push(`${k}=${arr.join(',')}`); };
+    const pushNum = (k, v) => { if (Number.isFinite(v)) parts.push(`${k}=${v}`); };
+    if (canon.brandIds) pushArr('brand_ids[]', canon.brandIds);
+    if (canon.catalogs && canon.catalogs.length) pushArr('catalog_ids[]', canon.catalogs); else parts.push('no_catalog=1');
+    if (canon.sizeIds) pushArr('size_ids[]', canon.sizeIds);
+    if (canon.statusIds) pushArr('status_ids[]', canon.statusIds);
+    if (canon.currency) parts.push(`currency=${String(canon.currency).toUpperCase()}`);
+    pushNum('price_from', canon.priceFrom);
+    pushNum('price_to', canon.priceTo);
+    if (canon.text) parts.push(`search_text=${encodeURIComponent(canon.text)}`);
+    return `${canon.host}${canon.path}?${parts.join('&')}`;
+  } catch { return ''; }
+}
+
+export function removeDimensionFromCanon(canon, dim) {
+  const c = JSON.parse(JSON.stringify(canon || {}));
+  if (dim === 'price') { delete c.priceFrom; delete c.priceTo; }
+  else if (dim === 'size') { c.sizeIds = []; }
+  else if (dim === 'status') { c.statusIds = []; }
+  return c;
+}
+
+export function buildFamilyKeyFromURL(rawUrl, dim = 'auto') {
+  const canon = canonicalizeSearchURL(rawUrl);
+  const mode = dim === 'auto' ? familyDimensionFromCanon(canon) : dim;
+  if (mode === 'none') return null;
+  const base = removeDimensionFromCanon(canon, mode);
+  // Key is deterministic string of fixed fields
+  return stringifyCanon({ ...base, priceFrom: undefined, priceTo: undefined });
+}
+
+export function getParentURLFromChild(rawUrl, dim = 'auto') {
+  const canon = canonicalizeSearchURL(rawUrl);
+  const mode = dim === 'auto' ? familyDimensionFromCanon(canon) : dim;
+  if (mode === 'none') return canonicalizeUrl(rawUrl);
+  const base = removeDimensionFromCanon(canon, mode);
+  return stringifyCanon(base);
+}
+
 // Extract rule filters for fanout matching
 export function parseRuleFilters(rawUrl) {
   const u = new URL(String(rawUrl || ''));

@@ -1,4 +1,4 @@
-import { buildParentKey, buildFamilyKey, parseRuleFilters } from './urlNormalizer.js';
+import { buildParentKey, buildFamilyKey, parseRuleFilters, canonicalizeSearchURL, familyDimensionFromCanon, buildFamilyKeyFromURL, getParentURLFromChild } from './urlNormalizer.js';
 const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
 const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
 
@@ -69,7 +69,10 @@ export function buildParentGroups(rules) {
     }
     // normalize parent & children
     const parent = arr[parentIdx];
-    const children = arr.filter((_, i) => i !== parentIdx);
+    // Strict: children must only differ in the parent's family dimension (size/status)
+    const mode = familyMode(parent.filters);
+    const children = arr.filter((_, i) => i !== parentIdx)
+      .filter(c => (mode === 'size' || mode === 'status') && onlyDiffersByDimension(c.filters, parent.filters, mode));
     families.push({ parent: parent.rule, parentFilters: parent.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
     ll('[fanout.pick]', 'parent=', parent.rule.channelName, 'children=', (children.map(c=>c.rule.channelName).join(',')) || '');
   }
@@ -122,30 +125,52 @@ function onlyDiffersInPrice(a, b) {
   return true;
 }
 
+function onlyDiffersByDimension(a, b, dim) {
+  const eqArr = (x, y) => JSON.stringify(normalizeArr(x)) === JSON.stringify(normalizeArr(y));
+  // brand/catalog/currency/text must match
+  if (!eqArr(a.brandIds, b.brandIds)) return false;
+  if (!eqArr(a.catalogs, b.catalogs)) return false;
+  if (String(a.currency||'EUR').toUpperCase() !== String(b.currency||'EUR').toUpperCase()) return false;
+  if (String(a.text||'') !== String(b.text||'')) return false;
+  if (dim === 'size') {
+    if (!eqArr(a.statusIds, b.statusIds)) return false;
+    if ((a.priceFrom ?? null) !== (b.priceFrom ?? null) || (a.priceTo ?? null) !== (b.priceTo ?? null)) return false;
+    // sizes may differ
+    return true;
+  }
+  if (dim === 'status') {
+    if (!eqArr(a.sizeIds, b.sizeIds)) return false;
+    if ((a.priceFrom ?? null) !== (b.priceFrom ?? null) || (a.priceTo ?? null) !== (b.priceTo ?? null)) return false;
+    return true;
+  }
+  return false;
+}
+
 export function buildAutoPriceFamilies(rules) {
-  const bySig = new Map();
+  // Strict URL-based grouping: group by (familyKey from URL ignoring price)
+  const groups = new Map(); // key -> { parentCanonUrl, members: [{rule, filters, canon}] }
   for (const r of (rules || [])) {
-    const f = parseRuleFilters(r.url || r.link || '');
-    // Guard: search_text without brand → never group
-    if ((f.text || '').trim() && (!Array.isArray(f.brandIds) || f.brandIds.length === 0)) {
-      continue;
-    }
-    const sig = canonicalSignature(r);
-    if (!bySig.has(sig)) bySig.set(sig, []);
-    bySig.get(sig).push({ rule: r, filters: f });
+    const canon = canonicalizeSearchURL(r.url || r.link || '');
+    const dim = familyDimensionFromCanon(canon);
+    if (dim !== 'price') continue;
+    const key = buildFamilyKeyFromURL(r.url || r.link || '', 'price');
+    if (!key) continue;
+    const parentUrlCanon = getParentURLFromChild(r.url || r.link || '', 'price');
+    if (!groups.has(key)) groups.set(key, { parentCanonUrl: parentUrlCanon, members: [] });
+    groups.get(key).members.push({ rule: r, filters: parseRuleFilters(r.url || r.link || ''), canon });
   }
   const families = [];
-  for (const [sig, arr] of bySig.entries()) {
-    if (!arr || arr.length < 2) continue; // need at least 2 to form a price family
-    // Validate members differ only by price
-    const leadCandidate = pickLeader(arr);
-    const baseF = leadCandidate.filters;
-    const okMembers = arr.filter(m => onlyDiffersInPrice({ ...m.filters }, { ...baseF }));
-    if (okMembers.length < 2) continue;
-    const leader = pickLeader(okMembers);
-    const children = okMembers.filter(m => m !== leader);
+  for (const [key, g] of groups.entries()) {
+    const arr = g.members || [];
+    if (arr.length < 2) continue; // need at least 2 price variants
+    // Pick parent: rule whose canonicalized URL equals parentCanonUrl (if any)
+    let leader = arr.find(m => {
+      try { const p = getParentURLFromChild(m.rule.url || m.rule.link || '', 'price'); return p === g.parentCanonUrl; } catch { return false; }
+    });
+    if (!leader) leader = pickLeader(arr);
+    const children = arr.filter(m => m !== leader);
     families.push({ parent: leader.rule, parentFilters: leader.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
-    ll('[fanout.auto]', 'sig=', sig, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
+    ll('[fanout.auto.url]', 'key=', key, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
   }
   return families;
 }
