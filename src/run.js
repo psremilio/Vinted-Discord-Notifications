@@ -10,7 +10,7 @@ import { EdfScheduler } from "./schedule/edf.js";
 import { tierOf } from "./schedule/tiers.js";
 import { buildParentGroups, buildExplicitFamily, buildAutoPriceFamilies, canonicalSignature } from "./rules/parenting.js";
 import { loadFamiliesFromConfig } from "./rules/families.js";
-import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey, debugMatchFailReason, canonicalizeUrl } from "./rules/urlNormalizer.js";
+import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey, debugMatchFailReason, canonicalizeUrl, buildFamilyKeyFromURL, canonicalizeUrlExcept } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
 import { hadSoftFailRecently } from "./state.js";
 import { learnFromRules } from "./rules/catalogLearn.js";
@@ -48,14 +48,14 @@ function dumpRulesConfig(searches) {
         let host='?', path='?';
         try { const u = new URL(url); host=u.host; path=u.pathname; } catch {}
         const f = parseRuleFilters(url);
-        const fkey = buildFamilyKey(url);
+        const fkey = buildFamilyKeyFromURL(url, 'auto');
         const pkey = buildParentKey(url);
-        const pkeyNoPrice = buildParentKey(url, { stripPrice: true });
+        const pkeyNoPrice = canonicalizeUrlExcept(url, ['price_from','price_to','size_ids[]','status_ids[]','size_ids','status_ids']);
         const canUrl = canonicalizeUrl(url);
         console.log('[rule]', 'name=', r.channelName, 'id=', r.channelId, 'host=', host, 'path=', path);
         console.log('[rule.url]', url);
         console.log('[rule.filters]', 'text=', f.text||'', 'currency=', f.currency||'', 'price_from=', f.priceFrom||'', 'price_to=', f.priceTo||'', 'catalogs=', (f.catalogs||[]).join(',')||'');
-        console.log('[rule.keys]', 'familyKey=', fkey, 'parentKey=', pkey, 'parentKey(no_price)=', pkeyNoPrice);
+        console.log('[rule.keys]', 'familyKey(strict)=', fkey, 'parentKey=', pkey, 'parentKey(no_price_no_size_no_status)=', pkeyNoPrice);
         if (String(process.env.LOG_FAMILY_MISMATCH || '1') === '1' && fkey !== pkeyNoPrice) {
           console.warn('[family.mismatch]', 'name=', r.channelName, 'reason=fkey!=parentKey(no_price)');
         }
@@ -397,7 +397,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                 // mark seen for child rule after post
                 gated.forEach(article => {
                   try {
-                    const fk = (()=>{ try { return buildFamilyKey(String(childRule.url || '')); } catch { return null; } })();
+                    const fk = (()=>{ try { return buildFamilyKeyFromURL(String(childRule.url || ''), 'auto'); } catch { return null; } })();
                     const key = dedupeKeyForChannel(childRule, article.id, fk);
                     processedStore.set(key, Date.now(), { ttl: ttlMs });
                   } catch {}
@@ -432,7 +432,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                 if (fresh.length) await postArticles(fresh, dest, channel.channelName);
                 articles.forEach(article => {
                   try {
-                    const fk = (()=>{ try { return buildFamilyKey(String(channel.url || '')); } catch { return null; } })();
+                    const fk = (()=>{ try { return buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch { return null; } })();
                     const key = dedupeKeyForChannel(channel, article.id, fk);
                     processedStore.set(key, Date.now(), { ttl: ttlMs });
                   } catch {}
@@ -469,10 +469,10 @@ export const runSearch = async (client, channel, opts = {}) => {
                       if (dest) await postArticles(childArts, dest, childRule.channelName);
                       childArts.forEach(article => {
                         try {
-                          const fk = (()=>{ try { return buildFamilyKey(String(childRule.url || '')); } catch { return null; } })();
-                          const key = dedupeKeyForChannel(childRule, article.id, fk);
-                          processedStore.set(key, Date.now(), { ttl: ttlMs });
-                        } catch {}
+                    const fk = (()=>{ try { return buildFamilyKeyFromURL(String(childRule.url || ''), 'auto'); } catch { return null; } })();
+                    const key = dedupeKeyForChannel(childRule, article.id, fk);
+                    processedStore.set(key, Date.now(), { ttl: ttlMs });
+                  } catch {}
                       });
                       try { metrics.child_fetch_saved_total?.inc({ child: String(childRule.channelName) }, childArts.length); } catch {}
                     }
@@ -547,7 +547,7 @@ function buildFamilies(mySearches) {
       const famCount = families?.length || 0;
       console.log('[fanout.family] families_loaded=%d', famCount);
       for (const fam of families || []) {
-        const fk = buildFamilyKey(fam.parent.url);
+        const fk = buildFamilyKeyFromURL(fam.parent.url, 'auto');
         const pk = buildParentKey(fam.parent.url);
         const childNames = (fam.children||[]).map(c => c.rule?.channelName || c.channelName || '');
         ll('[fanout.family.detail]', 'familyKey=', fk, 'parentKey=', pk, 'parent=', fam.parent.channelName, 'parent_url=', canonicalizeUrl(fam.parent.url), 'children=', childNames.join(','));

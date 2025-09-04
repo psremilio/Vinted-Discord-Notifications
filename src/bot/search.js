@@ -1,7 +1,7 @@
 import { fetchRule, hedgedGet } from "../net/http.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKeyForChannel } from "../utils/dedupe.js";
-import { buildFamilyKey, canonicalizeUrl } from "../rules/urlNormalizer.js";
+import { buildFamilyKeyFromURL, canonicalizeUrl } from "../rules/urlNormalizer.js";
 import { stats } from "../utils/stats.js";
 import { state, markFetchAttempt, markFetchSuccess, markFetchError, recordSoftFail } from "../state.js";
 import { metrics } from "../infra/metrics.js";
@@ -258,7 +258,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
 const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
   const cutoff = Date.now() - recentMs;
-  let familyKey = null; try { familyKey = buildFamilyKey(String(channel.url || '')); } catch {}
+  let familyKey = null; try { familyKey = buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch {}
   const filteredArticles = items.filter(({ photo, id, title }) =>
     photo &&
     (DISABLE_RECENT || (photo.high_resolution?.timestamp || 0) * 1000 > cutoff) &&
