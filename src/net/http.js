@@ -127,6 +127,8 @@ async function bootstrapSession(client, base = BASE) {
   } catch (e) {
     console.warn('[proxy] bootstrap failed:', e.code || e.message);
     // Non-blocking single retry after a short delay
+    const retryDelay = Math.max(200, Number(process.env.PROXY_BOOTSTRAP_RETRY_DELAY_MS || 500));
+    try { console.log(`[proxy] scheduling non-blocking bootstrap retry in ${retryDelay}ms for ${client.proxyLabel}`); } catch {}
     setTimeout(async () => {
       try {
         const res2 = await axios.get(base, {
@@ -148,7 +150,7 @@ async function bootstrapSession(client, base = BASE) {
         client.warmedAt = Date.now();
         if (PROXY_DEBUG) console.log(`[proxy] session bootstrapped (retry) for ${client.proxyLabel}`);
       } catch {}
-    }, Math.max(200, Number(process.env.PROXY_BOOTSTRAP_RETRY_DELAY_MS || 500)));
+    }, retryDelay);
   }
 }
 
