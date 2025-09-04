@@ -39,11 +39,13 @@ function interactionFor(sub, opts = {}) {
   return itx;
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 test('create → ack → persist', async () => {
   store = [{ channelId: '1', channelName: 'alpha', url: 'https://www.vinted.de/catalog?search_text=a', titleBlacklist: [] }];
   const itx = interactionFor('create', { name: 'alpha', keywords: 'red,blue' });
   await execute(itx);
+  await sleep(10);
   assert.equal(itx.deferReply.mock.calls.length >= 1, true);
   assert.deepEqual(store[0].titleBlacklist, ['blue','red']);
 });
-

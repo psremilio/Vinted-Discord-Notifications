@@ -37,33 +37,39 @@ function interactionFor(sub, opts = {}) {
   };
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 test('create/replace/delete filter is idempotent', async () => {
   store = [{ channelId: '1', channelName: 'rule', url: 'https://www.vinted.de/catalog?search_text=a', titleBlacklist: [] }];
 
   // create append
   let itx = interactionFor('create', { name: 'rule', keywords: 'foo, bar', mode: 'append' });
   await execute(itx);
+  await sleep(10);
   assert.deepEqual(store[0].titleBlacklist, ['bar', 'foo']);
 
   // create append duplicates ignored
   itx = interactionFor('create', { name: 'rule', keywords: 'bar', mode: 'append' });
   await execute(itx);
+  await sleep(10);
   assert.deepEqual(store[0].titleBlacklist, ['bar', 'foo']);
 
   // replace
   itx = interactionFor('create', { name: 'rule', keywords: 'baz', mode: 'replace' });
   await execute(itx);
+  await sleep(10);
   assert.deepEqual(store[0].titleBlacklist, ['baz']);
 
   // delete specific
   itx = interactionFor('delete', { name: 'rule', keywords: 'baz' });
   await execute(itx);
+  await sleep(10);
   assert.deepEqual(store[0].titleBlacklist, []);
 
   // delete all (no keywords)
   store[0].titleBlacklist = ['x'];
   itx = interactionFor('delete', { name: 'rule' });
   await execute(itx);
+  await sleep(10);
   assert.deepEqual(store[0].titleBlacklist, []);
 });
-
