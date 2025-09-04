@@ -157,7 +157,8 @@ export const runSearch = async (client, channel, opts = {}) => {
             if (FANOUT_DEBUG) {
               try {
                 const childN = Array.isArray(channel.children) ? channel.children.length : 0;
-                ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'children=', childN, 'parent_url=', canonicalizeUrl(channel.url));
+                const fkey = (()=>{ try { return buildFamilyKeyFromURL(channel.url, 'auto'); } catch { return '?'; } })();
+                ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'children=', childN, 'parent_url=', canonicalizeUrl(channel.url), 'family_key=', fkey);
               } catch {}
             }
             // Fanout mode: if children defined on the rule, evaluate and post into their channels
@@ -187,6 +188,15 @@ export const runSearch = async (client, channel, opts = {}) => {
     const baseFilters = child.filters || parseRuleFilters(childRule.url);
     // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
     const filters = { ...baseFilters };
+    // Family key guard: ensure child and parent share the same strict key (brand+catalog)
+    try {
+      const pk = buildFamilyKeyFromURL(channel.url, 'auto');
+      const ck = buildFamilyKeyFromURL(childRule.url, 'auto');
+      if (pk && ck && pk !== ck) {
+        console.warn('[family.url_mismatch]', 'parent_key=', pk, 'child_key=', ck, 'child_rule=', childRule.channelName);
+        continue;
+      }
+    } catch {}
     // Inherit missing filters from parent (brand/catalog/size/status/currency)
     try {
       if ((!Array.isArray(filters.brandIds) || filters.brandIds.length === 0) && Array.isArray(parentFilters?.brandIds)) filters.brandIds = parentFilters.brandIds;

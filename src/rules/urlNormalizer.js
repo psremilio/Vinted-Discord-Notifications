@@ -184,6 +184,32 @@ export function canonicalizeSearchURL(rawUrl) {
   }
 }
 
+// Family-canonical: only fields that define the base family (host, path, brand_ids, catalog_ids, currency)
+export function canonicalizeForFamily(rawUrl) {
+  try {
+    const canon = canonicalizeSearchURL(rawUrl);
+    const host = String(canon.host || '').toLowerCase();
+    const path = String(canon.path || '');
+    const brandIds = Array.isArray(canon.brandIds) ? canon.brandIds.slice().sort() : [];
+    // Treat 2050 as wildcard -> empty
+    const catalogs = Array.isArray(canon.catalogs) ? canon.catalogs.filter(x => String(x) !== '2050').slice().sort() : [];
+    const currency = String(canon.currency || 'EUR').toUpperCase();
+    return { host, path, brandIds, catalogs, currency };
+  } catch {
+    return { host: '', path: '', brandIds: [], catalogs: [], currency: 'EUR' };
+  }
+}
+
+function stringifyFamilyCanon(fc) {
+  try {
+    const parts = [];
+    if (Array.isArray(fc.brandIds) && fc.brandIds.length) parts.push(`brand_ids[]=${fc.brandIds.join(',')}`);
+    if (Array.isArray(fc.catalogs) && fc.catalogs.length) parts.push(`catalog_ids[]=${fc.catalogs.join(',')}`); else parts.push('no_catalog=1');
+    if (fc.currency) parts.push(`currency=${String(fc.currency).toUpperCase()}`);
+    return `${fc.host}${fc.path}?${parts.join('&')}`;
+  } catch { return ''; }
+}
+
 export function familyDimensionFromCanon(canon) {
   if (Number.isFinite(canon?.priceFrom) || Number.isFinite(canon?.priceTo)) return 'price';
   if (Array.isArray(canon?.sizeIds) && canon.sizeIds.length > 0) return 'size';
@@ -217,12 +243,8 @@ export function removeDimensionFromCanon(canon, dim) {
 }
 
 export function buildFamilyKeyFromURL(rawUrl, dim = 'auto') {
-  const canon = canonicalizeSearchURL(rawUrl);
-  const mode = dim === 'auto' ? familyDimensionFromCanon(canon) : dim;
-  if (mode === 'none') return null;
-  const base = removeDimensionFromCanon(canon, mode);
-  // Key is deterministic string of fixed fields
-  return stringifyCanon({ ...base, priceFrom: undefined, priceTo: undefined });
+  const fc = canonicalizeForFamily(rawUrl);
+  return stringifyFamilyCanon(fc);
 }
 
 export function getParentURLFromChild(rawUrl, dim = 'auto') {

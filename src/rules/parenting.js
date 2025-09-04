@@ -1,4 +1,4 @@
-import { buildParentKey, buildFamilyKey, parseRuleFilters, canonicalizeSearchURL, familyDimensionFromCanon, buildFamilyKeyFromURL, getParentURLFromChild } from './urlNormalizer.js';
+import { buildParentKey, buildFamilyKey, parseRuleFilters, canonicalizeSearchURL, familyDimensionFromCanon, buildFamilyKeyFromURL, getParentURLFromChild, canonicalizeForFamily } from './urlNormalizer.js';
 const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
 const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
 
@@ -46,7 +46,8 @@ export function buildParentGroups(rules) {
       const autoFamily = (strat !== 'exact_url') && (String(process.env.FANOUT_AUTO_GROUP || '1') === '1');
       const raw = r.url || r.channelUrl || r.ruleUrl || r.channel?.url || r.link;
       const parentKey = buildParentKey(raw);
-      const key = autoFamily ? buildFamilyKey(raw) : parentKey;
+      // Strict family key: host+path+(brand_ids,catalog,currency), ignoring price/size/status/etc.
+      const key = autoFamily ? buildFamilyKeyFromURL(raw, 'auto') : parentKey;
       if (!groupsByKey.has(key)) groupsByKey.set(key, []);
       const filters = parseRuleFilters(r.url || r.channelUrl || r.ruleUrl || r.link);
       // Apply family gating: only group non-price dimensions (size/status) here.
@@ -147,7 +148,7 @@ function onlyDiffersByDimension(a, b, dim) {
 }
 
 export function buildAutoPriceFamilies(rules) {
-  // Strict URL-based grouping: group by (familyKey from URL ignoring price)
+  // Strict URL-based grouping: group by brand+catalog(+currency) ignoring price/size/status
   const groups = new Map(); // key -> { parentCanonUrl, members: [{rule, filters, canon}] }
   for (const r of (rules || [])) {
     const canon = canonicalizeSearchURL(r.url || r.link || '');
@@ -164,10 +165,30 @@ export function buildAutoPriceFamilies(rules) {
     const arr = g.members || [];
     if (arr.length < 2) continue; // need at least 2 price variants
     // Pick parent: rule whose canonicalized URL equals parentCanonUrl (if any)
+    const isClean = (f) => !(Number.isFinite(f.priceFrom) || Number.isFinite(f.priceTo)) &&
+      !(Array.isArray(f.sizeIds) && f.sizeIds.length) &&
+      !(Array.isArray(f.statusIds) && f.statusIds.length) &&
+      !(Array.isArray(f.colorIds) && f.colorIds.length) &&
+      !(Array.isArray(f.materialIds) && f.materialIds.length);
+    const countFilters = (f) => (Number.isFinite(f.priceFrom)?1:0) + (Number.isFinite(f.priceTo)?1:0) +
+      ((Array.isArray(f.sizeIds)&&f.sizeIds.length)?1:0) + ((Array.isArray(f.statusIds)&&f.statusIds.length)?1:0) +
+      ((Array.isArray(f.colorIds)&&f.colorIds.length)?1:0) + ((Array.isArray(f.materialIds)&&f.materialIds.length)?1:0);
     let leader = arr.find(m => {
-      try { const p = getParentURLFromChild(m.rule.url || m.rule.link || '', 'price'); return p === g.parentCanonUrl; } catch { return false; }
+      try { const p = getParentURLFromChild(m.rule.url || m.rule.link || '', 'price'); return p === g.parentCanonUrl && isClean(m.filters); } catch { return false; }
     });
-    if (!leader) leader = pickLeader(arr);
+    if (!leader) leader = arr.find(m => isClean(m.filters));
+    if (!leader) {
+      // Fallback: fewest filters but not pure price-only
+      const cand = arr.slice().sort((a,b)=> countFilters(a.filters)-countFilters(b.filters))[0];
+      const purePrice = (f) => (Number.isFinite(f.priceFrom) || Number.isFinite(f.priceTo)) &&
+        !(Array.isArray(f.sizeIds)&&f.sizeIds.length) && !(Array.isArray(f.statusIds)&&f.statusIds.length) &&
+        !(Array.isArray(f.colorIds)&&f.colorIds.length) && !(Array.isArray(f.materialIds)&&f.materialIds.length);
+      if (cand && !purePrice(cand.filters)) leader = cand;
+    }
+    if (!leader) {
+      // No acceptable parent → skip this family (avoid price child as parent)
+      continue;
+    }
     const children = arr.filter(m => m !== leader);
     families.push({ parent: leader.rule, parentFilters: leader.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
     ll('[fanout.auto.url]', 'key=', key, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
