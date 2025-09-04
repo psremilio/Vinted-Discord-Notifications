@@ -57,7 +57,9 @@ export function isAuthorized(interaction) {
   if (!interaction?.inGuild?.() && !interaction?.guildId) return false;
   const cfg = load();
   const allow = new Set((cfg.allow || []).map(String));
-  if (allow.size === 0) return false; // default locked down to admins only
+  // Policy: when allowlist is empty, allow by default (can be locked via env)
+  const OPEN_DEFAULT = String(process.env.COMMANDS_ALLOW_ALL_WHEN_EMPTY || '1') === '1';
+  if (allow.size === 0) return OPEN_DEFAULT;
   const roles = interaction?.member?.roles?.cache;
   if (!roles || roles.size === 0) return false;
   for (const roleId of allow) if (roles.has(roleId)) return true;

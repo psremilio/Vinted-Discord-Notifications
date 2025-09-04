@@ -69,7 +69,8 @@ export const handleCommands = async (interaction, mySearches) => {
         const name = interaction.commandName;
 
         // Authorization: Admins always allowed. Others must be in allowlist.
-        if (name !== 'bot_roles') {
+        // 'filter' is intentionally open to simplify usage across members.
+        if (name !== 'bot_roles' && name !== 'filter') {
             if (!isAuthorized(interaction)) {
             try { await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', flags: 1 << 6 }); } catch {}
             return;
