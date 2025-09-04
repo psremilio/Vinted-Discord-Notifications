@@ -192,12 +192,15 @@ export const runSearch = async (client, channel, opts = {}) => {
         for (const v of (Array.isArray(sub)?sub:[])) if (!S.has(String(v))) return false;
         return true;
       };
-      if (!arrEq(parentFilters?.brandIds, baseFilters?.brandIds)) {
+      const pBrands = Array.isArray(parentFilters?.brandIds) ? parentFilters.brandIds : [];
+      if (pBrands.length > 0 && !arrEq(pBrands, baseFilters?.brandIds)) {
         try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'brand_ids' }); } catch {}
         console.warn('[fanout.skip]', 'reason=brand_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
         continue;
       }
-      if (!arrEq(parentFilters?.catalogs, baseFilters?.catalogs)) {
+      const pCats = Array.isArray(parentFilters?.catalogs) ? parentFilters.catalogs : [];
+      const parentHasWildcard2050 = pCats.map(String).includes('2050');
+      if (pCats.length > 0 && !parentHasWildcard2050 && !arrEq(pCats, baseFilters?.catalogs)) {
         try { metrics.fanout_skipped_by_mismatch_total?.inc({ field: 'catalog' }); } catch {}
         console.warn('[fanout.skip]', 'reason=catalog_mismatch', 'parent=', channel.channelName, 'child=', childRule.channelName);
         continue;

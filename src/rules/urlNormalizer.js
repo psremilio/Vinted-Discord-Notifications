@@ -152,24 +152,49 @@ export function parseRuleFilters(rawUrl) {
   const u = new URL(String(rawUrl || ''));
   const p = new URLSearchParams(u.search);
   const arr = (k) => p.getAll(k).map(x => String(x || '')).filter(Boolean);
-  // accept multiple param spellings
-  let catalogs = arr('catalog[]');
-  if (!catalogs.length) catalogs = arr('catalog_ids[]');
-  if (!catalogs.length) catalogs = (p.get('catalog_ids') || '').split(',').map(s=>s.trim()).filter(Boolean);
-  if (!catalogs.length) catalogs = (p.get('catalog') || '').split(',').map(s=>s.trim()).filter(Boolean);
+  const csv = (k) => String(p.get(k) || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const normalize = (xs) => Array.from(new Set((xs || []).map(String))).sort();
   const one = (k) => (p.get(k) || '').trim();
-  return {
-    text: one('search_text'),
-    catalogs,
-    sizeIds: arr('size_ids[]'),
-    brandIds: arr('brand_ids[]'),
-    statusIds: arr('status_ids[]'),
-    colorIds: arr('color_ids[]'),
-    materialIds: arr('material_ids[]'),
-    currency: one('currency') || undefined,
-    priceFrom: one('price_from') ? Number(one('price_from')) : undefined,
-    priceTo: one('price_to') ? Number(one('price_to')) : undefined,
+  const toNum = (s) => {
+    const clean = String(s || '').replace(/[^\d.,-]/g, '').replace(',', '.');
+    const n = parseFloat(clean);
+    return Number.isFinite(n) ? n : undefined;
   };
+  // accept multiple param spellings (array and CSV)
+  let catalogs = normalize([
+    ...arr('catalog[]'),
+    ...arr('catalog_ids[]'),
+    ...csv('catalog_ids'),
+    ...csv('catalog'),
+  ]);
+  const brandIds = normalize([
+    ...arr('brand_ids[]'),
+    ...csv('brand_ids'),
+  ]);
+  const sizeIds = normalize([
+    ...arr('size_ids[]'),
+    ...csv('size_ids'),
+  ]);
+  const statusIds = normalize([
+    ...arr('status_ids[]'),
+    ...csv('status_ids'),
+  ]);
+  const colorIds = normalize([
+    ...arr('color_ids[]'),
+    ...csv('color_ids'),
+  ]);
+  const materialIds = normalize([
+    ...arr('material_ids[]'),
+    ...csv('material_ids'),
+  ]);
+  const text = one('search_text') || one('text');
+  const currency = (one('currency') || '').toUpperCase() || undefined;
+  const priceFrom = toNum(one('price_from'));
+  const priceTo = toNum(one('price_to'));
+  return { text, catalogs, sizeIds, brandIds, statusIds, colorIds, materialIds, currency, priceFrom, priceTo };
 }
 
 // Lightweight match function to check if an item satisfies child filters.
