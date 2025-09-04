@@ -187,14 +187,39 @@ export function canonicalizeSearchURL(rawUrl) {
 // Family-canonical: only fields that define the base family (host, path, brand_ids, catalog_ids, currency)
 export function canonicalizeForFamily(rawUrl) {
   try {
-    const canon = canonicalizeSearchURL(rawUrl);
-    const host = String(canon.host || '').toLowerCase();
-    const path = String(canon.path || '');
-    const brandIds = Array.isArray(canon.brandIds) ? canon.brandIds.slice().sort() : [];
-    // Treat 2050 as wildcard -> empty
-    const catalogs = Array.isArray(canon.catalogs) ? canon.catalogs.filter(x => String(x) !== '2050').slice().sort() : [];
-    const currency = String(canon.currency || 'EUR').toUpperCase();
-    return { host, path, brandIds, catalogs, currency };
+    // Stabilize encodings for bracket parameters and decode
+    const normalized = String(rawUrl || '').replace(/%5B|%5D/gi, (m) => m.toLowerCase());
+    const u = new URL(normalized);
+    // 1) Host/Path normalization
+    const host = String(u.hostname || '')
+      .replace(/^www\./i, '')
+      .toLowerCase();
+    const path = String(u.pathname || '')
+      .replace(/\/+/, '/')
+      .replace(/\/+$/, '')
+      .toLowerCase();
+    // 2) Collect only brand/catalog/currency with alias mapping
+    const brands = [];
+    const catalogs = [];
+    let currency = null;
+    const pushNum = (arr, v) => {
+      const n = Number(String(v).trim());
+      if (!Number.isNaN(n)) arr.push(n);
+    };
+    // Walk all params (URLSearchParams decodes percent-encoding)
+    for (const [kRaw, v] of u.searchParams.entries()) {
+      const k = String(kRaw || '').toLowerCase();
+      if (k === 'brand_ids[]' || k === 'brand_ids' || k === 'brand_id' || k === 'brand') pushNum(brands, v);
+      if (k === 'catalog_ids[]' || k === 'catalog_ids' || k === 'catalog_id' || k === 'catalog') pushNum(catalogs, v);
+      if (k === 'currency') currency = String(v || '').toUpperCase();
+    }
+    // 3) Normalize values: treat 2050 as no-catalog (wildcard), sort+dedupe
+    const uniqSort = (arr) => Array.from(new Set(arr)).sort((a, b) => a - b);
+    const brandIds = uniqSort(brands);
+    let cats = uniqSort(catalogs);
+    if (cats.length === 1 && String(cats[0]) === '2050') cats = [];
+    const family = { host, path, brandIds, catalogs: cats, currency: currency || 'EUR' };
+    return family;
   } catch {
     return { host: '', path: '', brandIds: [], catalogs: [], currency: 'EUR' };
   }

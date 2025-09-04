@@ -193,7 +193,22 @@ export const runSearch = async (client, channel, opts = {}) => {
       const pk = buildFamilyKeyFromURL(channel.url, 'auto');
       const ck = buildFamilyKeyFromURL(childRule.url, 'auto');
       if (pk && ck && pk !== ck) {
-        console.warn('[family.url_mismatch]', 'parent_key=', pk, 'child_key=', ck, 'child_rule=', childRule.channelName);
+        try {
+          const fam = await import('./rules/urlNormalizer.js');
+          const pa = fam.canonicalizeForFamily(channel.url);
+          const ch = fam.canonicalizeForFamily(childRule.url);
+          const diff = [];
+          if (String(pa.host) !== String(ch.host)) diff.push(`host:${pa.host}!=${ch.host}`);
+          if (String(pa.path) !== String(ch.path)) diff.push(`path:${pa.path}!=${ch.path}`);
+          const bA = (pa.brandIds||[]).join(','); const bB = (ch.brandIds||[]).join(',');
+          if (bA !== bB) diff.push(`b:${bA}!=${bB}`);
+          const cA = (pa.catalogs||[]).join(','); const cB = (ch.catalogs||[]).join(',');
+          if (cA !== cB) diff.push(`c:${cA}!=${cB}`);
+          if (String(pa.currency) !== String(ch.currency)) diff.push(`cur:${pa.currency}!=${ch.currency}`);
+          console.warn('[family.url_mismatch]', 'parent_key=', pk, 'child_key=', ck, 'child_rule=', childRule.channelName, 'diff=', diff.join('|'));
+        } catch {
+          console.warn('[family.url_mismatch]', 'parent_key=', pk, 'child_key=', ck, 'child_rule=', childRule.channelName);
+        }
         continue;
       }
     } catch {}
@@ -255,7 +270,8 @@ export const runSearch = async (client, channel, opts = {}) => {
         }
       }
     } catch {}
-                ll('[fanout.eval.child]', 'child=', childRule.channelName, 'child_url=', canonicalizeUrl(childRule.url));
+                const cfk = (()=>{ try { return buildFamilyKeyFromURL(childRule.url, 'auto'); } catch { return '?'; } })();
+                ll('[fanout.eval.child]', 'child=', childRule.channelName, 'child_url=', canonicalizeUrl(childRule.url), 'family_key=', cfk);
                 const matched = [];
                 for (const it of articles) {
                   if (itemMatchesFilters(it, filters)) matched.push(it);
