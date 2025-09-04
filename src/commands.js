@@ -21,10 +21,8 @@ const loadCommands = async () => {
 export const registerCommands = async (client) => {
     await loadCommands();
     const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
-    // Prefer explicit guild IDs; default to requested guild for instant visibility
-    let guildIds = (process.env.COMMAND_GUILD_IDS || process.env.COMMAND_GUILD_ID || '').split(',').map(s => s.trim()).filter(Boolean);
-    if (!guildIds.length && process.env.COMMANDS_FORCE_GUILD_ID) guildIds = [String(process.env.COMMANDS_FORCE_GUILD_ID)];
-    if (!guildIds.length) guildIds = ['1387184320883458129'];
+    // Register commands strictly for this guild for instant visibility
+    const guildIds = ['1387184320883458129'];
     let registered = 0;
     try {
         if (guildIds.length > 0) {
