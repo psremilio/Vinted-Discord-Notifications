@@ -129,7 +129,8 @@ async function startMonitorsOnce(where = 'unknown'){
   try { startHeartbeat(); } catch {}
 }
 
-const IS_COMMANDS_LEADER = (String(process.env.COMMANDS_ROLE || '').toLowerCase() === 'leader') && (String(process.env.COMMANDS_DISABLE || '0') !== '1');
+// Enable slash commands by default; can be disabled via COMMANDS_DISABLE=1
+const COMMANDS_ENABLED = String(process.env.COMMANDS_DISABLE || '0') !== '1';
 
 client.on('ready',async()=>{
   clientReady = true;
@@ -137,20 +138,20 @@ client.on('ready',async()=>{
   try { state.watchers = Array.isArray(mySearches) ? mySearches.length : 0; } catch {}
   setTimeout(() => { sendStartupPing().catch(()=>{}); }, 1000);
   // Commands registration (Singleton)
-  if (IS_COMMANDS_LEADER) {
-    try { const res = await registerCommands(client); console.log('[commands.ready]', 'leader=1', 'guilds=', (res?.guilds?.length||'global'), 'registered=', res?.registered || 0); } catch (e) { console.warn('[commands.init] failed:', e?.message || e); }
+  if (COMMANDS_ENABLED) {
+    try { const res = await registerCommands(client); console.log('[commands.ready]', 'guilds=', (res?.guilds?.length||'global'), 'registered=', res?.registered || 0); } catch (e) { console.warn('[commands.init] failed:', e?.message || e); }
   } else {
-    console.log('[commands.disabled]', 'role=', process.env.COMMANDS_ROLE || '-', 'disable=', process.env.COMMANDS_DISABLE || '0');
+    console.log('[commands.disabled]', 'disable=', process.env.COMMANDS_DISABLE || '0');
   }
   startMonitorsOnce('ready');
 });
-if (IS_COMMANDS_LEADER) {
-  client.on('interactionCreate',interaction=>{
-    if (interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand()) {
-      handleCommands(interaction,mySearches);
-    }
-  });
-}
+// Always handle interactions when commands are enabled
+client.on('interactionCreate',interaction=>{
+  if (!COMMANDS_ENABLED) return;
+  if (interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand()) {
+    handleCommands(interaction,mySearches);
+  }
+});
 
 (async function boot(){
   // Kick off proxy setup in parallel to avoid long pre-login stalls
