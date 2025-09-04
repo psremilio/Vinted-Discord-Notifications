@@ -21,8 +21,13 @@ const loadCommands = async () => {
 export const registerCommands = async (client) => {
     await loadCommands();
     const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
-    // Register commands strictly for this guild for instant visibility
-    const guildIds = ['1387184320883458129'];
+    // Register commands for all connected guilds (or env override) for instant visibility
+    const envGuilds = String(process.env.COMMAND_GUILD_IDS || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    const discovered = Array.from(new Set((client?.guilds?.cache ? client.guilds.cache.map(g => g.id) : [])));
+    const guildIds = envGuilds.length ? envGuilds : discovered;
     let registered = 0;
     try {
         if (guildIds.length > 0) {
@@ -36,16 +41,6 @@ export const registerCommands = async (client) => {
                 console.log(`[cmd.register] guild=${gid} count=${commands.length}`);
             }
             console.log('[cmd.sync] guild scope ok');
-            try {
-                console.log('[cmd.sync] clearing global commands (guild IDs present)…');
-                await rest.put(
-                    Routes.applicationCommands(client.user.id),
-                    { body: [] }
-                );
-                console.log('[cmd.sync] cleared global commands');
-            } catch (e) {
-                console.warn('[cmd.sync] failed to clear global commands:', e.message || e);
-            }
         } else {
             console.log('[cmd.sync] registering global (/) commands (may take up to 1h)…');
             await rest.put(
