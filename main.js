@@ -111,13 +111,7 @@ let monitorsStarted = false;
 const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
 
 // Pre-ack all slash commands as early as possible to avoid 3s timeouts
-client.on('interactionCreate', async (interaction) => {
-  if (String(process.env.COMMANDS_DISABLE || '0') === '1') return;
-  try {
-    const isCmd = interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand?.();
-    if (!isCmd) return;
-    if (!interaction.deferred && !interaction.replied) {
-      try { await interaction.reply({ content: '…', ephemeral: true }); }
+client\.on\('interactionCreate',\ async\ \(interaction\)\ =>\ \{\\\\n\ \ if\ \(String\(process\.env\.COMMANDS_DISABLE\ \|\|\ '0'\)\ ===\ '1'\)\ return;\\\\n\ \ try\ \{\\\\n\ \ \ \ const\ isCmd\ =\ interaction\.isChatInputCommand\ \?\ interaction\.isChatInputCommand\(\)\ :\ interaction\.isCommand\?\.\(\);\\\\n\ \ \ \ if\ \(!isCmd\)\ return;\\\\n\ \ \ \ try\ \{\ EdfGate\.pause\(Number\(process\.env\.COMMANDS_PAUSE_MS\ \|\|\ 750\)\);\ }\ catch\ \{}\\\\n\ \ \ \ if\ \(!interaction\.deferred\ &&\ !interaction\.replied\)\ \{\\\\n\ \ \ \ \ \ try\ \{\ await\ interaction\.deferReply\(\{\ flags:\ 1\ <<\ 6\ }\);\ }\ catch\ \{}\\\\n\ \ \ \ }\\\\n\ \ }\ catch\ \{}\\\\n}\); }
       catch {}
     }
   } catch {}
@@ -289,6 +283,7 @@ function shutdown(signal){
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
 
 
 
