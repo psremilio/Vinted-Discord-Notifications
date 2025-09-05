@@ -70,12 +70,12 @@ async function saveSearches(arr) {
 }
 
 function normalizeName(n) {
-  return String(n || '')
-    .toLowerCase()
-    .replace(/[\s]+/g, '')
-    .replace(/[_.]+/g, '-')
-    .replace(/â‚¬/g, '€')
-    .replace(/€/g, 'euro');
+  let s = String(n || '').toLowerCase();
+  s = s.replace(/â‚¬/g, '€');
+  s = s.replace(/€/g, 'euro');
+  // collapse to only [a-z0-9] so spaces/dashes/underscores don't matter
+  s = s.replace(/[^a-z0-9]+/g, '');
+  return s;
 }
 
 function ensureSearchExists(searches, name) {
