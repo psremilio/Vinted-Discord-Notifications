@@ -1,4 +1,5 @@
 import { buildParentKey, buildFamilyKey, parseRuleFilters, canonicalizeSearchURL, familyDimensionFromCanon, buildFamilyKeyFromURL, getParentURLFromChild, canonicalizeForFamily } from './urlNormalizer.js';
+import { loadPriceFamilyPolicy } from './policy.js';
 const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
 const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
 
@@ -154,6 +155,7 @@ export function buildAutoPriceFamilies(rules) {
   // Strict URL-based grouping: group by brand+catalog(+currency) ignoring price/size/status
   // Include non-price "anchor" rules as parent candidates so that "all" can be chosen as parent.
   const groups = new Map(); // key -> { parentCanonUrl, members: [{rule, filters, canon}], anchors: [{rule, filters}] }
+  const policy = loadPriceFamilyPolicy();
   for (const r of (rules || [])) {
     const url = r.url || r.link || '';
     const canon = canonicalizeSearchURL(url);
@@ -198,8 +200,39 @@ export function buildAutoPriceFamilies(rules) {
       // No acceptable parent → skip this family (avoid price child as parent)
       continue;
     }
+    // Policy gating: only allow whitelisted brand ids; require single-brand families when configured
+    try {
+      const pf = leader.filters || parseRuleFilters(leader.rule?.url || '');
+      const brands = Array.isArray(pf.brandIds) ? pf.brandIds.map(String) : [];
+      const single = brands.length === 1;
+      if (policy.requireSingleBrand && !single) { ll('[fanout.auto.url.skip]', 'reason=multi_brand', 'key=', key); continue; }
+      if (policy.allowedBrandIds.size > 0) {
+        const ok = brands.some(b => policy.allowedBrandIds.has(String(b)));
+        if (!ok) { ll('[fanout.auto.url.skip]', 'reason=brand_not_allowed', 'key=', key, 'brands=', brands.join(',')); continue; }
+      } else if (policy.defaultDenyWhenNoBrands) {
+        // Fallback: allow by channel name whitelist when brand ids are unknown
+        const nm = String(leader.rule?.channelName || '');
+        if (!policy.nameWhitelistRegex.test(nm)) { ll('[fanout.auto.url.skip]', 'reason=name_not_whitelisted', 'key=', key, 'name=', nm); continue; }
+      }
+    } catch {}
     // Children are strictly the price members
-    const children = arr.filter(m => (m.rule !== leader.rule));
+    let children = arr.filter(m => (m.rule !== leader.rule));
+    // Optional: enforce allowed price buckets per brand
+    try {
+      const pf = leader.filters || parseRuleFilters(leader.rule?.url || '');
+      const brands = Array.isArray(pf.brandIds) ? pf.brandIds.map(String) : [];
+      const brandKey = brands.length ? brands[0] : null;
+      const buckets = brandKey ? (policy.bucketsByBrand.get(String(brandKey)) || policy.defaultBuckets) : policy.defaultBuckets;
+      if (buckets && buckets.size) {
+        children = children.filter(c => {
+          const f = c.filters || parseRuleFilters(c.rule?.url || '');
+          // Strict: search text must match parent exactly or no family
+          if (String(f.text || '') !== String(pf.text || '')) return false;
+          const to = typeof f.priceTo === 'number' ? f.priceTo : NaN;
+          return Number.isFinite(to) && buckets.has(Number(to));
+        });
+      }
+    } catch {}
     families.push({ parent: leader.rule, parentFilters: leader.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
     ll('[fanout.auto.url]', 'key=', key, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
   }

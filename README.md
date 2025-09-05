@@ -134,3 +134,18 @@ Diagnostics:
   - [fanout.pick] chosen parent and children in each family
   - [fanout.family/detail/standalone] family overview and non-family rules
   - [fanout.eval/child] per-fetch match counts per child
+
+Robust Slash Commands:
+- The bot now pre-acknowledges all slash commands with `deferReply({ ephemeral: true })` to meet Discord’s 3s requirement. If deferral fails, it falls back to a minimal ephemeral reply and then edits.
+- You can disable commands via `COMMANDS_DISABLE=1`.
+
+Family Policy (Price Buckets):
+- Auto price-based families can be constrained via policy so only sensible brand families form. Configure one of:
+  - `config/family_policy.json`
+  - or env vars:
+    - `FAMILY_ALLOWED_BRAND_IDS=53,5,67`
+    - `FAMILY_PRICE_BUCKETS_DEFAULT=10,15,20,30`
+    - `FAMILY_PRICE_BUCKETS_BY_BRAND=53:10|15|20|30;5:10|20|30;67:10|20|30`
+    - `FAMILY_REQUIRE_SINGLE_BRAND=1`
+    - `FAMILY_DEFAULT_DENY=1` combined with `FAMILY_NAME_WHITELIST_REGEX=^(nike|adidas|lacoste)\b` to only allow these families by name if brand ids are unknown.
+- Families only form when parent and child share host, path, exact brand_ids, identical catalog set, same currency, and identical search text. Only price may differ for price families; size/status families are disabled by default (strategy `auto_price`).

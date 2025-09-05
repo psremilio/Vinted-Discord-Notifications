@@ -119,7 +119,11 @@ client.on('interactionCreate', async (interaction) => {
     // Briefly pause scheduler to guarantee a clean window for ack/edit
     try { EdfGate.pause(Number(process.env.COMMANDS_PAUSE_MS || 750)); } catch {}
     if (!interaction.deferred && !interaction.replied) {
-      try { await interaction.deferReply({ flags: 1 << 6 }); } catch {}
+      // Preferred: ephemeral defer within 3s; fallback to quick ephemeral reply
+      try { await interaction.deferReply({ ephemeral: true }); }
+      catch (e1) {
+        try { await interaction.reply({ content: '…', ephemeral: true }); } catch {}
+      }
     }
   } catch {}
 });
