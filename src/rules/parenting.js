@@ -205,7 +205,8 @@ export function buildAutoPriceFamilies(rules) {
       const pf = leader.filters || parseRuleFilters(leader.rule?.url || '');
       const brands = Array.isArray(pf.brandIds) ? pf.brandIds.map(String) : [];
       const single = brands.length === 1;
-      if (policy.requireSingleBrand && !single) { ll('[fanout.auto.url.skip]', 'reason=multi_brand', 'key=', key); continue; }
+      // Enforce single brand only when brand ids are present; otherwise allow text-only groupings
+      if (policy.requireSingleBrand && brands.length > 0 && !single) { ll('[fanout.auto.url.skip]', 'reason=multi_brand', 'key=', key); continue; }
       if (policy.allowedBrandIds.size > 0) {
         const ok = brands.some(b => policy.allowedBrandIds.has(String(b)));
         if (!ok) { ll('[fanout.auto.url.skip]', 'reason=brand_not_allowed', 'key=', key, 'brands=', brands.join(',')); continue; }

@@ -58,7 +58,7 @@ export function loadPriceFamilyPolicy() {
     }
   } catch {}
 
-  const requireSingleBrand = (cfg.requireSingleBrand ?? (String(process.env.FAMILY_REQUIRE_SINGLE_BRAND || '1') === '1')) ? true : false;
+  const requireSingleBrand = (cfg.requireSingleBrand ?? (String(process.env.FAMILY_REQUIRE_SINGLE_BRAND || '0') === '1')) ? true : false;
   const nameWhitelistRegex = new RegExp(String(process.env.FAMILY_NAME_WHITELIST_REGEX || '^(nike|adidas|lacoste)\\b'), 'i');
   const defaultDenyWhenNoBrands = String(process.env.FAMILY_DEFAULT_DENY || '0') === '1';
 
