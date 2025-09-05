@@ -16,7 +16,8 @@ import { initProxyPool, startHeartbeat, stopHeartbeat, healthyCount, coolingCoun
 import { state } from './src/state.js';
 import { get as httpGet } from './src/net/http.js';
 import { metrics, serializeMetrics } from './src/infra/metrics.js';
-import { activeSearches } from './src/run.js';\nimport { EdfGate } from './src/schedule/edf.js';
+import { activeSearches } from './src/run.js';
+import { EdfGate } from './src/schedule/edf.js';
 import { startLoopLagMonitor, getLagP95 } from './src/infra/loopLag.js';
 import { rateCtl } from './src/schedule/rateControl.js';
 
@@ -288,6 +289,7 @@ function shutdown(signal){
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
 
 
 
