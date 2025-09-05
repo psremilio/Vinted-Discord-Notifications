@@ -149,3 +149,4 @@ Family Policy (Price Buckets):
     - `FAMILY_REQUIRE_SINGLE_BRAND=1`
     - `FAMILY_DEFAULT_DENY=1` combined with `FAMILY_NAME_WHITELIST_REGEX=^(nike|adidas|lacoste)\b` to only allow these families by name if brand ids are unknown.
 - Families only form when parent and child share host, path, exact brand_ids, identical catalog set, same currency, and identical search text. Only price may differ for price families; size/status families are disabled by default (strategy `auto_price`).
+ - Price families are keyed by base URL AND `search_text` to keep separate brandless text queries (e.g., “nike” vs. “adidas”).
