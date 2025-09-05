@@ -114,7 +114,6 @@ async function startMonitorsOnce(where = 'unknown'){
   if (!clientReady) return;
   monitorsStarted = true;
   console.log(`[start] launching monitors/search… (from=${where}, healthy=${healthyCount?.() ?? 'n/a'})`);
-  try { registerCommands(client); } catch {}
   try {
     const WAIT = String(process.env.WAIT_HEALTHY_START || '1') === '1';
     if (WAIT) {

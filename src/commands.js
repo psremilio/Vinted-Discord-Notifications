@@ -11,10 +11,15 @@ const commandFiles = fs.readdirSync(path.join(__dirname, 'commands')).filter(fil
 
 //load command modules
 const loadCommands = async () => {
+    // Reset and de-dupe by command name to avoid duplicates across re-registrations
+    commands.length = 0;
+    const byName = new Map();
     for (const file of commandFiles) {
         const module = await import(`./commands/${file}`);
-        commands.push(module.data.toJSON());
+        const json = module.data.toJSON();
+        byName.set(String(json.name), json);
     }
+    for (const v of byName.values()) commands.push(v);
 }
 
 //register commands with Discord to (refreshes them if necessary)
