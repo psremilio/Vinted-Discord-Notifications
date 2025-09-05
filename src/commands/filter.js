@@ -159,6 +159,7 @@ export const execute = async (interaction) => {
       next = Array.from(new Set([...next, ...kw])).slice(0, 200).sort((a,b)=>a.localeCompare(b));
       searches[idx].titleBlacklist = next;
       await saveSearches(searches);
+      try { const mod = await import('../run.js'); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
       await edit(interaction, `✅ Filter ${mode === 'replace' ? 'gesetzt' : 'ergänzt'}: ${name} → ${next.join(', ') || '—'}`);
       try { console.log('[cmd.filter] create ok name=%s delta=%d size=%d', name, kw.length, next.length); } catch {}
     }, async (e) => { console.error('[cmd.filter] create error', e); await edit(interaction, 'Fehler beim Anlegen des Filters.'); });
@@ -176,6 +177,7 @@ export const execute = async (interaction) => {
       if (!kw.length) {
         searches[idx].titleBlacklist = [];
         await saveSearches(searches);
+        try { const mod = await import('../run.js'); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
         await edit(interaction, `🗑️ Filter gelöscht: ${name}`);
       } else {
         const prev = Array.isArray(searches[idx].titleBlacklist) ? searches[idx].titleBlacklist : [];
@@ -183,6 +185,7 @@ export const execute = async (interaction) => {
         const next = prev.filter(x => !remove.has(x));
         searches[idx].titleBlacklist = next;
         await saveSearches(searches);
+        try { const mod = await import('../run.js'); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
         await edit(interaction, `🧹 Entfernt: ${kw.join(', ')} | übrig: ${next.join(', ') || '—'}`);
       }
       try { console.log('[cmd.filter] delete ok name=%s removed=%d', name, kw.length); } catch {}
