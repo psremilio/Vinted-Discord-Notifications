@@ -91,6 +91,10 @@ export class EdfScheduler {
   }
 
   async _tick() {
+    // Global pause gate to let slash commands ack/respond without contention
+    try {
+      if (Date.now() < EdfGate.pauseUntil) return;
+    } catch {}
     const budget = Math.max(1, Number(process.env.SEARCH_CONCURRENCY || 4));
     let dispatched = 0;
     while (dispatched < budget) {
@@ -121,3 +125,13 @@ export class EdfScheduler {
     }
   }
 }
+
+// Simple exported gate to pause scheduler briefly (e.g., during slash-interaction ack)
+export const EdfGate = {
+  pauseUntil: 0,
+  pause(ms = 750) {
+    const now = Date.now();
+    const until = now + Math.max(0, Number(ms || 0));
+    if (until > this.pauseUntil) this.pauseUntil = until;
+  }
+};
