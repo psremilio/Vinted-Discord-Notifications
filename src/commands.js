@@ -72,6 +72,10 @@ export const handleCommands = async (interaction, mySearches) => {
             catch (e1) { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} }
         }
         const name = interaction.commandName;
+        if (!interaction.deferred && !interaction.replied) {
+            console.warn('[cmd.ack_failed]', 'name=', interaction.commandName);
+            return;
+        }
 
         // Authorization: Admins always allowed. Others must be in allowlist.
         // 'filter' is intentionally open to simplify usage across members.
@@ -113,11 +117,10 @@ export const handleCommands = async (interaction, mySearches) => {
             try { await interaction.followUp({ content: msg, flags: 1 << 6 }); } catch {}
             return;
         }
-        // Execute command; ensure any long work runs after ack
-        setTimeout(() => {
-          try { console.log('[cmd.enqueued]', 'name=', name); } catch {}
-          module.execute(interaction, mySearches).catch(err => console.error('\nError handling command (async):', err));
-        }, 0);
+        // Execute command after ack to avoid race conditions
+        try { console.log('[cmd.enqueued]', 'name=', name); } catch {}
+        try { await module.execute(interaction, mySearches); }
+        catch (err) { console.error('\nError handling command:', err); }
     } catch (error) {
         console.error('\nError handling command:', error);
         try {
