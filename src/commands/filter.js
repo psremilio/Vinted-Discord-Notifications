@@ -117,6 +117,41 @@ export const execute = async (interaction) => {
   const queued = pendingMutations();
   if (queued > 0) { try { await edit(interaction, `Warteschlange... (${queued} vor dir)`); } catch {} }
 
+  // Fast path: read-only operations should not use the mutation queue
+  if (sub === 'list') {
+    try {
+      const searches = loadSearches();
+      const lines = [];
+      const all = searches || [];
+      for (const s of all) {
+        const list = Array.isArray(s.titleBlacklist) ? s.titleBlacklist : [];
+        lines.push(`â€¢ ${s.channelName}: ${list.join(', ') || 'â€”'}`);
+      }
+      await edit(interaction, lines.length ? lines.join('\n') : 'Keine Suchen konfiguriert.');
+      try { console.log('[cmd.filter] list ok count=%d', lines.length); } catch {}
+    } catch (e) {
+      console.error('[cmd.filter] list error', e);
+      await edit(interaction, 'Fehler beim Anzeigen der Filter.');
+    }
+    return;
+  }
+
+  if (sub === 'show') {
+    const name = interaction.options.getString('name');
+    try {
+      const searches = loadSearches();
+      const idx = ensureSearchExists(searches, name);
+      if (idx === -1) { await edit(interaction, `Suche \"${name}\" nicht gefunden.`); return; }
+      const list = Array.isArray(searches[idx].titleBlacklist) ? searches[idx].titleBlacklist : [];
+      await edit(interaction, list.length ? `${searches[idx].channelName}: ${list.join(', ')}` : `${searches[idx].channelName}: â€”`);
+      try { console.log('[cmd.filter] show ok name=%s size=%d', name, list.length); } catch {}
+    } catch (e) {
+      console.error('[cmd.filter] show error', e);
+      await edit(interaction, 'Fehler beim Anzeigen des Filters.');
+    }
+    return;
+  }
+
   if (sub === 'list') {
     enqueueMutation('filter_list', async () => {
       const searches = loadSearches();
