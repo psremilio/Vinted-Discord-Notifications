@@ -109,6 +109,19 @@ let clientReady = false;
 let monitorsStarted = false;
 const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
 
+// Pre-ack all slash commands as early as possible to avoid 3s timeouts
+client.on('interactionCreate', async (interaction) => {
+  if (String(process.env.COMMANDS_DISABLE || '0') === '1') return;
+  try {
+    const isCmd = interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand?.();
+    if (!isCmd) return;
+    if (!interaction.deferred && !interaction.replied) {
+      try { await interaction.reply({ content: '…', ephemeral: true }); }
+      catch {}
+    }
+  } catch {}
+});
+
 async function startMonitorsOnce(where = 'unknown'){
   if (monitorsStarted) return;
   if (!clientReady) return;
