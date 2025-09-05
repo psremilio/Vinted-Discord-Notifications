@@ -192,3 +192,4 @@ export const execute = async (interaction) => {
 
   await edit(interaction, 'Unbekannter Subcommand.');
 };
+
