@@ -46,6 +46,14 @@ export const registerCommands = async (client) => {
                 console.log(`[cmd.register] guild=${gid} count=${commands.length}`);
             }
             console.log('[cmd.sync] guild scope ok');
+            // Avoid duplicates by clearing global commands when using guild scope
+            try {
+                console.log('[cmd.sync] clearing global commands (guild scope present)…');
+                await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
+                console.log('[cmd.sync] cleared global commands');
+            } catch (e) {
+                console.warn('[cmd.sync] failed to clear global commands:', e?.message || e);
+            }
         } else {
             console.log('[cmd.sync] registering global (/) commands (may take up to 1h)…');
             await rest.put(
