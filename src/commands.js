@@ -80,15 +80,16 @@ export const handleCommands = async (interaction, mySearches) => {
             catch (e1) { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} }
         }
         const name = interaction.commandName;
+        const skipAuth = (name === 'filter');
 
         // Authorization: Admins always allowed. Others must be in allowlist.
         // 'filter' is intentionally open to simplify usage across members.
-        if (name !== 'bot_roles' && name !== 'filter') {
+        if (!skipAuth && name !== 'bot_roles') {
             if (!isAuthorized(interaction)) {
             try { await interaction.followUp({ content: 'Du darfst diesen Befehl nicht verwenden (Rollen-Whitelist).', flags: 1 << 6 }); } catch {}
             return;
         }
-        } else {
+        } else if (name === 'bot_roles') {
             // bot_roles itself is admin-only
             if (!isAdmin(interaction)) {
             try { await interaction.followUp({ content: 'Nur Admins dürfen diesen Befehl verwenden.', flags: 1 << 6 }); } catch {}
