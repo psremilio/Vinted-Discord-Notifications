@@ -69,11 +69,34 @@ async function saveSearches(arr) {
   try { await fs.promises.writeFile(filePath, JSON.stringify(arr, null, 2)); } catch (e) { console.warn('[cmd.filter] save failed:', e?.message || e); }
 }
 
+function normalizeName(n) {
+  return String(n || '')
+    .toLowerCase()
+    .replace(/[\s]+/g, '')
+    .replace(/[_.]+/g, '-')
+    .replace(/â‚¬/g, '€')
+    .replace(/€/g, 'euro');
+}
+
 function ensureSearchExists(searches, name) {
-  let idx = searches.findIndex(s => String(s.channelName) === String(name));
+  const want = normalizeName(name);
+  let idx = searches.findIndex(s => normalizeName(s.channelName) === want);
   if (idx !== -1) return idx;
   try {
-    const rule = activeSearches?.get?.(String(name));
+    // Try exact by key
+    let rule = activeSearches?.get?.(String(name));
+    if (!rule) {
+      // Try normalized match over active keys
+      for (const k of (activeSearches?.keys?.() || [])) {
+        if (normalizeName(k) === want) { rule = activeSearches.get(k); break; }
+      }
+    }
+    if (!rule) {
+      // Try contains match as last resort
+      for (const k of (activeSearches?.keys?.() || [])) {
+        if (normalizeName(k).includes(want) || want.includes(normalizeName(k))) { rule = activeSearches.get(k); break; }
+      }
+    }
     if (rule) {
       const toInsert = {
         channelName: String(rule.channelName || name),
@@ -98,12 +121,12 @@ export const execute = async (interaction) => {
     enqueueMutation('filter_list', async () => {
       const searches = loadSearches();
       const lines = [];
-      for (const s of (searches || [])) {
+      const all = searches || [];
+      for (const s of all) {
         const list = Array.isArray(s.titleBlacklist) ? s.titleBlacklist : [];
-        if (!list.length) continue;
-        lines.push(`• ${s.channelName}: ${list.join(', ')}`);
+        lines.push(`• ${s.channelName}: ${list.join(', ') || '—'}`);
       }
-      await edit(interaction, lines.length ? lines.join('\n') : 'Keine Filter gefunden.');
+      await edit(interaction, lines.length ? lines.join('\n') : 'Keine Suchen konfiguriert.');
       try { console.log('[cmd.filter] list ok count=%d', lines.length); } catch {}
     }, async (e) => { console.error('[cmd.filter] list error', e); await edit(interaction, 'Fehler beim Anzeigen der Filter.'); });
     return;
@@ -169,4 +192,3 @@ export const execute = async (interaction) => {
 
   await edit(interaction, 'Unbekannter Subcommand.');
 };
-
