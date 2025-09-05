@@ -142,7 +142,10 @@ client.on('ready',async()=>{
   } else {
     console.log('[commands.disabled]', 'disable=', process.env.COMMANDS_DISABLE || '0');
   }
-  startMonitorsOnce('ready');
+  try {
+    const GRACE = Math.max(0, Number(process.env.COMMANDS_BOOT_GRACE_MS || 3000));
+    setTimeout(() => startMonitorsOnce('ready_grace'), GRACE);
+  } catch { startMonitorsOnce('ready'); }
 });
 // Always handle interactions when commands are enabled
 client.on('interactionCreate',interaction=>{
