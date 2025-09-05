@@ -80,10 +80,6 @@ export const handleCommands = async (interaction, mySearches) => {
             catch (e1) { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} }
         }
         const name = interaction.commandName;
-        if (!interaction.deferred && !interaction.replied) {
-            console.warn('[cmd.ack_failed]', 'name=', interaction.commandName);
-            return;
-        }
 
         // Authorization: Admins always allowed. Others must be in allowlist.
         // 'filter' is intentionally open to simplify usage across members.
