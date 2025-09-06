@@ -154,12 +154,17 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
 setInterval(() => {
   let slots = currentQps;
   const now = Date.now();
-  const keys = Array.from(routeBuckets.keys());
+  let keys = Array.from(routeBuckets.keys());
   // dynamic per-bucket sends (burst window)
   const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
   const cooldown = metrics.discord_cooldown_active.get?.() || 0;
   const perBucketSends = (!cooldown && totalQ > 800) ? 6 : (!cooldown && totalQ > 400) ? 5 : (!cooldown && totalQ > 200) ? 4 : (!cooldown && totalQ > 60) ? 3 : (!cooldown && totalQ > 20) ? 2 : 1;
   // do up to perBucketSends passes for fairness
+  // prioritize buckets with freshest head createdAt when backlog is high
+  if (totalQ > 100) {
+    const headCreated = (k)=>{ const b=routeBuckets.get(k); const q=b?.q||[]; if(!q.length) return 0; let m=0; for (const it of q) { const v=Number(it?.createdAt||0); if (v>m) m=v; } return m; };
+    keys = keys.slice().sort((a,b)=> headCreated(b)-headCreated(a));
+  }
   for (let pass = 0; pass < perBucketSends && slots > 0; pass++) {
     for (const key of keys) {
       if (slots <= 0) break;
@@ -171,7 +176,12 @@ setInterval(() => {
       if ((b.inflight || 0) >= CHAN_CONC) continue;
       // priority: createdAt desc, then firstMatchedAt desc, then discoveredAt desc
       b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (Number(bj.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) || (bj.discoveredAt - a.discoveredAt));
-      const job = b.q.shift();
+      // stale deferral when backlog is high
+      const STALE_MIN_MS = Math.max(1, Number(process.env.STALE_DEFER_MIN_MS || 10 * 60 * 1000));
+      const STALE_Q_THR = Math.max(100, Number(process.env.STALE_DEFER_QUEUE_THRESHOLD || 400));
+      let job = b.q[0];
+      if (job && totalQ >= STALE_Q_THR && (now - Number(job.createdAt || now)) >= STALE_MIN_MS) { b.q.push(b.q.shift()); job = b.q[0]; }
+      job = b.q.shift();
       if (job?.itemId) try { b.ids.delete(job.itemId); } catch {}
       slots--;
       b.inflight = (b.inflight || 0) + 1;
@@ -360,7 +370,7 @@ setInterval(() => {
 // Fast queue-based QPS boost (10s cadence)
 setInterval(() => {
   try {
-    const keys = Array.from(routeBuckets.keys());
+    let keys = Array.from(routeBuckets.keys());
     const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
     const cooldown = metrics.discord_cooldown_active.get?.() || 0;
     if (!cooldown && totalQ > 500) {
@@ -376,7 +386,7 @@ setInterval(() => {
 // Concurrency auto-tune based on backlog (every 10s)
 setInterval(() => {
   try {
-    const keys = Array.from(routeBuckets.keys());
+    let keys = Array.from(routeBuckets.keys());
     const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
     const cooldown = metrics.discord_cooldown_active.get?.() || 0;
     if (!cooldown && totalQ > 800 && currentConc < CONC_MAX) {
