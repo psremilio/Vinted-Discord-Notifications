@@ -447,7 +447,12 @@ export const runSearch = async (client, channel, opts = {}) => {
                   if (ENFORCE_MAX && hardMax > 0 && listedAge > hardMax) continue;
                   fresh.push(it);
                 }
-                if (fresh.length) await postArticles(fresh, dest, channel.channelName);
+                // Parent post mode: all|unmatched|fresh (default all)
+                const PMODE = String(process.env.FANOUT_PARENT_POST_MODE || 'all').toLowerCase();
+                let parentItems = fresh;
+                if (PMODE === 'all') parentItems = articles; // ignore freshness gating except ENFORCE_MAX above
+                // unmatched mode would require tracking child-covered ids; fallback to fresh for now
+                if (Array.isArray(parentItems) && parentItems.length) await postArticles(parentItems, dest, channel.channelName);
                 articles.forEach(article => {
                   try {
                     const fk = (()=>{ try { return buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch { return null; } })();
