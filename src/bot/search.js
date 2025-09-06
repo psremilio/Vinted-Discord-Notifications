@@ -49,14 +49,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
     const ids = handleParams(url);
     const apiUrl = new URL(`https://${url.host}/api/v2/catalog/items`);
     
-    const baseParams = {
-        per_page: '96',
-        search_text: ids.text,
-        catalog_ids: ids.catalog,
-        price_from: ids.min,
-        price_to: ids.max,
-        currency: ids.currency,
-        order: 'newest_first',
+    
+        time: 'now',
         size_ids: ids.size,
         brand_ids: ids.brand,
         status_ids: ids.status,
