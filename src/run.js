@@ -458,7 +458,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                 if (PMODE === 'all') parentItems = articles; // ignore freshness gating except ENFORCE_MAX above
                 // unmatched mode would require tracking child-covered ids; fallback to fresh for now
                 if (Array.isArray(parentItems) && parentItems.length) await postArticles(parentItems, dest, channel.channelName);
-                articles.forEach(article => {
+                (parentItems || []).forEach(article => {
                   try {
                     const fk = (()=>{ try { return buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch { return null; } })();
                     const key = dedupeKeyForChannel(channel, article.id, fk);

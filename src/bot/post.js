@@ -29,7 +29,8 @@ const normKey = s => (s ?? "").toLowerCase().trim().replace(/\s+/g,"").replace(/
 const singularFallback = k => k.replace(/s$/, "");
 
 export async function postArticles(newArticles, channelToSend, ruleName) {
-    const list = Array.isArray(newArticles) ? newArticles.slice(0, 10) : [];
+    const LIMIT = Math.max(0, Number(process.env.POST_BATCH_LIMIT || 0));
+    const list = Array.isArray(newArticles) ? (LIMIT > 0 ? newArticles.slice(0, LIMIT) : newArticles) : [];
     const targets = Array.isArray(channelToSend) ? channelToSend : [channelToSend];
     if (!list.length) return;
 
