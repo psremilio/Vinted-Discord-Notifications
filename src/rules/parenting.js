@@ -1,7 +1,9 @@
 import { buildParentKey, buildFamilyKey, parseRuleFilters, canonicalizeSearchURL, familyDimensionFromCanon, buildFamilyKeyFromURL, getParentURLFromChild, canonicalizeForFamily } from './urlNormalizer.js';
 import { loadPriceFamilyPolicy } from './policy.js';
 const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
+const FANOUT_LOG = String(process.env.FANOUT_LOG || '1') === '1';
 const ll = (...a) => { if (FANOUT_DEBUG) console.log(...a); };
+const li = (...a) => { if (FANOUT_LOG) console.log(...a); };
 
 function hasPrice(filters) { return Number.isFinite(filters?.priceFrom) || Number.isFinite(filters?.priceTo); }
 function hasSize(filters) { return Array.isArray(filters?.sizeIds) && filters.sizeIds.length > 0; }
@@ -238,7 +240,7 @@ export function buildAutoPriceFamilies(rules) {
       }
     } catch {}
     families.push({ parent: leader.rule, parentFilters: leader.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
-    ll('[fanout.auto.url]', 'key=', key, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
+    li('[fanout.auto.url]', 'key=', key, 'parent=', leader.rule.channelName, 'children=', children.map(c=>c.rule.channelName).join(','));
   }
   return families;
 }

@@ -16,7 +16,7 @@ import { initProxyPool, startHeartbeat, stopHeartbeat, healthyCount, coolingCoun
 import { state } from './src/state.js';
 import { get as httpGet } from './src/net/http.js';
 import { metrics, serializeMetrics } from './src/infra/metrics.js';
-import { activeSearches } from './src/run.js';
+import { activeSearches, getFamiliesSnapshot } from './src/run.js';
 import { EdfGate } from './src/schedule/edf.js';
 import { startLoopLagMonitor, getLagP95 } from './src/infra/loopLag.js';
 import { rateCtl } from './src/schedule/rateControl.js';
@@ -94,6 +94,18 @@ try {
           } catch {}
           res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
           res.end(serializeMetrics()); return;
+        }
+        if (req.url === '/families') {
+          try {
+            const list = getFamiliesSnapshot();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ count: list.length, families: list }, null, 2));
+            return;
+          } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: e?.message || String(e) }));
+            return;
+          }
         }
       } catch {}
       res.writeHead(204); res.end();
