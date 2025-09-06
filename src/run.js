@@ -461,7 +461,13 @@ export const runSearch = async (client, channel, opts = {}) => {
                   fresh.push(it);
                 }
                 // Parent post mode: all|unmatched|fresh (default all)
-                const PMODE = String(process.env.FANOUT_PARENT_POST_MODE || 'all').toLowerCase();
+                let PMODE = String(process.env.FANOUT_PARENT_POST_MODE || 'all').toLowerCase();
+                try {
+                  const qd = (metrics.discord_queue_depth?.get?.() ?? 0);
+                  const HW = Math.max(200, Number(process.env.QUEUE_HIGH_WATER || 500));
+                  const AUTO_UNMATCHED = String(process.env.FANOUT_PARENT_POST_MODE_AUTO_ON_BACKLOG || '0') === '1';
+                  if (AUTO_UNMATCHED && qd >= HW) PMODE = 'unmatched';
+                } catch {}
                 let parentItems = fresh;
                 if (PMODE === 'all') parentItems = articles; // ignore freshness gating except ENFORCE_MAX above
                 if (PMODE === 'unmatched') {
