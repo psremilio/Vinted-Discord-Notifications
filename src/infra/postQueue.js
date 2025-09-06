@@ -4,6 +4,7 @@ import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksMan
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
+const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX || 12));
 // Optional fast-path: allow near-immediate posting per-channel
 const FAST_POST = String(process.env.FAST_POST || '0') === '1';
 const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 2000));
