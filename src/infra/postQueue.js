@@ -157,7 +157,7 @@ setInterval(() => {
   // dynamic per-bucket sends (burst window)
   const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
   const cooldown = metrics.discord_cooldown_active.get?.() || 0;
-  const perBucketSends = (!cooldown && totalQ > 200) ? 4 : (!cooldown && totalQ > 60) ? 3 : (!cooldown && totalQ > 20) ? 2 : 1;
+  const perBucketSends = (!cooldown && totalQ > 800) ? 6 : (!cooldown && totalQ > 400) ? 5 : (!cooldown && totalQ > 200) ? 4 : (!cooldown && totalQ > 60) ? 3 : (!cooldown && totalQ > 20) ? 2 : 1;
   // do up to perBucketSends passes for fairness
   for (let pass = 0; pass < perBucketSends && slots > 0; pass++) {
     for (const key of keys) {
@@ -166,7 +166,7 @@ setInterval(() => {
       if (!b || b.q.length === 0) continue;
       if (b.cooldownUntil > now) continue;
       // per-bucket dynamic concurrency: 1–4 depending on backlog and cooldown (more aggressive when backlog high)
-      const CHAN_CONC = (!cooldown && b.q.length > 30) ? 4 : (!cooldown && b.q.length > 10) ? 3 : (!cooldown && b.q.length > 3) ? 2 : 1;
+      const CHAN_CONC = (!cooldown && b.q.length > 120) ? 6 : (!cooldown && b.q.length > 60) ? 5 : (!cooldown && b.q.length > 30) ? 4 : (!cooldown && b.q.length > 10) ? 3 : (!cooldown && b.q.length > 3) ? 2 : 1;
       if ((b.inflight || 0) >= CHAN_CONC) continue;
       // priority: createdAt desc, then firstMatchedAt desc, then discoveredAt desc
       b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (Number(bj.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) || (bj.discoveredAt - a.discoveredAt));
