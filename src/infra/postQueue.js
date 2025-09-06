@@ -4,8 +4,12 @@ import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksMan
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
-const REORDER_WINDOW_MS = Math.max(0, Number(process.env.REORDER_WINDOW_MS || 2000));
-const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 120000));
+// Optional fast-path: allow near-immediate posting per-channel
+const FAST_POST = String(process.env.FAST_POST || '0') === '1';
+const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 2000));
+// Default: do NOT drop older items unless explicitly enabled via env
+const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
+const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
 
 export const postLimiter = new Bottleneck({
   maxConcurrent: CONC,
@@ -88,6 +92,12 @@ export async function sendQueued(channel, payload, meta = {}) {
   const firstMatchedAt = meta?.firstMatchedAt ? Number(meta.firstMatchedAt) : undefined;
   // Drop if too old on enqueue to avoid late spam
   if (POST_MAX_AGE_MS > 0 && createdAt && (Date.now() - createdAt) > POST_MAX_AGE_MS) {
+    if (LOG_DROP_OLD) {
+      try {
+        const age = Date.now() - createdAt;
+        console.warn('[post.drop_old]', 'channel=', channel?.id || 'unknown', 'age_ms=', age);
+      } catch {}
+    }
     return;
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
@@ -167,7 +177,7 @@ setInterval(() => {
       postLimiter.schedule(() => doSend(job, b)).catch(() => {}).finally(() => { b.inflight = Math.max(0, (b.inflight||1) - 1); });
     }
   }
-  if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+  if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug' || String(process.env.LOG_QUEUE_TICK||'0')==='1') {
     const ready = keys.filter(k => (routeBuckets.get(k)?.q?.length||0)>0).length;
     console.log(`[post.tick] qps=${currentQps} bucketsReady=${ready} slotsLeft=${slots} totalQ=${totalQ} perBucket=${perBucketSends}`);
   }
@@ -245,6 +255,12 @@ async function doSend(job, bucket) {
     try { recordQueueAge(job?.channel?.id, latency); } catch {}
     try { metrics.post_age_ms_histogram.set({ channel: String(job?.channel?.id || '') }, Math.max(0, now - Number(job.createdAt || now))); } catch {}
     try { metrics.discord_cooldown_active.set(0); } catch {}
+    try {
+      if (String(process.env.DIAG_TIMING || '0') === '1') {
+        const createdAge = Math.max(0, now - Number(job.createdAt || now));
+        console.log('[diag.post]', 'channel=', String(job?.channel?.id || ''), 'item=', String(job?.itemId || ''), 'age_listed_ms=', createdAge, 'queued_ms=', latency);
+      }
+    } catch {}
     return res;
   } catch (e) {
     if (is429(e)) metrics.discord_rate_limit_hits.inc();

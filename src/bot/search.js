@@ -203,6 +203,17 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
               // annotate discovery time for posting/metrics
               const tdisc = Date.now();
               filtered.forEach(it => { try { it.discoveredAt = tdisc; } catch {} });
+              // optional diagnostics: measure age at discovery
+              try {
+                if (String(process.env.DIAG_TIMING || '0') === '1' && filtered.length) {
+                  const sample = filtered.slice(0, Math.min(3, filtered.length));
+                  for (const it of sample) {
+                    const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                    const age = createdMs ? (tdisc - createdMs) : -1;
+                    console.log('[diag.discovery]', 'rule=', channel.channelName, 'item=', it.id, 'age_ms=', age);
+                  }
+                }
+              } catch {}
               // record first-age (listed->discovered) samples
               try {
                 for (const it of filtered) {

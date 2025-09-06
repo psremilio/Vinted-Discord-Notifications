@@ -163,7 +163,7 @@ export const runSearch = async (client, channel, opts = {}) => {
             }
             // Fanout mode: if children defined on the rule, evaluate and post into their channels
             if (Array.isArray(channel.children) && channel.children.length && String(process.env.FANOUT_MODE || '1') === '1') {
-              const MIN_PARENT = Math.max(1, Number(process.env.FAMILY_MIN_PARENT_MATCHES || 3));
+              const MIN_PARENT = Math.max(1, Number(process.env.FAMILY_MIN_PARENT_MATCHES || 1));
               if (articles.length < MIN_PARENT) {
                 ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'parent_url=', canonicalizeUrl(channel.url), 'skip=too_few_parent_matches');
               } else {
@@ -239,7 +239,9 @@ export const runSearch = async (client, channel, opts = {}) => {
         for (const v of (Array.isArray(sub)?sub:[])) if (!S.has(String(v))) return false;
         return true;
       };
-      // Allowed-dimension guard: child may differ from parent in exactly one of: price_to OR size_ids OR status_ids
+      // Allowed-dimension guard (configurable):
+      // Strict mode (default): child may differ from parent in exactly one of: price_to OR size_ids OR status_ids
+      // Relaxed mode: allow multiple diffs but still require brand/catalog/text/color/material consistency
       const priceEq = ((filters?.priceFrom ?? null) === (parentFilters?.priceFrom ?? null)) && ((filters?.priceTo ?? null) === (parentFilters?.priceTo ?? null));
       const priceOnly = ((filters?.priceTo ?? null) !== (parentFilters?.priceTo ?? null)) && ((filters?.priceFrom ?? null) === (parentFilters?.priceFrom ?? null));
       const sizeEq = arrEq(filters?.sizeIds, parentFilters?.sizeIds || []);
@@ -248,9 +250,12 @@ export const runSearch = async (client, channel, opts = {}) => {
       if (!priceEq) diffs.push('price');
       if (!sizeEq) diffs.push('size');
       if (!statusEq) diffs.push('status');
-      if (diffs.length > 1 || (diffs.length === 1 && diffs[0] === 'price' && !priceOnly)) {
-        console.warn('[family.dim_mismatch]', 'parent=', channel.channelName, 'child=', childRule.channelName, 'diff=', diffs.join(','));
-        continue;
+      const STRICT = String(process.env.FANOUT_STRICT_DIFF || '1') === '1';
+      if (STRICT) {
+        if (diffs.length > 1 || (diffs.length === 1 && diffs[0] === 'price' && !priceOnly)) {
+          console.warn('[family.dim_mismatch]', 'parent=', channel.channelName, 'child=', childRule.channelName, 'diff=', diffs.join(','));
+          continue;
+        }
       }
       const pBrands = Array.isArray(parentFilters?.brandIds) ? parentFilters.brandIds : [];
       if (pBrands.length > 0 && !arrEq(pBrands, baseFilters?.brandIds)) {
@@ -596,7 +601,8 @@ function buildFamilies(mySearches) {
           const nm = String(c.rule?.channelName || c.channelName || '');
           childMap.set(nm, { zero: 0, quarantined: false });
         }
-        familyState.set(sig, { warmup: 2, child: childMap });
+        const WARM = Math.max(0, Number(process.env.FANOUT_WARMUP_CYCLES || 0));
+        familyState.set(sig, { warmup: WARM, child: childMap });
       }
     }
   } catch {}

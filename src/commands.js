@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { REST, Routes } from 'discord.js';
+import { EdfGate } from './schedule/edf.js';
 import { isAuthorized, isAdmin } from './utils/authz.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -74,6 +75,8 @@ export const registerCommands = async (client) => {
 export const handleCommands = async (interaction, mySearches) => {
   try { console.log('[cmd.interaction]', 'name=', interaction.commandName, 'user=', interaction.user?.id, 'guild=', interaction.guildId); } catch {}
   try {
+    // brief pause to prioritize command ack/reply over polling
+    try { EdfGate.pause(Number(process.env.CMD_PAUSE_MS || 800)); } catch {}
     // Ack ASAP before any heavy work: prefer ephemeral defer
     if (!interaction.deferred && !interaction.replied) {
       try { await interaction.deferReply({ ephemeral: true }); }
@@ -133,4 +136,3 @@ export const handleCommands = async (interaction, mySearches) => {
     }
   }
 };
-

@@ -95,7 +95,17 @@ export class EdfScheduler {
     try {
       if (Date.now() < EdfGate.pauseUntil) return;
     } catch {}
-    const budget = Math.max(1, Number(process.env.SEARCH_CONCURRENCY || 4));
+    // Determine dispatch budget with optional auto-scaling
+    const cfg = Math.max(1, Number(process.env.SEARCH_SCHED_CONCURRENCY || process.env.SEARCH_CONCURRENCY || 12));
+    const auto = String(process.env.AUTO_SCALE_SCHED || '1') === '1';
+    const maxC = Math.max(cfg, Number(process.env.SEARCH_SCHED_MAX_CONC || cfg));
+    const nowTick = Date.now();
+    const readyCount = Array.from(this.rules.values()).filter(r => !r.running && r.nextAt <= nowTick).length;
+    let budget = cfg;
+    if (auto) {
+      const want = Math.max(cfg, Math.min(maxC, Math.ceil(readyCount / 2)));
+      budget = Math.min(maxC, Math.max(cfg, want));
+    }
     let dispatched = 0;
     while (dispatched < budget) {
       const st = this._pickReady();
@@ -111,11 +121,20 @@ export class EdfScheduler {
         .catch(() => {})
         .finally(() => {
           st.running = false;
-          // schedule to next phase anchor respecting per-rule offset
-          const PHASE_MS = 10_000;
+          // Next schedule time: optionally use per-rule targetMs to avoid 10s bursts
           const t = Date.now();
-          const nextAnchor = Math.floor(t / PHASE_MS) * PHASE_MS + PHASE_MS;
-          if (!st._deleted) st.nextAt = nextAnchor + (st.phaseOffset || 0);
+          const USE_TARGET = String(process.env.EDF_USE_TARGET_MS || '1') === '1';
+          if (!st._deleted) {
+            if (USE_TARGET) {
+              const base = st.targetMs || 10_000;
+              const next = t + jitter(base, 0.15);
+              st.nextAt = next;
+            } else {
+              const PHASE_MS = 10_000;
+              const nextAnchor = Math.floor(t / PHASE_MS) * PHASE_MS + PHASE_MS;
+              st.nextAt = nextAnchor + (st.phaseOffset || 0);
+            }
+          }
           this.inflight = Math.max(0, this.inflight - 1);
         });
     }
