@@ -372,3 +372,19 @@ setInterval(() => {
     }
   } catch {}
 }, 10 * 1000);
+
+// Concurrency auto-tune based on backlog (every 10s)
+setInterval(() => {
+  try {
+    const keys = Array.from(routeBuckets.keys());
+    const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
+    const cooldown = metrics.discord_cooldown_active.get?.() || 0;
+    if (!cooldown && totalQ > 800 && currentConc < CONC_MAX) {
+      currentConc = Math.min(CONC_MAX, currentConc + 1);
+      postLimiter.updateSettings({ maxConcurrent: currentConc });
+    } else if ((cooldown || totalQ < 50) && currentConc > CONC) {
+      currentConc = Math.max(CONC, currentConc - 1);
+      postLimiter.updateSettings({ maxConcurrent: currentConc });
+    }
+  } catch {}
+}, 10 * 1000);
