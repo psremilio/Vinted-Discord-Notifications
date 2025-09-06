@@ -355,3 +355,19 @@ setInterval(() => {
     }
   } catch {}
 }, 60 * 1000);
+
+// Fast queue-based QPS boost (10s cadence)
+setInterval(() => {
+  try {
+    const keys = Array.from(routeBuckets.keys());
+    const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
+    const cooldown = metrics.discord_cooldown_active.get?.() || 0;
+    if (!cooldown && totalQ > 500) {
+      const boost = Math.floor(MAX_QPS * 0.9);
+      if (currentQps < boost) {
+        currentQps = Math.min(MAX_QPS, boost);
+        postLimiter.updateSettings({ reservoir: currentQps, reservoirRefreshAmount: currentQps });
+      }
+    }
+  } catch {}
+}, 10 * 1000);
