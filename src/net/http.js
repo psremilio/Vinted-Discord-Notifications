@@ -31,9 +31,9 @@ function getSoftfailRate60s() {
   return Math.min(1, Math.max(0, softFails.length / t));
 }
 function getHedgeBudget() {
-  const baseN = Math.max(1, Number(process.env.HEDGE_REQUESTS || 2));
-  const maxN = Math.max(baseN, Number(process.env.HEDGE_REQUESTS_MAX || 4));
-  const thr = Math.min(1, Math.max(0, Number(process.env.SOFTFAIL_RATE_BOOST_THR || 0.25)));
+  const baseN = Math.max(1, Number(process.env.HEDGE_REQUESTS || 3));
+  const maxN = Math.max(baseN, Number(process.env.HEDGE_REQUESTS_MAX || 6));
+  const thr = Math.min(1, Math.max(0, Number(process.env.SOFTFAIL_RATE_BOOST_THR || 0.15)));
   const rate = getSoftfailRate60s();
   const bonus = rate > thr ? 1 : 0;
   return Math.min(maxN, baseN + bonus);
