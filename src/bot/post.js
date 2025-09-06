@@ -49,7 +49,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
                 .setURL(`${origin}/items/${item.id}/want_it/new?`)
         );
 
-        const ts = item.photo?.high_resolution?.timestamp; // seconds
+        const ts = (item.created_at_ts != null ? item.created_at_ts : item.photo?.high_resolution?.timestamp); // seconds
         const listing = {
             id: item.id,
             title: (item.__priceDrop ? '[PRICE DROP] ' : '') + (item.title || ''),

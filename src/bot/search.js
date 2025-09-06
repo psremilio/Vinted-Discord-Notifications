@@ -208,7 +208,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 if (String(process.env.DIAG_TIMING || '0') === '1' && filtered.length) {
                   const sample = filtered.slice(0, Math.min(3, filtered.length));
                   for (const it of sample) {
-                    const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                    const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
                     const age = createdMs ? (tdisc - createdMs) : -1;
                     console.log('[diag.discovery]', 'rule=', channel.channelName, 'item=', it.id, 'age_ms=', age);
                   }
@@ -217,7 +217,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
               // record first-age (listed->discovered) samples
               try {
                 for (const it of filtered) {
-                  const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                  const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
                   if (createdMs) recordFirstAge(channel.channelName, Math.max(0, tdisc - createdMs));
                 }
               } catch {}
