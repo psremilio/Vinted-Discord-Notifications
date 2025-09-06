@@ -1,0 +1,28 @@
+*** Begin Patch
+*** Update File: src/schedule/edf.js
+@@
+-  addRule(client, rule) {
++  addRule(client, rule) {
+     this.client = client;
+     const name = rule.channelName;
+     const tier = tierOf(name);
+-    const targetMs = Math.max(1000, Math.floor((TIER_TARGET_SEC[tier] || 12) * 1000));
++    // Prefer per-rule frequency when provided, else fall back to tier target
++    const freqSec = Number(rule?.frequency || 0);
++    const targetMs = Math.max(1000, Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000));
+@@
+   updateRule(rule) {
+     const name = rule.channelName;
+     const st = this.rules.get(name);
+     if (!st) return false;
+-    st.rule = rule; // keep targetMs/nextAt/running
++    st.rule = rule; // keep nextAt/running; refresh targetMs if frequency changed
++    try {
++      const tier = st.tier || tierOf(name);
++      const freqSec = Number(rule?.frequency || 0);
++      st.targetMs = Math.max(1000, Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000));
++    } catch {}
+     this.rules.set(name, st);
+     return true;
+   }
+*** End Patch

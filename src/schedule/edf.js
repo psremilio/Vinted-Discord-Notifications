@@ -21,7 +21,9 @@ export class EdfScheduler {
     this.client = client;
     const name = rule.channelName;
     const tier = tierOf(name);
-    const targetMs = Math.max(1000, Math.floor((TIER_TARGET_SEC[tier] || 12) * 1000));
+    // Prefer per-rule frequency when provided, else fall back to tier target
+    const freqSec = Number(rule?.frequency || 0);
+    const targetMs = Math.max(1000, Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000));
     // Phase anchor: fixed 10s grid with per-rule offset + jitter ±1s
     const PHASE_MS = 10_000;
     const h = [...String(name)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 0);
@@ -48,7 +50,12 @@ export class EdfScheduler {
     const name = rule.channelName;
     const st = this.rules.get(name);
     if (!st) return false;
-    st.rule = rule; // keep targetMs/nextAt/running
+    st.rule = rule; // keep nextAt/running; refresh targetMs if frequency changed
+    try {
+      const tier = st.tier || tierOf(name);
+      const freqSec = Number(rule?.frequency || 0);
+      st.targetMs = Math.max(1000, Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000));
+    } catch {}
     this.rules.set(name, st);
     return true;
   }
