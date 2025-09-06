@@ -160,11 +160,10 @@ export function buildAutoPriceFamilies(rules) {
     const url = r.url || r.link || '';
     const canon = canonicalizeSearchURL(url);
     const dim = familyDimensionFromCanon(canon);
-    // Separate families by search_text ONLY when no brand_ids are specified
+    // Always separate families by search_text when present to ensure same search intent
     const baseKey = buildFamilyKeyFromURL(url, 'price');
-    const hasBrand = Array.isArray(canon?.brandIds) && canon.brandIds.length > 0;
     const txt = String(canon?.text || '').trim().toLowerCase();
-    const key = (!hasBrand && txt) ? `${baseKey}&search_text=${encodeURIComponent(txt)}` : baseKey;
+    const key = txt ? `${baseKey}&search_text=${encodeURIComponent(txt)}` : baseKey;
     if (!key) continue;
     const parentUrlCanon = getParentURLFromChild(url, 'price');
     if (!groups.has(key)) groups.set(key, { parentCanonUrl: parentUrlCanon, members: [], anchors: [] });

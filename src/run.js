@@ -819,6 +819,22 @@ export async function restartAll(client, _ignored) {
   }
 }
 
+// Introspect currently built families for diagnostics and commands
+export function getFamiliesSnapshot() {
+  try {
+    const list = [];
+    for (const [pname, fam] of familiesByParent.entries()) {
+      const parentUrl = String(fam?.parent?.url || fam?.parent?.link || '');
+      let familyKey = null, parentKey = null;
+      try { familyKey = buildFamilyKeyFromURL(parentUrl, 'auto'); } catch {}
+      try { parentKey = buildParentKey(parentUrl); } catch {}
+      const children = (fam?.children || []).map(c => ({ name: String(c?.rule?.channelName || c?.channelName || ''), url: String(c?.rule?.url || c?.url || '') }));
+      list.push({ parent: { name: pname, url: parentUrl }, familyKey, parentKey, children });
+    }
+    return list;
+  } catch { return []; }
+}
+
 function countActiveBackfill() {
   const now = Date.now();
   let n = 0; for (const st of ruleState.values()) if ((st.backfillOnUntil || 0) > now) n++;

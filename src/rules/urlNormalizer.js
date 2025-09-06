@@ -202,6 +202,7 @@ export function canonicalizeForFamily(rawUrl) {
     const brands = [];
     const catalogs = [];
     let currency = null;
+    let text = '';
     const pushNum = (arr, v) => {
       const n = Number(String(v).trim());
       if (!Number.isNaN(n)) arr.push(n);
@@ -213,16 +214,20 @@ export function canonicalizeForFamily(rawUrl) {
       // Accept both catalog_ids[] and catalog[] spellings (and CSV/alias forms)
       if (k === 'catalog_ids[]' || k === 'catalog_ids' || k === 'catalog_id' || k === 'catalog' || k === 'catalog[]') pushNum(catalogs, v);
       if (k === 'currency') currency = String(v || '').toUpperCase();
+      if (k === 'search_text' || k === 'text') {
+        const t = String(v || '').trim().toLowerCase();
+        if (t) text = t;
+      }
     }
     // 3) Normalize values: treat 2050 as no-catalog (wildcard), sort+dedupe
     const uniqSort = (arr) => Array.from(new Set(arr)).sort((a, b) => a - b);
     const brandIds = uniqSort(brands);
     let cats = uniqSort(catalogs);
     if (cats.length === 1 && String(cats[0]) === '2050') cats = [];
-    const family = { host, path, brandIds, catalogs: cats, currency: currency || 'EUR' };
+    const family = { host, path, brandIds, catalogs: cats, currency: currency || 'EUR', text };
     return family;
   } catch {
-    return { host: '', path: '', brandIds: [], catalogs: [], currency: 'EUR' };
+    return { host: '', path: '', brandIds: [], catalogs: [], currency: 'EUR', text: '' };
   }
 }
 
@@ -232,6 +237,7 @@ function stringifyFamilyCanon(fc) {
     if (Array.isArray(fc.brandIds) && fc.brandIds.length) parts.push(`brand_ids[]=${fc.brandIds.join(',')}`);
     if (Array.isArray(fc.catalogs) && fc.catalogs.length) parts.push(`catalog_ids[]=${fc.catalogs.join(',')}`); else parts.push('no_catalog=1');
     if (fc.currency) parts.push(`currency=${String(fc.currency).toUpperCase()}`);
+    if (fc.text) parts.push(`search_text=${encodeURIComponent(String(fc.text).toLowerCase())}`);
     return `${fc.host}${fc.path}?${parts.join('&')}`;
   } catch { return ''; }
 }
