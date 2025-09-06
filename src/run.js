@@ -144,7 +144,12 @@ export const runSearch = async (client, channel, opts = {}) => {
         if (stH?.backfillOnUntil && now < stH.backfillOnUntil) {
             useBackfill = true;
         }
-        const bfPages = useBackfill ? Number(process.env.NO_NEW_BACKFILL_PAGES || Math.max(2, Number(process.env.BACKFILL_PAGES || 1))) : Number(process.env.BACKFILL_PAGES || 1);
+        // Backlog-aware backfill: when posting queue is high, avoid extra backfill to reduce queue growth
+        const qDepth = (metrics.discord_queue_depth?.get?.() ?? 0);
+        const HIGHQ = Math.max(200, Number(process.env.QUEUE_HIGH_WATER || 500));
+        const lowBacklog = qDepth < HIGHQ;
+        const bfDefault = Number(process.env.BACKFILL_PAGES || 1);
+        const bfPages = useBackfill && lowBacklog ? Number(process.env.NO_NEW_BACKFILL_PAGES || Math.max(2, bfDefault)) : 1;
         try { metrics.backfill_pages_active.set(countActiveBackfill()); } catch {}
         const tPoll0 = Date.now();
         const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, { ...opts, backfillPages: bfPages }));
