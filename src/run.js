@@ -163,6 +163,8 @@ export const runSearch = async (client, channel, opts = {}) => {
             }
             // Fanout mode: if children defined on the rule, evaluate and post into their channels
             if (Array.isArray(channel.children) && channel.children.length && String(process.env.FANOUT_MODE || '1') === '1') {
+              // Track child-covered IDs for optional parent post mode 'unmatched'
+              const childCovered = new Set();
               const MIN_PARENT = Math.max(1, Number(process.env.FAMILY_MIN_PARENT_MATCHES || 1));
               if (articles.length < MIN_PARENT) {
                 ll('[fanout.eval]', 'parent=', channel.channelName, 'items=', articles.length, 'parent_url=', canonicalizeUrl(channel.url), 'skip=too_few_parent_matches');
@@ -417,6 +419,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                 if (FANOUT_DEBUG) ll('[fanout.child.result]', 'child=', childRule.channelName, 'post=', gated.length, 'drop_stale=', dropStale, 'drop_gate=', dropGate);
                 if (!gated.length) continue;
                 await postArticles(gated, dest, childRule.channelName);
+                try { for (const it of gated) childCovered.add(String(it.id)); } catch {}
                 // mark seen for child rule after post
                 gated.forEach(article => {
                   try {
@@ -456,7 +459,9 @@ export const runSearch = async (client, channel, opts = {}) => {
                 const PMODE = String(process.env.FANOUT_PARENT_POST_MODE || 'all').toLowerCase();
                 let parentItems = fresh;
                 if (PMODE === 'all') parentItems = articles; // ignore freshness gating except ENFORCE_MAX above
-                // unmatched mode would require tracking child-covered ids; fallback to fresh for now
+                if (PMODE === 'unmatched') {
+                  try { parentItems = (articles || []).filter(it => !childCovered.has(String(it.id))); } catch {}
+                }
                 if (Array.isArray(parentItems) && parentItems.length) await postArticles(parentItems, dest, channel.channelName);
                 (parentItems || []).forEach(article => {
                   try {
