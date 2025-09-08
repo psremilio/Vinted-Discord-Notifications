@@ -10,7 +10,15 @@ import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const filePath = path.resolve(__dirname, '../../config/channels.json');
+function resolveChannelsPath() {
+  try {
+    const pData = path.resolve(__dirname, '../../data/channels.json');
+    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
+    return pData;
+  } catch {}
+  return path.resolve(__dirname, '../../config/channels.json');
+}
+const filePath = resolveChannelsPath();
 
 export const data = new SlashCommandBuilder()
     .setName('new_search')
@@ -78,7 +86,7 @@ export const execute = async (interaction) => {
       return;
     }
     const urlRaw = interaction.options?.getString?.('url');
-    const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
+    const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim().toLowerCase()) : [];
     // Normalize and clamp frequency to avoid too aggressive polling
     const freqRaw = interaction.options.getString('frequency');
     let frequency = Number.parseInt(freqRaw ?? '10', 10);
@@ -163,7 +171,11 @@ export const execute = async (interaction) => {
               op = 'created';
           }
 
-          try { await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2)); } catch (error) { console.error('[cmd] error saving new search:', error?.message || error); }
+          try {
+            await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
+            // mirror to config for compatibility
+            try { await fs.promises.writeFile(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(searches, null, 2)); } catch {}
+          } catch (error) { console.error('[cmd] error saving new search:', error?.message || error); }
 
           // Apply in-memory update to scheduler
           try { await addSearch(interaction.client, next); } catch (e) { console.warn('[cmd] addSearch immediate failed, will rely on rebuild:', e?.message || e); }

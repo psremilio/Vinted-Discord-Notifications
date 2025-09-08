@@ -10,7 +10,15 @@ import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const filePath = path.resolve(__dirname, '../../config/channels.json');
+function resolveChannelsPath() {
+  try {
+    const pData = path.resolve(__dirname, '../../data/channels.json');
+    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
+    return pData;
+  } catch {}
+  return path.resolve(__dirname, '../../config/channels.json');
+}
+const filePath = resolveChannelsPath();
 
 export const data = new SlashCommandBuilder()
     .setName('delete_search')
@@ -105,7 +113,11 @@ export const execute = async (interaction) => {
           const a = list.slice().sort((x,y)=>x-y); const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
           metrics.cmd_exec_ms_p95?.set({ command: nameKey }, p95);
         } catch {}
-          try { await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2)); } catch (e) { console.warn('[cmd] save after delete failed:', e?.message || e); }
+          try {
+            await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
+            // mirror to config for compatibility
+            try { await fs.promises.writeFile(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(searches, null, 2)); } catch {}
+          } catch (e) { console.warn('[cmd] save after delete failed:', e?.message || e); }
           try { tombstoneRule(removedName, removed?.url); } catch {}
           try { const mod = await import('../run.js'); if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client); else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client); } catch (e) { console.warn('[cmd] rebuild after delete failed:', e?.message || e); }
           try { await safeEdit({ content: `✅ Search ${tag} deleted (commit_ms=${commitMs}, rules_before=${beforeRules}, rules_after=${afterRules})` }); } catch {}

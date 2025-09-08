@@ -7,7 +7,17 @@ import { activeSearches } from '../run.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const filePath = path.resolve(__dirname, '../../config/channels.json');
+
+// Resolve channels.json consistently with the scheduler (prefer ./data, fallback to ./config)
+function resolveChannelsPath() {
+  try {
+    const pData = path.resolve(__dirname, '../../data/channels.json');
+    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
+    return pData;
+  } catch {}
+  return path.resolve(__dirname, '../../config/channels.json');
+}
+const filePath = resolveChannelsPath();
 
 export const data = new SlashCommandBuilder()
   .setName('filter')
@@ -38,7 +48,7 @@ export const data = new SlashCommandBuilder()
 function parseKeywords(s) {
   return String(s || '')
     .split(',')
-    .map(x => x.trim())
+    .map(x => x.trim().toLowerCase())
     .filter(Boolean)
     .filter(x => x.length <= 80)
     .slice(0, 100);
@@ -69,7 +79,11 @@ function loadSearches() {
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return []; }
 }
 async function saveSearches(arr) {
-  try { await fs.promises.writeFile(filePath, JSON.stringify(arr, null, 2)); } catch (e) { console.warn('[cmd.filter] save failed:', e?.message || e); }
+  try {
+    await fs.promises.writeFile(filePath, JSON.stringify(arr, null, 2));
+    // Best-effort: mirror to config for compatibility
+    try { await fs.promises.writeFile(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(arr, null, 2)); } catch {}
+  } catch (e) { console.warn('[cmd.filter] save failed:', e?.message || e); }
 }
 
 function normalizeName(n) {

@@ -7,7 +7,16 @@ import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const filePath = path.resolve(__dirname, '../../config/channels.json');
+function resolveChannelsPath() {
+  try {
+    const pData = path.resolve(__dirname, '../../data/channels.json');
+    // ensure /data dir exists when writable
+    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
+    return pData;
+  } catch {}
+  return path.resolve(__dirname, '../../config/channels.json');
+}
+const filePath = resolveChannelsPath();
 
 // Keep this as an alias of new_search but registered under name "search"
 export const data = new SlashCommandBuilder()
@@ -60,7 +69,7 @@ export const execute = async (interaction) => {
   }
 
   const urlRaw = interaction.options.getString('url');
-  const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(s => s.trim()) : [];
+  const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(s => s.trim().toLowerCase()) : [];
   let frequency = Number.parseInt(interaction.options.getString('frequency') ?? '10', 10);
   if (!Number.isFinite(frequency)) frequency = 10;
   frequency = Math.min(Math.max(frequency, 5), 3600);
@@ -128,6 +137,8 @@ export const execute = async (interaction) => {
     }
     try {
       fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
+      // best effort: also mirror to config path for compatibility
+      try { fs.writeFileSync(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(searches, null, 2)); } catch {}
     } catch (e) {
       console.error('\nError saving new search (alias):', e);
       await safeEdit({ content: 'There was an error starting the monitoring.' });
