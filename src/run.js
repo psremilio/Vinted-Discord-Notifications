@@ -322,11 +322,14 @@ export const runSearch = async (client, channel, opts = {}) => {
                 }
                 // Quarantine logic: if leader has items but child keeps matching 0 for several cycles
                 try {
-                  const fam = familiesByParent.get(String(channel.channelName));
-                  const sig = fam?.sig;
-                  const st = sig ? familyState.get(sig) : null;
-                  const cname = String(childRule.channelName);
-                  if (sig && st && st.child?.has?.(cname)) {
+                  if (String(process.env.MONO_QUARANTINE_DISABLE || '0') === '1') {
+                    // Quarantine disabled by config
+                  } else {
+                    const fam = familiesByParent.get(String(channel.channelName));
+                    const sig = fam?.sig;
+                    const st = sig ? familyState.get(sig) : null;
+                    const cname = String(childRule.channelName);
+                    if (sig && st && st.child?.has?.(cname)) {
                     const rec = st.child.get(cname);
                     const leaderHas = Array.isArray(articles) && articles.length > 0;
                     // Softfail-aware zero-match increment: skip when recent soft-fail observed
@@ -348,6 +351,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                     }
                     st.child.set(cname, rec);
                     familyState.set(sig, st);
+                  }
                   }
                 } catch {}
                 // Monotonie-Guard: Wenn Preis ≤ child.price_to und Brand/Catalog zum Parent passen,
@@ -425,6 +429,56 @@ export const runSearch = async (client, channel, opts = {}) => {
                 if (FANOUT_DEBUG) ll('[fanout.child.result]', 'child=', childRule.channelName, 'post=', gated.length, 'drop_stale=', dropStale, 'drop_gate=', dropGate);
                 if (!gated.length) continue;
                 await postArticles(gated, dest, childRule.channelName);
+                // Optional: also mirror child posts to the parent channel so the
+                // aggregator (e.g., nike-all) always receives items even if the
+                // parent fetch is slow or temporarily failing.
+                try {
+                  if (String(process.env.FANOUT_MIRROR_TO_PARENT || '1') === '1') {
+                    const parentDest = await getChannelById(client, channel.channelId);
+                    if (parentDest) {
+                      await postArticles(gated, parentDest, channel.channelName);
+                      // mark as processed for parent rule to avoid later duplicates
+                      try {
+                        for (const it of gated) {
+                          const fkP = (()=>{ try { return buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch { return null; } })();
+                          const keyP = dedupeKeyForChannel(channel, it.id, fkP);
+                          processedStore.set(keyP, Date.now(), { ttl: ttlMs });
+                        }
+                      } catch {}
+                    }
+                  }
+                } catch {}
+                // Optional: mirror to larger price siblings (e.g., 10€ → 15/20/30€)
+                try {
+                  const MIRROR_SIB = String(process.env.FANOUT_MIRROR_TO_SIBLINGS || '1') === '1';
+                  if (MIRROR_SIB && Array.isArray(channel.children) && channel.children.length > 1) {
+                    const childFilters = parseRuleFilters(childRule.url || '');
+                    const childTo = Number.isFinite(childFilters?.priceTo) ? Number(childFilters.priceTo) : null;
+                    const STRICT = String(process.env.FANOUT_SIBLING_STRICT || '0') === '1';
+                    for (const sib of channel.children) {
+                      const sibRule = sib?.rule || sib;
+                      if (!sibRule || sibRule.channelName === childRule.channelName) continue;
+                      const sf = parseRuleFilters(sibRule.url || '');
+                      const sibTo = Number.isFinite(sf?.priceTo) ? Number(sf.priceTo) : null;
+                      if (sibTo === null) continue; // only mirror within price family
+                      if (childTo !== null && sibTo < childTo) continue; // only to larger/equal buckets
+                      const sibDest = await getChannelById(client, sibRule.channelId);
+                      if (!sibDest) continue;
+                      let toPost = gated;
+                      if (STRICT) { try { toPost = gated.filter(it => itemMatchesFilters(it, sf)); } catch {} }
+                      if (!toPost.length) continue;
+                      await postArticles(toPost, sibDest, channel.channelName);
+                      try {
+                        for (const it of toPost) {
+                          const fkS = (()=>{ try { return buildFamilyKeyFromURL(String(sibRule.url || ''), 'auto'); } catch { return null; } })();
+                          const keyS = dedupeKeyForChannel(sibRule, it.id, fkS);
+                          processedStore.set(keyS, Date.now(), { ttl: ttlMs });
+                        }
+                      } catch {}
+                      if (FANOUT_DEBUG) ll('[fanout.siblings]', 'from=', childRule.channelName, 'to=', sibRule.channelName, 'posted=', toPost.length);
+                    }
+                  }
+                } catch {}
                 try { for (const it of gated) childCovered.add(String(it.id)); } catch {}
                 // mark seen for child rule after post
                 gated.forEach(article => {
@@ -438,7 +492,7 @@ export const runSearch = async (client, channel, opts = {}) => {
               }
               }
             }
-            // Also post to parent rule's channel as usual, unless FANOUT suppresses it
+            // Also post to parent rule's channel as usual
             if (String(process.env.FANOUT_SUPPRESS_PARENT_POST || '0') !== '1') {
               const dest = await getChannelById(client, channel.channelId);
               if (!dest) {
@@ -463,11 +517,14 @@ export const runSearch = async (client, channel, opts = {}) => {
                 }
                 // Parent post mode: all|unmatched|fresh (default all)
                 let PMODE = String(process.env.FANOUT_PARENT_POST_MODE || 'all').toLowerCase();
+                // New guard: optionally force posting to parent regardless of child coverage
+                const ALWAYS_PARENT = String(process.env.FANOUT_ALWAYS_PARENT || '1') === '1';
+                if (ALWAYS_PARENT) PMODE = 'all';
                 try {
                   const qd = (metrics.discord_queue_depth?.get?.() ?? 0);
                   const HW = Math.max(200, Number(process.env.QUEUE_HIGH_WATER || 500));
                   const AUTO_UNMATCHED = String(process.env.FANOUT_PARENT_POST_MODE_AUTO_ON_BACKLOG || '0') === '1';
-                  if (AUTO_UNMATCHED && qd >= HW) PMODE = 'unmatched';
+                  if (!ALWAYS_PARENT && AUTO_UNMATCHED && qd >= HW) PMODE = 'unmatched';
                 } catch {}
                 let parentItems = fresh;
                 if (PMODE === 'all') parentItems = articles; // ignore freshness gating except ENFORCE_MAX above
@@ -587,6 +644,13 @@ function buildFamilies(mySearches) {
       }
     }
   } catch {}
+  // Final fallback: if still no families, attempt auto_price grouping to ensure
+  // parent/price-children families are available for fanout/mirroring.
+  try {
+    if (!families || families.length === 0) {
+      families = buildAutoPriceFamilies(mySearches);
+    }
+  } catch {}
   if (FANOUT_DEBUG || String(process.env.RULES_DUMP || '1') === '1') {
     try {
       const famCount = families?.length || 0;
@@ -635,6 +699,15 @@ function computeScheduleList(mySearches) {
     const parent = fam.parent;
     parent.children = fam.children || [];
     parentNames.add(parent.channelName);
+    // Aggressive polling for price-children to hit 10–30s discovery
+    try {
+      const CHILD_SEC = Math.max(1, Number(process.env.PRICE_CHILD_TARGET_SEC || 6));
+      for (const c of (parent.children || [])) {
+        try { if (c?.rule) c.rule.frequency = CHILD_SEC; else if (c && typeof c === 'object') c.frequency = CHILD_SEC; } catch {}
+      }
+      const PARENT_SEC = Math.max(0, Number(process.env.PARENT_TARGET_SEC || 0));
+      if (PARENT_SEC > 0) { try { parent.frequency = PARENT_SEC; } catch {} }
+    } catch {}
   }
   const toSchedule = [];
   if (families?.length) {
@@ -729,11 +802,24 @@ export function rebuildFromList(client, list) {
   try { metrics.scheduler_rules_total.set(activeSearches.size); } catch {}
 }
 
+function resolveChannelsPath(fsmod, path) {
+  try {
+    const pData = path.resolve('./data/channels.json');
+    if (fsmod.existsSync(path.resolve('./data')) && fsmod.existsSync(pData)) return pData;
+  } catch {}
+  try {
+    const pData = path.resolve('/data/channels.json');
+    if (fsmod.existsSync('/data') && fsmod.existsSync(pData)) return pData;
+  } catch {}
+  return path.resolve('./config/channels.json');
+}
+
 export async function rebuildFromDisk(client) {
   try {
     const fsmod = await import('fs');
     const path = await import('path');
-    const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    const p = resolveChannelsPath(fsmod, path);
+    const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
     try { learnFromRules(searches || []); } catch {}
     rebuildFromList(client, searches);
   } catch (e) {
@@ -746,7 +832,8 @@ export async function incrementalRebuildFromDisk(client) {
   try {
     const fsmod = await import('fs');
     const path = await import('path');
-    const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    const p = resolveChannelsPath(fsmod, path);
+    const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
     setTimeout(() => {
       try {
         console.log('[rebuild] mode=incremental');

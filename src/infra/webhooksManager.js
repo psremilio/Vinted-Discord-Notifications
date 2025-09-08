@@ -2,7 +2,8 @@ import { PermissionsBitField } from 'discord.js';
 import { get as getStore, add as addStore, load as loadStore } from './webhooksStore.js';
 
 const AUTO_ON = String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1';
-const WEBHOOKS_PER_CHANNEL = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 4));
+// Default more aggressive webhook fanout per channel to raise posting throughput
+const WEBHOOKS_PER_CHANNEL = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 6));
 const WEBHOOK_NAME_PREFIX = String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook');
 
 let ENV_MAP = null;

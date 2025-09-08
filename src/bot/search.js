@@ -12,6 +12,9 @@ const d = (...args) => { if (DEBUG_POLL || String(process.env.LOG_LEVEL||'').toL
 const trace = (...a) => { if (TRACE) console.log('[trace]', ...a); };
 const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
 const recentMs = RECENT_MAX_MIN * 60 * 1000;
+// When DISABLE_RECENT_FILTER=1, we still want a safety cap on ingest age to
+// avoid flooding the queue with very old items. Use INGEST_DEFAULT_CAP_MS when
+// RECENT filter is disabled.
 const DISABLE_RECENT = String(process.env.DISABLE_RECENT_FILTER || '0') === '1';
 const firstAgeByRule = new Map(); // rule -> number[]
 function recordFirstAge(rule, ms) {
@@ -181,7 +184,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 console.log(`[found] rule=${channel.channelName} items=${filtered.length} firstId=${filtered[0]?.id} firstAgeMs=${age0}`);
               }
               // Startup fresh-only window: skip posting of old items for first N minutes
-              const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 0);
+              // Default: drop old items briefly after boot to avoid initial spam
+              const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 2);
               if (skipMin > 0) {
                 const sinceStartMs = Date.now() - (state.startedAt?.getTime?.() || 0);
                 if (sinceStartMs < skipMin * 60 * 1000) {
@@ -270,7 +274,10 @@ const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
   const cutoff = Date.now() - recentMs;
   let familyKey = null; try { familyKey = buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch {}
-  const defaultCap = (String(process.env.DISABLE_RECENT || '0') === '1') ? Number(process.env.INGEST_DEFAULT_CAP_MS || 30 * 60 * 1000) : 0; // 30min when RECENT filter is disabled
+  // Respect DISABLE_RECENT_FILTER for ingest default cap as well (bugfix)
+  const defaultCap = (DISABLE_RECENT || String(process.env.DISABLE_RECENT || '0') === '1')
+    ? Number(process.env.INGEST_DEFAULT_CAP_MS || 30 * 60 * 1000)
+    : 0; // 30min when recent filter disabled
   const INGEST_MAX_AGE_MS = Math.max(0, Number(process.env.INGEST_MAX_AGE_MS || defaultCap));
   const now = Date.now();
   const filteredArticles = items.filter((it) => {
