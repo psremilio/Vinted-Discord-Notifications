@@ -18,8 +18,9 @@ function matchGlob(name, pattern) {
 
 export function tierOf(ruleId) {
   // Treat parent aggregators and their priced children as hot by default
-  // unless overridden by env (TIER_HOT_GLOBS)
-  const hot = parseGlobs('TIER_HOT_GLOBS', '*-all,*-all-*€');
+  // unless overridden by env (TIER_HOT_GLOBS). Avoid non-ASCII in fallback
+  // to prevent encoding issues: price-children match by suffix after "-all-".
+  const hot = parseGlobs('TIER_HOT_GLOBS', '*-all,*-all-*');
   for (const g of hot) if (matchGlob(ruleId, g)) return 'T0';
   const warm = parseGlobs('TIER_WARM_GLOBS');
   for (const g of warm) if (matchGlob(ruleId, g)) return 'T1';
