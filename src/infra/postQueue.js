@@ -104,7 +104,10 @@ export async function sendQueued(channel, payload, meta = {}) {
     return { ok: false, reason: 'too_old' };
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
-  if (REORDER_WINDOW_MS > 0 && channel?.id) {
+  // Fresh-fast path: bypass reorder buffer for very fresh items
+  const FRESH_FAST_MS = Math.max(0, Number(process.env.FRESH_FASTPATH_MS || 60_000));
+  const isFreshFast = FRESH_FAST_MS > 0 && createdAt && (Date.now() - createdAt) <= FRESH_FAST_MS;
+  if (!isFreshFast && REORDER_WINDOW_MS > 0 && channel?.id) {
     const st = ensureChannelBuffer(channel);
     st.buf.push({ discoveredAt, createdAt, firstMatchedAt, channel, payload, itemId });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
