@@ -438,7 +438,7 @@ export const runSearch = async (client, channel, opts = {}) => {
               }
               }
             }
-            // Also post to parent rule's channel as usual, unless FANOUT suppresses it
+            // Also post to parent rule's channel as usual
             if (String(process.env.FANOUT_SUPPRESS_PARENT_POST || '0') !== '1') {
               const dest = await getChannelById(client, channel.channelId);
               if (!dest) {
@@ -463,11 +463,14 @@ export const runSearch = async (client, channel, opts = {}) => {
                 }
                 // Parent post mode: all|unmatched|fresh (default all)
                 let PMODE = String(process.env.FANOUT_PARENT_POST_MODE || 'all').toLowerCase();
+                // New guard: optionally force posting to parent regardless of child coverage
+                const ALWAYS_PARENT = String(process.env.FANOUT_ALWAYS_PARENT || '1') === '1';
+                if (ALWAYS_PARENT) PMODE = 'all';
                 try {
                   const qd = (metrics.discord_queue_depth?.get?.() ?? 0);
                   const HW = Math.max(200, Number(process.env.QUEUE_HIGH_WATER || 500));
                   const AUTO_UNMATCHED = String(process.env.FANOUT_PARENT_POST_MODE_AUTO_ON_BACKLOG || '0') === '1';
-                  if (AUTO_UNMATCHED && qd >= HW) PMODE = 'unmatched';
+                  if (!ALWAYS_PARENT && AUTO_UNMATCHED && qd >= HW) PMODE = 'unmatched';
                 } catch {}
                 let parentItems = fresh;
                 if (PMODE === 'all') parentItems = articles; // ignore freshness gating except ENFORCE_MAX above
