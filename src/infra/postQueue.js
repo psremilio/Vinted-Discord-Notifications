@@ -219,6 +219,14 @@ setInterval(() => {
   let slots = currentQps;
   const now = Date.now();
   let keys = Array.from(routeBuckets.keys());
+  // Build channel -> bucket list index for potential migration
+  const byChannel = new Map();
+  for (const k of keys) {
+    const b = routeBuckets.get(k); if (!b) continue;
+    const cid = String(b.channelId || '');
+    if (!byChannel.has(cid)) byChannel.set(cid, []);
+    byChannel.get(cid).push(k);
+  }
   // dynamic per-bucket sends (burst window)
   const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
   const cooldown = metrics.discord_cooldown_active.get?.() || 0;
@@ -229,12 +237,32 @@ setInterval(() => {
     const headCreated = (k)=>{ const b=routeBuckets.get(k); const q=b?.q||[]; if(!q.length) return 0; let m=0; for (const it of q) { const v=Number(it?.createdAt||0); if (v>m) m=v; } return m; };
     keys = keys.slice().sort((a,b)=> headCreated(b)-headCreated(a));
   }
+  const MIGRATE_ON_COOLDOWN = String(process.env.MIGRATE_ON_COOLDOWN || '1') === '1';
   for (let pass = 0; pass < perBucketSends && slots > 0; pass++) {
     for (const key of keys) {
       if (slots <= 0) break;
       const b = routeBuckets.get(key);
       if (!b || b.q.length === 0) continue;
-      if (b.cooldownUntil > now) continue;
+      if (b.cooldownUntil > now) {
+        if (MIGRATE_ON_COOLDOWN) {
+          // try to migrate head job to another webhook bucket of same channel without cooldown
+          const sibs = byChannel.get(String(b.channelId || '')) || [];
+          const targetKey = sibs.find(k2 => k2 !== key && (routeBuckets.get(k2)?.cooldownUntil || 0) <= now);
+          if (targetKey && b.q.length) {
+            const job = b.q.shift();
+            const tb = routeBuckets.get(targetKey);
+            if (job && tb) {
+              try { if (job?.itemId) b.ids.delete(job.itemId); } catch {}
+              tb.q.push(job);
+              try { if (job?.itemId) tb.ids.add(job.itemId); } catch {}
+              if (String(process.env.LOG_ROUTE || '0') === '1') {
+                try { console.log('[post.migrate]', 'cid=', String(b.channelId||''), 'item=', String(job?.itemId||''), 'from=', key, 'to=', targetKey); } catch {}
+              }
+            }
+          }
+        }
+        continue;
+      }
       // per-bucket dynamic concurrency: 1–4 depending on backlog and cooldown (more aggressive when backlog high)
       const CHAN_CONC = (!cooldown && b.q.length > 120) ? 6 : (!cooldown && b.q.length > 60) ? 5 : (!cooldown && b.q.length > 30) ? 4 : (!cooldown && b.q.length > 10) ? 3 : (!cooldown && b.q.length > 3) ? 2 : 1;
       if ((b.inflight || 0) >= CHAN_CONC) continue;
