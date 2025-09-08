@@ -103,7 +103,8 @@ export class EdfScheduler {
       if (Date.now() < EdfGate.pauseUntil) return;
     } catch {}
     // Determine dispatch budget with optional auto-scaling
-    const cfg = Math.max(1, Number(process.env.SEARCH_SCHED_CONCURRENCY || process.env.SEARCH_CONCURRENCY || 12));
+    // Slightly higher default scheduler concurrency for faster discovery on hot rules
+    const cfg = Math.max(1, Number(process.env.SEARCH_SCHED_CONCURRENCY || process.env.SEARCH_CONCURRENCY || 16));
     const auto = String(process.env.AUTO_SCALE_SCHED || '1') === '1';
     const maxC = Math.max(cfg, Number(process.env.SEARCH_SCHED_MAX_CONC || cfg));
     const nowTick = Date.now();
