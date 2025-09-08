@@ -36,6 +36,9 @@ export async function ensureWebhooksForChannel(channel, count = WEBHOOKS_PER_CHA
     if (urls.length) addStore(channel.id, urls[0]); // add ensures dedupe + write; then set others
     for (let i = 1; i < urls.length; i++) addStore(channel.id, urls[i]);
     console.log(`[webhooks.ensure] channel=${channel.id} want=${want} total=${urls.length}`);
+    if (String(process.env.DIAG_ALL||'0')==='1') {
+      try { console.log('[diag.webhooks.ensure]', JSON.stringify({ cid: channel.id, want, total: urls.length })); } catch {}
+    }
   } catch (e) {
     console.warn('[webhooks.ensure] failed:', e?.message || e);
   }

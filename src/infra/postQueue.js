@@ -4,6 +4,8 @@ import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksMan
 import { remove as removeWebhookFromStore } from './webhooksStore.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
+const DIAG_ALL = String(process.env.DIAG_ALL || '0') === '1';
+function diag(tag, obj) { try { if (DIAG_ALL) console.log(`[diag.${tag}]`, JSON.stringify(obj)); } catch {} }
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
 const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX || 12));
 // Optional fast-path: allow near-immediate posting per-channel
@@ -84,10 +86,12 @@ let WEBHOOK_MAP = null; try { WEBHOOK_MAP = JSON.parse(process.env.DISCORD_WEBHO
 // Returns an object describing the enqueue outcome:
 // { ok: boolean, reason?: 'queue_full'|'too_old', buffered?: boolean, enqueued?: boolean }
 export async function sendQueued(channel, payload, meta = {}) {
+  const ALWAYS_WEBHOOK = String(process.env.ALWAYS_WEBHOOK || process.env.FORCE_WEBHOOKS || '0') === '1';
   // Simple backpressure: drop tail if queue exceeds MAX_QUEUE
   try { metrics.discord_queue_depth.set(queue.length); } catch {}
   if (queue.length >= MAX_QUEUE) {
     metrics.discord_dropped_total.inc();
+    diag('enqueue', { cid: channel?.id || null, item: meta?.itemId || null, mode: 'drop', reason: 'queue_full', q: queue.length });
     return { ok: false, reason: 'queue_full' };
   }
   // Optional per-channel reorder window
@@ -102,13 +106,22 @@ export async function sendQueued(channel, payload, meta = {}) {
         console.warn('[post.drop_old]', 'channel=', channel?.id || 'unknown', 'age_ms=', age);
       } catch {}
     }
+    diag('enqueue', { cid: channel?.id || null, item: meta?.itemId || null, mode: 'drop', reason: 'too_old', post_max_age_ms: POST_MAX_AGE_MS });
     return { ok: false, reason: 'too_old' };
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
+  // Optional: ensure webhooks synchronously before first enqueue when ALWAYS_WEBHOOK=1
+  if (ALWAYS_WEBHOOK && channel?.id) {
+    try {
+      const curr = getWebhooksForChannelId(channel.id) || [];
+      if (!curr.length) { await ensureWebhooksForChannel(channel); diag('webhooks.ensure.sync', { cid: channel.id }); }
+    } catch {}
+  }
   // Drop at enqueue if recently posted in same channel (cross-rule duplicate)
   try {
     if (itemId && channel?.id && _isRecentlyPosted(channel.id, itemId)) {
       if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log('[post.drop_dup_recent]', 'channel=', channel.id, 'item=', itemId);
+      diag('enqueue', { cid: channel?.id || null, item: itemId, mode: 'drop', reason: 'dup_recent' });
       return { ok: true };
     }
   } catch {}
@@ -121,9 +134,11 @@ export async function sendQueued(channel, payload, meta = {}) {
     st.buf.push({ discoveredAt, createdAt, firstMatchedAt, channel, payload, itemId });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
     if (itemId) _markQueued(channel.id, itemId);
+    diag('enqueue', { cid: channel?.id || null, item: itemId, mode: 'buffer', reorder_depth: st.buf.length });
     return { ok: true, buffered: true };
   }
   enqueueRoute(channel, payload, discoveredAt, createdAt, itemId, firstMatchedAt);
+  diag('enqueue', { cid: channel?.id || null, item: itemId, mode: 'route' });
   return { ok: true, enqueued: true };
 }
 
@@ -196,6 +211,7 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   if (chosenWebhook) job.webhookUrl = chosenWebhook;
   b.q.push(job);
   if (idKey) { b.ids.add(idKey); _markQueued(cid, idKey); }
+  diag('route.assign', { cid, item: idKey, wh_count: (webhooks||[]).length || 0, route: chosenWebhook ? 'webhook' : 'channel', routeKey });
 }
 
 // WFQ-like scheduler: per second serve up to currentQps, 1 msg per bucket per tick
@@ -327,6 +343,7 @@ async function doSend(job, bucket) {
         console.log('[diag.post]', 'channel=', String(job?.channel?.id || ''), 'item=', String(job?.itemId || ''), 'age_listed_ms=', createdAge, 'queued_ms=', latency);
       }
     } catch {}
+    diag('send.ok', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), via: job.webhookUrl ? 'webhook' : 'channel', latency_ms: latency, created_age_ms: Math.max(0, now - Number(job.createdAt || now)) });
     // mark channel-level as done and recent to avoid rapid duplicates across overlapping rules
     try { if (job?.itemId && job?.channel?.id) { _unmarkQueued(job.channel.id, job.itemId); _markRecentlyPosted(job.channel.id, job.itemId); } } catch {}
     return res;
@@ -347,6 +364,7 @@ async function doSend(job, bucket) {
           bucket.q.unshift(job);
         }
       } catch {}
+      diag('send.429', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), via: job.webhookUrl ? 'webhook' : 'channel', retry_ms: retry });
       return null;
     }
     // Non-429 error: if webhook path failed, attempt channel fallback and prune bad webhook
@@ -360,10 +378,12 @@ async function doSend(job, bucket) {
           if (String(process.env.LOG_ROUTE || '0') === '1') {
             try { console.log('[post.send]', 'via=fallback-channel', 'channel=', String(job?.channel?.id||''), 'item=', String(job?.itemId||'')); } catch {}
           }
+          diag('send.fallback', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), from: 'webhook', to: 'channel' });
           return res2;
         } catch {}
       }
     } catch {}
+    diag('send.error', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), via: job.webhookUrl ? 'webhook' : 'channel', error: String(e?.message || e) });
     throw e;
   }
 }
