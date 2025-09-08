@@ -130,6 +130,7 @@ client.on('interactionCreate', async (interaction) => {
     if (!isCmd) return;
     // Briefly pause scheduler to guarantee a clean window for ack/edit
     try { EdfGate.pause(Number(process.env.COMMANDS_PAUSE_MS || 1500)); } catch {}
+    const t0 = Date.now();
     if (!interaction.deferred && !interaction.replied) {
       // Preferred: ephemeral defer within 3s; fallback to quick ephemeral reply
       try { await interaction.deferReply({ ephemeral: true }); }
@@ -137,6 +138,11 @@ client.on('interactionCreate', async (interaction) => {
         try { await interaction.reply({ content: '…', ephemeral: true }); } catch {}
       }
     }
+    try {
+      const dt = Date.now() - t0;
+      const name = (()=>{ try { return String(interaction.commandName || '_'); } catch { return '_'; } })();
+      metrics.interaction_defer_latency_ms?.set?.({ command: name }, dt);
+    } catch {}
   } catch {}
 });
 
