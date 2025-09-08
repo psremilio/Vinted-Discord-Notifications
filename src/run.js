@@ -322,11 +322,14 @@ export const runSearch = async (client, channel, opts = {}) => {
                 }
                 // Quarantine logic: if leader has items but child keeps matching 0 for several cycles
                 try {
-                  const fam = familiesByParent.get(String(channel.channelName));
-                  const sig = fam?.sig;
-                  const st = sig ? familyState.get(sig) : null;
-                  const cname = String(childRule.channelName);
-                  if (sig && st && st.child?.has?.(cname)) {
+                  if (String(process.env.MONO_QUARANTINE_DISABLE || '0') === '1') {
+                    // Quarantine disabled by config
+                  } else {
+                    const fam = familiesByParent.get(String(channel.channelName));
+                    const sig = fam?.sig;
+                    const st = sig ? familyState.get(sig) : null;
+                    const cname = String(childRule.channelName);
+                    if (sig && st && st.child?.has?.(cname)) {
                     const rec = st.child.get(cname);
                     const leaderHas = Array.isArray(articles) && articles.length > 0;
                     // Softfail-aware zero-match increment: skip when recent soft-fail observed
@@ -348,6 +351,7 @@ export const runSearch = async (client, channel, opts = {}) => {
                     }
                     st.child.set(cname, rec);
                     familyState.set(sig, st);
+                  }
                   }
                 } catch {}
                 // Monotonie-Guard: Wenn Preis ≤ child.price_to und Brand/Catalog zum Parent passen,
