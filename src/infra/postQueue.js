@@ -80,12 +80,14 @@ function flushChannel(id) {
 // Optional webhook fanout config: JSON mapping channelId -> [webhookURL,...]
 let WEBHOOK_MAP = null; try { WEBHOOK_MAP = JSON.parse(process.env.DISCORD_WEBHOOKS_JSON || 'null'); } catch {}
 
+// Returns an object describing the enqueue outcome:
+// { ok: boolean, reason?: 'queue_full'|'too_old', buffered?: boolean, enqueued?: boolean }
 export async function sendQueued(channel, payload, meta = {}) {
   // Simple backpressure: drop tail if queue exceeds MAX_QUEUE
   try { metrics.discord_queue_depth.set(queue.length); } catch {}
   if (queue.length >= MAX_QUEUE) {
     metrics.discord_dropped_total.inc();
-    return; // drop
+    return { ok: false, reason: 'queue_full' };
   }
   // Optional per-channel reorder window
   const discoveredAt = Number(meta?.discoveredAt || Date.now());
@@ -99,16 +101,17 @@ export async function sendQueued(channel, payload, meta = {}) {
         console.warn('[post.drop_old]', 'channel=', channel?.id || 'unknown', 'age_ms=', age);
       } catch {}
     }
-    return;
+    return { ok: false, reason: 'too_old' };
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
   if (REORDER_WINDOW_MS > 0 && channel?.id) {
     const st = ensureChannelBuffer(channel);
     st.buf.push({ discoveredAt, createdAt, firstMatchedAt, channel, payload, itemId });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
-    return;
+    return { ok: true, buffered: true };
   }
   enqueueRoute(channel, payload, discoveredAt, createdAt, itemId, firstMatchedAt);
+  return { ok: true, enqueued: true };
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)

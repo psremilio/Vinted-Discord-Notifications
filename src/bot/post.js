@@ -8,22 +8,27 @@ import { metrics } from '../infra/metrics.js';
 const isTextChannelLike = ch => ch && typeof ch.send === "function";
 async function sendToTargetsSafely(targets, payload, meta = {}) {
   const list = Array.isArray(targets) ? targets : [targets];
+  const results = [];
   for (const ch of (list || [])) {
     if (!isTextChannelLike(ch)) {
-      console.warn("[post] skip invalid channel", ch?.id ?? "(undefined)");
+      console.warn('[post] skip invalid channel', ch?.id ?? '(undefined)');
+      results.push({ ok: false, reason: 'invalid_channel' });
       continue;
     }
     try {
-      await sendQueued(ch, payload, meta);
+      const res = await sendQueued(ch, payload, meta);
+      results.push(res || { ok: true });
     } catch (e) {
       const code = Number(e?.code || 0);
       if (code === 10003) {
         console.error(`[post] send failed: Unknown Channel (id=${ch?.id ?? 'unknown'}) — wurde der Kanal gelöscht oder fehlt die Berechtigung?`);
       } else {
-        console.error("[post] send failed", ch?.id ?? "(unknown)", e);
+        console.error('[post] send failed', ch?.id ?? '(unknown)', e);
       }
+      results.push({ ok: false, reason: 'exception' });
     }
   }
+  return results;
 }
 const normKey = s => (s ?? "").toLowerCase().trim().replace(/\s+/g,"").replace(/-+/g,"-");
 const singularFallback = k => k.replace(/s$/, "");
@@ -86,13 +91,19 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
             metrics.match_age_ms_histogram?.set({ rule: String(ruleName || '') }, age);
           }
         } catch {}
-        await sendToTargetsSafely(targets, payload, meta);
-        try {
-          console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
-          stats.posted += 1;
-          markPosted();
-        } catch {
-          // ignore logging failures
+        const rlist = await sendToTargetsSafely(targets, payload, meta);
+        const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
+        if (anyOk) {
+          try {
+            console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
+            stats.posted += 1;
+            markPosted();
+          } catch {}
+        } else {
+          // all drops or failures: optional debug
+          if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+            try { console.log('[post.skip]', 'item=', item.id, 'reasons=', JSON.stringify(rlist)); } catch {}
+          }
         }
     }
 }
