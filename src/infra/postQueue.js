@@ -211,7 +211,7 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   let chosenWebhook = null;
   const webhooks = cid ? getWebhooksForChannelId(cid) : null;
   if (webhooks && webhooks.length) {
-    const rr = rrByChannel.get(cid) || 0;
+    const rr = (rrByChannel.has(cid) ? rrByChannel.get(cid) : Math.floor(Math.random() * webhooks.length));
     chosenWebhook = webhooks[rr % webhooks.length];
     rrByChannel.set(cid, (rr + 1) % webhooks.length);
     routeKey = `chan:${cid}:wh:${rr % webhooks.length}`;
