@@ -448,6 +448,37 @@ export const runSearch = async (client, channel, opts = {}) => {
                     }
                   }
                 } catch {}
+                // Optional: mirror to larger price siblings (e.g., 10€ → 15/20/30€)
+                try {
+                  const MIRROR_SIB = String(process.env.FANOUT_MIRROR_TO_SIBLINGS || '1') === '1';
+                  if (MIRROR_SIB && Array.isArray(channel.children) && channel.children.length > 1) {
+                    const childFilters = parseRuleFilters(childRule.url || '');
+                    const childTo = Number.isFinite(childFilters?.priceTo) ? Number(childFilters.priceTo) : null;
+                    const STRICT = String(process.env.FANOUT_SIBLING_STRICT || '0') === '1';
+                    for (const sib of channel.children) {
+                      const sibRule = sib?.rule || sib;
+                      if (!sibRule || sibRule.channelName === childRule.channelName) continue;
+                      const sf = parseRuleFilters(sibRule.url || '');
+                      const sibTo = Number.isFinite(sf?.priceTo) ? Number(sf.priceTo) : null;
+                      if (sibTo === null) continue; // only mirror within price family
+                      if (childTo !== null && sibTo < childTo) continue; // only to larger/equal buckets
+                      const sibDest = await getChannelById(client, sibRule.channelId);
+                      if (!sibDest) continue;
+                      let toPost = gated;
+                      if (STRICT) { try { toPost = gated.filter(it => itemMatchesFilters(it, sf)); } catch {} }
+                      if (!toPost.length) continue;
+                      await postArticles(toPost, sibDest, channel.channelName);
+                      try {
+                        for (const it of toPost) {
+                          const fkS = (()=>{ try { return buildFamilyKeyFromURL(String(sibRule.url || ''), 'auto'); } catch { return null; } })();
+                          const keyS = dedupeKeyForChannel(sibRule, it.id, fkS);
+                          processedStore.set(keyS, Date.now(), { ttl: ttlMs });
+                        }
+                      } catch {}
+                      if (FANOUT_DEBUG) ll('[fanout.siblings]', 'from=', childRule.channelName, 'to=', sibRule.channelName, 'posted=', toPost.length);
+                    }
+                  }
+                } catch {}
                 try { for (const it of gated) childCovered.add(String(it.id)); } catch {}
                 // mark seen for child rule after post
                 gated.forEach(article => {
@@ -668,6 +699,15 @@ function computeScheduleList(mySearches) {
     const parent = fam.parent;
     parent.children = fam.children || [];
     parentNames.add(parent.channelName);
+    // Aggressive polling for price-children to hit 10–30s discovery
+    try {
+      const CHILD_SEC = Math.max(1, Number(process.env.PRICE_CHILD_TARGET_SEC || 6));
+      for (const c of (parent.children || [])) {
+        try { if (c?.rule) c.rule.frequency = CHILD_SEC; else if (c && typeof c === 'object') c.frequency = CHILD_SEC; } catch {}
+      }
+      const PARENT_SEC = Math.max(0, Number(process.env.PARENT_TARGET_SEC || 0));
+      if (PARENT_SEC > 0) { try { parent.frequency = PARENT_SEC; } catch {} }
+    } catch {}
   }
   const toSchedule = [];
   if (families?.length) {
