@@ -280,6 +280,10 @@ async function doSend(job, bucket) {
         res = await sendWebhook(job.webhookUrl, job.payload, job.channel?.id);
       } else {
         res = await job.channel.send(job.payload);
+        try { metrics.discord_channel_send_ok_total.inc({ channel: String(job?.channel?.id || '') }); } catch {}
+        if (String(process.env.LOG_ROUTE || '0') === '1') {
+          try { console.log('[post.send]', 'via=channel', 'channel=', String(job?.channel?.id||''), 'item=', String(job?.itemId||'')); } catch {}
+        }
       }
     }
     const latency = Date.now() - (Number(job.discoveredAt) || now);

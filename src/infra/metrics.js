@@ -60,6 +60,7 @@ export const metrics = {
   discord_webhook_send_ok_total: new LabeledCounter('discord_webhook_send_ok_total', ['channel']),
   discord_webhook_send_429_total: new LabeledCounter('discord_webhook_send_429_total', ['channel']),
   discord_webhook_cooldowns_total: new LabeledCounter('discord_webhook_cooldowns_total', ['channel']),
+  discord_channel_send_ok_total: new LabeledCounter('discord_channel_send_ok_total', ['channel']),
   // fanout + gating + http extras
   parent_fanout_items_total: new LabeledCounter('parent_fanout_items_total', ['parent','child']),
   child_fetch_saved_total: new LabeledCounter('child_fetch_saved_total', ['child']),
@@ -150,6 +151,8 @@ export function serializeMetrics() {
   for (const e of metrics.discord_webhook_send_429_total.entries()) out.push(`discord_webhook_send_429_total{channel="${e.labels.channel}"} ${e.value}`);
   lineHelpType('discord_webhook_cooldowns_total', 'Webhook cooldowns by channel', 'counter');
   for (const e of metrics.discord_webhook_cooldowns_total.entries()) out.push(`discord_webhook_cooldowns_total{channel="${e.labels.channel}"} ${e.value}`);
+  lineHelpType('discord_channel_send_ok_total', 'Plain channel.send posts (no webhook)', 'counter');
+  for (const e of metrics.discord_channel_send_ok_total.entries()) out.push(`discord_channel_send_ok_total{channel="${e.labels.channel}"} ${e.value}`);
   // fanout + gating + http extras
   lineHelpType('parent_fanout_items_total', 'Items fanned out from parent to child', 'counter');
   for (const e of metrics.parent_fanout_items_total.entries()) out.push(`parent_fanout_items_total{parent="${e.labels.parent}",child="${e.labels.child}"} ${e.value}`);
