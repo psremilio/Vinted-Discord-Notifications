@@ -6,8 +6,9 @@ import { remove as removeWebhookFromStore } from './webhooksStore.js';
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const DIAG_ALL = String(process.env.DIAG_ALL || '0') === '1';
 function diag(tag, obj) { try { if (DIAG_ALL) console.log(`[diag.${tag}]`, JSON.stringify(obj)); } catch {} }
-const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
-const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX || 12));
+// Higher defaults to improve send throughput while keeping QPS guardrails
+const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 8));
+const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX || 24));
 // Optional fast-path: allow near-immediate posting per-channel (default ON)
 const FAST_POST = String(process.env.FAST_POST || '1') === '1';
 const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 1000));
@@ -145,7 +146,8 @@ export async function sendQueued(channel, payload, meta = {}) {
     }
   } catch {}
   // Fresh-fast path: bypass reorder buffer for very fresh items
-  const FRESH_FAST_MS = Math.max(0, Number(process.env.FRESH_FASTPATH_MS || 60_000));
+  // Treat very new items as fast-path by default (≤2min)
+  const FRESH_FAST_MS = Math.max(0, Number(process.env.FRESH_FASTPATH_MS || 120_000));
   const isFreshFast = FRESH_FAST_MS > 0 && createdAt && (Date.now() - createdAt) <= FRESH_FAST_MS;
   if (!isFreshFast && REORDER_WINDOW_MS > 0 && channel?.id) {
     if (itemId && _isQueued(channel.id, itemId)) return { ok: true, buffered: true };
