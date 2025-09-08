@@ -613,6 +613,13 @@ function buildFamilies(mySearches) {
       }
     }
   } catch {}
+  // Final fallback: if still no families, attempt auto_price grouping to ensure
+  // parent/price-children families are available for fanout/mirroring.
+  try {
+    if (!families || families.length === 0) {
+      families = buildAutoPriceFamilies(mySearches);
+    }
+  } catch {}
   if (FANOUT_DEBUG || String(process.env.RULES_DUMP || '1') === '1') {
     try {
       const famCount = families?.length || 0;
