@@ -8,9 +8,9 @@ const DIAG_ALL = String(process.env.DIAG_ALL || '0') === '1';
 function diag(tag, obj) { try { if (DIAG_ALL) console.log(`[diag.${tag}]`, JSON.stringify(obj)); } catch {} }
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
 const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX || 12));
-// Optional fast-path: allow near-immediate posting per-channel
-const FAST_POST = String(process.env.FAST_POST || '0') === '1';
-const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 2000));
+// Optional fast-path: allow near-immediate posting per-channel (default ON)
+const FAST_POST = String(process.env.FAST_POST || '1') === '1';
+const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 1000));
 // Default: do NOT drop older items unless explicitly enabled via env
 const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
 const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
@@ -21,6 +21,8 @@ export const postLimiter = new Bottleneck({
   reservoirRefreshAmount: QPS,
   reservoirRefreshInterval: 1000,
 });
+// Track current concurrency for auto-tune adjustments
+let currentConc = CONC;
 
 function is429(err) {
   const s = Number(err?.status || err?.httpStatus || 0);
@@ -28,12 +30,16 @@ function is429(err) {
 }
 
 const MAX_QUEUE = Math.max(2000, Number(process.env.DISCORD_QUEUE_MAX || 5000));
-const queue = [];
+// Backlog purge config
+const PURGE_ENABLED = String(process.env.DROP_OLD_WHEN_BACKLOG || '1') === '1';
+const PURGE_INTERVAL_MS = Math.max(2000, Number(process.env.BACKLOG_PURGE_INTERVAL_MS || 5000));
+const STALE_PURGE_Q_THR = Math.max(200, Number(process.env.STALE_PURGE_QUEUE_THRESHOLD || 400));
+const STALE_PURGE_MAX_AGE_MS = Math.max(60_000, Number(process.env.STALE_PURGE_MAX_AGE_MS || 10 * 60 * 1000));
 let discordCooldownUntil = 0;
 const ensureInFlight = new Set(); // channelId being ensured
 
 // Per-channel reorder buffers
-const chanBuf = new Map(); // channelId -> { buf: Array<{discoveredAt, createdAt, channel, payload}>, timer }
+const chanBuf = new Map(); // channelId -> { buf: Array<{discoveredAt, createdAt, firstMatchedAt, channel, payload, itemId}>, timer }
 function ensureChannelBuffer(channel) {
   const id = channel?.id || 'UNKNOWN';
   let st = chanBuf.get(id);
@@ -85,13 +91,26 @@ let WEBHOOK_MAP = null; try { WEBHOOK_MAP = JSON.parse(process.env.DISCORD_WEBHO
 
 // Returns an object describing the enqueue outcome:
 // { ok: boolean, reason?: 'queue_full'|'too_old', buffered?: boolean, enqueued?: boolean }
+// Compute current queue depth across all buckets and reorder buffers
+function _totalRouteDepth() {
+  let sum = 0;
+  try { for (const b of routeBuckets.values()) sum += (b?.q?.length || 0); } catch {}
+  return sum;
+}
+function _totalReorderDepth() {
+  let sum = 0;
+  try { for (const st of chanBuf.values()) sum += (st?.buf?.length || 0); } catch {}
+  return sum;
+}
+
 export async function sendQueued(channel, payload, meta = {}) {
   const ALWAYS_WEBHOOK = String(process.env.ALWAYS_WEBHOOK || process.env.FORCE_WEBHOOKS || '0') === '1';
-  // Simple backpressure: drop tail if queue exceeds MAX_QUEUE
-  try { metrics.discord_queue_depth.set(queue.length); } catch {}
-  if (queue.length >= MAX_QUEUE) {
+  // Backpressure: drop tail if combined depth exceeds MAX_QUEUE
+  const depth = _totalRouteDepth() + _totalReorderDepth();
+  try { metrics.discord_queue_depth.set(depth); } catch {}
+  if (depth >= MAX_QUEUE) {
     metrics.discord_dropped_total.inc();
-    diag('enqueue', { cid: channel?.id || null, item: meta?.itemId || null, mode: 'drop', reason: 'queue_full', q: queue.length });
+    diag('enqueue', { cid: channel?.id || null, item: meta?.itemId || null, mode: 'drop', reason: 'queue_full', q: depth });
     return { ok: false, reason: 'queue_full' };
   }
   // Optional per-channel reorder window
@@ -230,7 +249,13 @@ setInterval(() => {
   // dynamic per-bucket sends (burst window)
   const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
   const cooldown = metrics.discord_cooldown_active.get?.() || 0;
-  const perBucketSends = (!cooldown && totalQ > 800) ? 6 : (!cooldown && totalQ > 400) ? 5 : (!cooldown && totalQ > 200) ? 4 : (!cooldown && totalQ > 60) ? 3 : (!cooldown && totalQ > 20) ? 2 : 1;
+  const perBucketSends = (!cooldown && totalQ > 1500) ? 12
+                        : (!cooldown && totalQ > 800)  ? 8
+                        : (!cooldown && totalQ > 400)  ? 6
+                        : (!cooldown && totalQ > 200)  ? 4
+                        : (!cooldown && totalQ > 60)   ? 3
+                        : (!cooldown && totalQ > 20)   ? 2
+                        : 1;
   // do up to perBucketSends passes for fairness
   // prioritize buckets with freshest head createdAt when backlog is high
   if (totalQ > 100) {
@@ -264,7 +289,13 @@ setInterval(() => {
         continue;
       }
       // per-bucket dynamic concurrency: 1–4 depending on backlog and cooldown (more aggressive when backlog high)
-      const CHAN_CONC = (!cooldown && b.q.length > 120) ? 6 : (!cooldown && b.q.length > 60) ? 5 : (!cooldown && b.q.length > 30) ? 4 : (!cooldown && b.q.length > 10) ? 3 : (!cooldown && b.q.length > 3) ? 2 : 1;
+      const CHAN_CONC = (!cooldown && b.q.length > 200) ? 12
+                      : (!cooldown && b.q.length > 120) ? 9
+                      : (!cooldown && b.q.length > 60)  ? 7
+                      : (!cooldown && b.q.length > 30)  ? 4
+                      : (!cooldown && b.q.length > 10)  ? 3
+                      : (!cooldown && b.q.length > 3)   ? 2
+                      : 1;
       if ((b.inflight || 0) >= CHAN_CONC) continue;
       // priority: createdAt desc, then firstMatchedAt desc, then discoveredAt desc
       b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (Number(bj.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) || (bj.discoveredAt - a.discoveredAt));
@@ -458,7 +489,8 @@ async function sendWebhook(url, payload, channelId) {
 let last429 = 0;
 let currentQps = QPS;
 const MAX_QPS = Math.max(QPS, Number(process.env.DISCORD_QPS_MAX || 120));
-const MIN_QPS = Math.max(5, Number(process.env.DISCORD_QPS_MIN || 60));
+// Fix default floor: use a low sane value when env unset
+const MIN_QPS = Math.max(5, Number(process.env.DISCORD_QPS_MIN || 5));
 const INC_STEP = Math.max(1, Number(process.env.DISCORD_QPS_INC || 8));
 const DEC_FACTOR = Number(process.env.DISCORD_QPS_DEC_FACTOR || 0.92);
 
@@ -498,13 +530,59 @@ setInterval(() => {
   } catch {}
 }, 60 * 1000);
 
+// Periodic backlog purge of stale items to cap tail latencies (optional)
+if (PURGE_ENABLED) {
+  setInterval(() => {
+    try {
+      const now = Date.now();
+      let dropped = 0;
+      // Purge per-route queues when deep backlog
+      for (const [key, b] of routeBuckets.entries()) {
+        const depth = b?.q?.length || 0;
+        if (!depth || depth < STALE_PURGE_Q_THR) continue;
+        const keep = [];
+        for (const job of b.q) {
+          const age = now - Number(job?.createdAt || now);
+          if (age > STALE_PURGE_MAX_AGE_MS) {
+            dropped++;
+            try { if (job?.itemId) b.ids.delete(job.itemId); } catch {}
+            try { if (job?.channel?.id && job?.itemId) _unmarkQueued(job.channel.id, job.itemId); } catch {}
+          } else {
+            keep.push(job);
+          }
+        }
+        b.q = keep;
+      }
+      // Purge reorder buffers as well (lighter threshold)
+      for (const [cid, st] of chanBuf.entries()) {
+        const depth = st?.buf?.length || 0;
+        if (!depth || depth < Math.floor(STALE_PURGE_Q_THR / 2)) continue;
+        const keep = [];
+        for (const job of st.buf) {
+          const age = now - Number(job?.createdAt || now);
+          if (age > STALE_PURGE_MAX_AGE_MS) {
+            dropped++;
+            try { if (job?.itemId) _unmarkQueued(cid, job.itemId); } catch {}
+          } else {
+            keep.push(job);
+          }
+        }
+        st.buf = keep;
+      }
+      if (dropped && String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+        console.log('[post.purge]', 'dropped=', dropped);
+      }
+    } catch {}
+  }, PURGE_INTERVAL_MS).unref?.();
+}
+
 // Fast queue-based QPS boost (10s cadence)
 setInterval(() => {
   try {
     let keys = Array.from(routeBuckets.keys());
     const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
     const cooldown = metrics.discord_cooldown_active.get?.() || 0;
-    if (!cooldown && totalQ > 500) {
+    if (!cooldown && totalQ > 60) {
       const boost = Math.floor(MAX_QPS * 0.9);
       if (currentQps < boost) {
         currentQps = Math.min(MAX_QPS, boost);
@@ -521,7 +599,10 @@ setInterval(() => {
     const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
     const cooldown = metrics.discord_cooldown_active.get?.() || 0;
     if (!cooldown && totalQ > 800 && currentConc < CONC_MAX) {
-      currentConc = Math.min(CONC_MAX, currentConc + 1);
+      currentConc = Math.min(CONC_MAX, currentConc + 4);
+      postLimiter.updateSettings({ maxConcurrent: currentConc });
+    } else if (!cooldown && totalQ > 300 && currentConc < CONC_MAX) {
+      currentConc = Math.min(CONC_MAX, currentConc + 2);
       postLimiter.updateSettings({ maxConcurrent: currentConc });
     } else if ((cooldown || totalQ < 50) && currentConc > CONC) {
       currentConc = Math.max(CONC, currentConc - 1);
