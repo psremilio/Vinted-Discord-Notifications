@@ -2,7 +2,6 @@ import { SlashCommandBuilder, EmbedBuilder, ChannelType, PermissionsBitField } f
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { addSearch } from '../run.js';
 import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -10,7 +9,6 @@ const __dirname = path.dirname(__filename);
 function resolveChannelsPath() {
   try {
     const pData = path.resolve(__dirname, '../../data/channels.json');
-    // ensure /data dir exists when writable
     try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
     return pData;
   } catch {}
@@ -18,26 +16,33 @@ function resolveChannelsPath() {
 }
 const filePath = resolveChannelsPath();
 
-// Keep this as an alias of new_search but registered under name "search"
 export const data = new SlashCommandBuilder()
   .setName('search')
-  .setDescription('Start receiving notifications for this Vinted channel (alias of new_search).')
-  .addStringOption(option =>
-    option.setName('name')
-      .setDescription('The name of your new search.')
-      .setRequired(true))
-  .addStringOption(option =>
-    option.setName('url')
-      .setDescription('The URL of the Vinted product page.')
-      .setRequired(true))
-  .addStringOption(option =>
-    option.setName('banned_keywords')
-      .setDescription('Comma-separated keywords to filter from titles (e.g., "fake, kids")')
-      .setRequired(false))
-  .addStringOption(option =>
-    option.setName('frequency')
-      .setDescription('Polling frequency in seconds (defaults to 10s).')
-      .setRequired(false));
+  .setDescription('Manage Vinted searches (add/delete/list/show).')
+  .addSubcommand(sc =>
+    sc.setName('add')
+      .setDescription('Create or update a search for this channel.')
+      .addStringOption(o => o.setName('name').setDescription('Name for this search').setRequired(true))
+      .addStringOption(o => o.setName('url').setDescription('Vinted catalog URL with query').setRequired(true))
+      .addStringOption(o => o.setName('banned_keywords').setDescription('Comma-separated title filters').setRequired(false))
+      .addStringOption(o => o.setName('frequency').setDescription('Polling interval in seconds (default 10)').setRequired(false))
+      .addBooleanOption(o => o.setName('auto_webhooks').setDescription('Create webhooks for faster posting').setRequired(false))
+  )
+  .addSubcommand(sc =>
+    sc.setName('delete')
+      .setDescription('Delete a search by name or URL.')
+      .addStringOption(o => o.setName('name').setDescription('Search name').setRequired(false))
+      .addStringOption(o => o.setName('url').setDescription('Vinted URL (canonical match)').setRequired(false))
+  )
+  .addSubcommand(sc =>
+    sc.setName('list')
+      .setDescription('List all searches for this server.')
+  )
+  .addSubcommand(sc =>
+    sc.setName('show')
+      .setDescription('Show details for one search.')
+      .addStringOption(o => o.setName('name').setDescription('Search name').setRequired(true))
+  );
 
 const validateUrl = (url) => {
   try {
@@ -56,7 +61,7 @@ const validateUrl = (url) => {
 export const execute = async (interaction) => {
   if (!interaction?.deferred && !interaction?.replied) {
     try { await interaction.deferReply({ ephemeral: true }); }
-    catch { try { await interaction.reply({ content: '…', ephemeral: true }); } catch {} }
+    catch { try { await interaction.reply({ content: '✅', ephemeral: true }); } catch {} }
   }
 
   async function safeEdit(contentOrOptions) {
@@ -68,36 +73,90 @@ export const execute = async (interaction) => {
     }
   }
 
+  const sub = interaction.options.getSubcommand ? interaction.options.getSubcommand() : 'add';
+
+  const ch = interaction.channel;
+  const channel_id = ch?.id;
+  function chanOk() {
+    try {
+      const allowedTypes = new Set([
+        ChannelType.GuildText,
+        ChannelType.PublicThread,
+        ChannelType.PrivateThread,
+        ChannelType.AnnouncementThread,
+      ]);
+      const isAllowedType = allowedTypes.has(ch?.type);
+      const canSend = !!ch?.permissionsFor?.(interaction.client.user)?.has?.(PermissionsBitField.Flags.SendMessages);
+      return !!channel_id && isAllowedType && canSend;
+    } catch { return true; }
+  }
+  function parseKeywords(s) { return String(s || '').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean).slice(0,100); }
+  function loadSearches() { try { return JSON.parse(fs.readFileSync(filePath,'utf8')); } catch { return []; } }
+  async function saveSearches(arr) {
+    fs.writeFileSync(filePath, JSON.stringify(arr, null, 2));
+    try { fs.writeFileSync(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(arr, null, 2)); } catch {}
+  }
+
+  if (sub === 'list') {
+    const arr = loadSearches();
+    const lines = arr.map(s => `• ${s.channelName} (${s.channelId}) → ${s.url}`);
+    await safeEdit(lines.length ? lines.join('\n') : 'Keine Suchen konfiguriert.');
+    return;
+  }
+  if (sub === 'show') {
+    const name = interaction.options.getString('name');
+    const arr = loadSearches();
+    const it = arr.find(s => String(s.channelName) === String(name));
+    if (!it) { await safeEdit(`Suche "${name}" nicht gefunden.`); return; }
+    const eb = new EmbedBuilder().setTitle(it.channelName).setColor(0x00AAFF);
+    eb.addFields(
+      { name: 'URL', value: it.url || '-', inline: false },
+      { name: 'Channel', value: it.channelId || '-', inline: true },
+      { name: 'Freq(s)', value: String(it.frequency ?? '10'), inline: true },
+      { name: 'Blacklist', value: (Array.isArray(it.titleBlacklist) && it.titleBlacklist.length) ? it.titleBlacklist.join(', ') : '—', inline: false },
+    );
+    await safeEdit({ embeds: [eb] });
+    return;
+  }
+
+  if (sub === 'delete') {
+    const name = interaction.options.getString('name');
+    const urlRaw = interaction.options.getString('url');
+    if (!name && !urlRaw) { await safeEdit('Bitte gib entweder name oder url an.'); return; }
+    let key = null, keyNoPrice = null;
+    try { if (urlRaw) { key = buildParentKey(urlRaw); keyNoPrice = buildParentKey(urlRaw, { stripPrice: true }); } } catch {}
+    const arr = loadSearches();
+    let idx = -1;
+    if (key) {
+      for (let i=0;i<arr.length;i++){ const s=arr[i]||{}; const k=s.canonicalKey || buildParentKey(String(s.url||'')); if (k===key) { idx=i; break; } }
+      if (idx === -1 && keyNoPrice) { for (let i=0;i<arr.length;i++){ const s=arr[i]||{}; const k2 = buildParentKey(String(s.url||''),{stripPrice:true}); if (k2===keyNoPrice){ idx=i; break; } } }
+    }
+    if (idx === -1 && name) idx = arr.findIndex(s => String(s.channelName) === String(name));
+    if (idx === -1) { await safeEdit(key ? `Kein Treffer für key ${key}${keyNoPrice?` (no_price=${keyNoPrice})`:''}` : `Suche "${name}" nicht gefunden.`); return; }
+    const removed = arr[idx];
+    arr.splice(idx,1);
+    await saveSearches(arr);
+    try { const mod = await import('../run.js'); if (removed?.channelName) mod.removeJob?.(removed.channelName); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
+    await safeEdit(`OK. Search ${removed?.channelName || name || key} gelöscht.`);
+    return;
+  }
+
+  // Default: add/update
+  if (!chanOk()) {
+    try { console.warn('[cmd.warn] /search invalid_channel', { id: channel_id || null, type: ch?.type }); } catch {}
+    await safeEdit({ content: 'Dieser Kanal ist ungeeignet. Bitte nutze einen Textkanal, in dem der Bot schreiben darf.' });
+    return;
+  }
+
+  const name = interaction.options.getString('name');
   const urlRaw = interaction.options.getString('url');
-  const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(s => s.trim().toLowerCase()) : [];
+  const banned_keywords = parseKeywords(interaction.options.getString('banned_keywords'));
   let frequency = Number.parseInt(interaction.options.getString('frequency') ?? '10', 10);
   if (!Number.isFinite(frequency)) frequency = 10;
   frequency = Math.min(Math.max(frequency, 5), 3600);
-  const name = interaction.options.getString('name');
-  const ch = interaction.channel;
-  const channel_id = ch?.id;
-
-  try {
-    const allowedTypes = new Set([
-      ChannelType.GuildText,
-      ChannelType.PublicThread,
-      ChannelType.PrivateThread,
-      ChannelType.AnnouncementThread,
-    ]);
-    const isAllowedType = allowedTypes.has(ch?.type);
-    const canSend = !!ch?.permissionsFor?.(interaction.client.user)?.has?.(PermissionsBitField.Flags.SendMessages);
-    if (!channel_id || !isAllowedType || !canSend) {
-      try { console.warn('[cmd.warn] /search invalid_channel', { id: channel_id || null, type: ch?.type, canSend }); } catch {}
-      await safeEdit({ content: 'Dieser Kanal ist ungeeignet. Bitte nutze einen Textkanal, in dem der Bot schreiben darf.' });
-      return;
-    }
-  } catch {}
 
   const validation = validateUrl(urlRaw);
-  if (validation !== true) {
-    await safeEdit({ content: validation });
-    return;
-  }
+  if (validation !== true) { await safeEdit({ content: validation }); return; }
 
   try {
     const searches = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -135,16 +194,9 @@ export const execute = async (interaction) => {
     } else {
       searches.push(next);
     }
+    await saveSearches(searches);
+
     try {
-      fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
-      // best effort: also mirror to config path for compatibility
-      try { fs.writeFileSync(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(searches, null, 2)); } catch {}
-    } catch (e) {
-      console.error('\nError saving new search (alias):', e);
-      await safeEdit({ content: 'There was an error starting the monitoring.' });
-    }
-    try {
-      // Prefer incremental rebuild so updates apply immediately
       const mod = await import('../run.js');
       setTimeout(() => {
         try {
@@ -153,8 +205,16 @@ export const execute = async (interaction) => {
           else if (typeof mod.addSearch === 'function') mod.addSearch(interaction.client, next);
         } catch {}
       }, 0);
-    } catch (err) {
-      console.error('Live scheduling rebuild failed (alias):', err);
+    } catch {}
+
+    const WANT_AUTO = (interaction.options.getBoolean?.('auto_webhooks') ?? (String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1'));
+    if (WANT_AUTO) {
+      try {
+        const { ensureWebhooksForChannel } = await import('../infra/webhooksManager.js');
+        await ensureWebhooksForChannel(ch, Number(process.env.WEBHOOKS_PER_CHANNEL || 3), String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook'));
+      } catch (e) {
+        try { await safeEdit({ content: 'Suche angelegt. Hinweis: Keine Webhook-Rechte, poste direkt in den Kanal.' }); } catch {}
+      }
     }
 
     const embed = new EmbedBuilder()
@@ -163,9 +223,10 @@ export const execute = async (interaction) => {
       .setColor(0x00FF00);
     embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
     await safeEdit({ embeds: [embed] });
-    try { console.log('[cmd.result] /search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
+    try { console.log('[cmd.result] /search %s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
   } catch (err) {
-    console.error('Error starting monitoring (alias):', err);
-    await safeEdit({ content: 'There was an error starting the monitoring.' });
+    console.error('Error starting monitoring:', err);
+    await safeEdit({ content: 'Fehler beim Starten der Überwachung.' });
   }
 };
+

@@ -15,7 +15,12 @@ const loadCommands = async () => {
   // Reset and de-dupe by command name to avoid duplicates across re-registrations
   commands.length = 0;
   const byName = new Map();
+  const DISABLE_LEGACY = String(process.env.COMMANDS_DISABLE_LEGACY || '1') === '1';
   for (const file of commandFiles) {
+    if (DISABLE_LEGACY) {
+      // Skip legacy aliases to reduce duplicates in the UI
+      if (file === 'new_search.js' || file === 'delete-search.js' || file === 'search_alias.js') continue;
+    }
     const module = await import(`./commands/${file}`);
     const json = module.data.toJSON();
     byName.set(String(json.name), json);
