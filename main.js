@@ -169,6 +169,7 @@ async function startMonitorsOnce(where = 'unknown'){
 const COMMANDS_ENABLED = String(process.env.COMMANDS_DISABLE || '0') !== '1';
 
 async function onClientReady() {
+  if (clientReady) return; // guard double-fire between 'ready' and future 'clientReady'
   clientReady = true;
   console.log(`Logged in as ${client.user.tag}!`);
   try { state.watchers = Array.isArray(mySearches) ? mySearches.length : 0; } catch {}
