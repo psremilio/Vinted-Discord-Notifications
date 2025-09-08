@@ -181,7 +181,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 console.log(`[found] rule=${channel.channelName} items=${filtered.length} firstId=${filtered[0]?.id} firstAgeMs=${age0}`);
               }
               // Startup fresh-only window: skip posting of old items for first N minutes
-              const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 0);
+              // Default: drop old items briefly after boot to avoid initial spam
+              const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 2);
               if (skipMin > 0) {
                 const sinceStartMs = Date.now() - (state.startedAt?.getTime?.() || 0);
                 if (sinceStartMs < skipMin * 60 * 1000) {
