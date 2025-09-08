@@ -105,6 +105,13 @@ export async function sendQueued(channel, payload, meta = {}) {
     return { ok: false, reason: 'too_old' };
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
+  // Drop at enqueue if recently posted in same channel (cross-rule duplicate)
+  try {
+    if (itemId && channel?.id && _isRecentlyPosted(channel.id, itemId)) {
+      if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log('[post.drop_dup_recent]', 'channel=', channel.id, 'item=', itemId);
+      return { ok: true };
+    }
+  } catch {}
   // Fresh-fast path: bypass reorder buffer for very fresh items
   const FRESH_FAST_MS = Math.max(0, Number(process.env.FRESH_FASTPATH_MS || 60_000));
   const isFreshFast = FRESH_FAST_MS > 0 && createdAt && (Date.now() - createdAt) <= FRESH_FAST_MS;
@@ -128,6 +135,28 @@ function _getChanSet(cid) { let s = chanQueued.get(cid); if (!s) { s = new Set()
 function _isQueued(cid, id) { if (!cid || !id) return false; const s = chanQueued.get(cid); return s ? s.has(id) : false; }
 function _markQueued(cid, id) { if (!cid || !id) return; _getChanSet(cid).add(id); }
 function _unmarkQueued(cid, id) { if (!cid || !id) return; const s = chanQueued.get(cid); if (s) s.delete(id); }
+// Recently posted guard (to avoid duplicates across overlapping rules to same channel)
+const recentPosted = new Map(); // channelId -> Map<itemId, expireAt>
+const DUP_TTL_MS = Math.max(30_000, Number(process.env.DUPLICATE_TTL_MS || 120_000));
+function _gcRecent(cid) {
+  try {
+    const m = recentPosted.get(cid); if (!m) return;
+    const now = Date.now();
+    for (const [id, exp] of m.entries()) if (!exp || exp <= now) m.delete(id);
+    if (m.size === 0) recentPosted.delete(cid);
+  } catch {}
+}
+function _isRecentlyPosted(cid, id) {
+  if (!cid || !id) return false;
+  _gcRecent(cid);
+  const m = recentPosted.get(cid); if (!m) return false;
+  return m.has(id);
+}
+function _markRecentlyPosted(cid, id) {
+  if (!cid || !id) return;
+  let m = recentPosted.get(cid); if (!m) { m = new Map(); recentPosted.set(cid, m); }
+  m.set(id, Date.now() + DUP_TTL_MS);
+}
 function getBucketByKey(key, channelId) {
   let b = routeBuckets.get(key);
   if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), inflight: 0, channelId: String(channelId || '') }; routeBuckets.set(key, b); }
@@ -298,8 +327,8 @@ async function doSend(job, bucket) {
         console.log('[diag.post]', 'channel=', String(job?.channel?.id || ''), 'item=', String(job?.itemId || ''), 'age_listed_ms=', createdAge, 'queued_ms=', latency);
       }
     } catch {}
-    // mark channel-level as done
-    try { if (job?.itemId && job?.channel?.id) _unmarkQueued(job.channel.id, job.itemId); } catch {}
+    // mark channel-level as done and recent to avoid rapid duplicates across overlapping rules
+    try { if (job?.itemId && job?.channel?.id) { _unmarkQueued(job.channel.id, job.itemId); _markRecentlyPosted(job.channel.id, job.itemId); } } catch {}
     return res;
   } catch (e) {
     if (is429(e)) metrics.discord_rate_limit_hits.inc();
