@@ -118,17 +118,34 @@ export async function sendQueued(channel, payload, meta = {}) {
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
-const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl}>, cooldownUntil: number, ids:Set<string>, _rr:number, inflight:number }
-function bucketKey(channel) { return `chan:${channel?.id || 'UNKNOWN'}`; }
-function getBucket(channel) {
-  const key = bucketKey(channel);
+const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl}>, cooldownUntil: number, ids:Set<string>, inflight:number, channelId:string }
+const rrByChannel = new Map(); // channelId -> next webhook index
+function getBucketByKey(key, channelId) {
   let b = routeBuckets.get(key);
-  if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), _rr: 0, inflight: 0 }; routeBuckets.set(key, b); }
+  if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), inflight: 0, channelId: String(channelId || '') }; routeBuckets.set(key, b); }
   return [key, b];
 }
 
 function enqueueRoute(channel, payload, discoveredAt, createdAt) {
-  const [, b] = getBucket(channel);
+  const cid = channel?.id || 'UNKNOWN';
+  // Decide route (per-webhook when available)
+  let routeKey = `chan:${cid}`;
+  let chosenWebhook = null;
+  const webhooks = cid ? getWebhooksForChannelId(cid) : null;
+  if (webhooks && webhooks.length) {
+    const rr = rrByChannel.get(cid) || 0;
+    chosenWebhook = webhooks[rr % webhooks.length];
+    rrByChannel.set(cid, (rr + 1) % webhooks.length);
+    routeKey = `chan:${cid}:wh:${rr % webhooks.length}`;
+  } else if (cid && String(process.env.AUTO_WEBHOOKS_ON_POST || '1') === '1') {
+    // lazy auto-ensure (non-blocking)
+    if (!ensureInFlight.has(cid)) {
+      ensureInFlight.add(cid);
+      ensureWebhooksForChannel(channel).catch(()=>{}).finally(()=>ensureInFlight.delete(cid));
+      if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[webhooks.ensure.lazy] channel=${cid}`);
+    }
+  }
+  const [, b] = getBucketByKey(routeKey, cid);
   // coalesce duplicates per channel by itemId if present
   let itemId = payload?.embeds?.[0]?.data?.fields?.find?.(f => /`\d+`/.test(f?.value || ''))?.value?.replace(/`/g,'');
   // prefer explicit meta if provided in route (we pass via meta.itemId earlier)
@@ -137,21 +154,7 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   const idKey = itemId ? String(itemId) : null;
   if (idKey && b.ids.has(idKey)) return; // already queued
   const job = { channel, payload, discoveredAt, createdAt, firstMatchedAt, itemId: idKey };
-  // If webhooks configured for this channel, pick next webhook URL (round-robin by length)
-  const webhooks = channel?.id ? getWebhooksForChannelId(channel.id) : null;
-  if (webhooks && webhooks.length) {
-    const idx = b._rr || 0;
-    job.webhookUrl = webhooks[idx % webhooks.length];
-    b._rr = (idx + 1) % webhooks.length;
-  } else if (channel?.id && String(process.env.AUTO_WEBHOOKS_ON_POST || '1') === '1') {
-    // lazy auto-ensure (non-blocking)
-    const cid = channel.id;
-    if (!ensureInFlight.has(cid)) {
-      ensureInFlight.add(cid);
-      ensureWebhooksForChannel(channel).catch(()=>{}).finally(()=>ensureInFlight.delete(cid));
-      if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[webhooks.ensure.lazy] channel=${cid}`);
-    }
-  }
+  if (chosenWebhook) job.webhookUrl = chosenWebhook;
   b.q.push(job);
   if (idKey) b.ids.add(idKey);
 }
@@ -200,12 +203,15 @@ setInterval(() => {
   }
   // per-route depth metric
   try {
+    const sums = new Map();
     for (const k of keys) {
       const b = routeBuckets.get(k);
       if (!b) continue;
-      const cid = k.replace('chan:','');
-      metrics.route_queue_depth.set({ channel: cid }, b.q.length);
+      const cid = String(b.channelId || '').replace('chan:','');
+      const prev = sums.get(cid) || 0;
+      sums.set(cid, prev + (b.q?.length || 0));
     }
+    for (const [cid, depth] of sums.entries()) metrics.route_queue_depth.set({ channel: cid }, depth);
   } catch {}
 }, 1000);
 
@@ -213,14 +219,13 @@ setInterval(() => {
 export function purgeChannelQueues(channelId) {
   try {
     if (!channelId) return;
-    const key = bucketKey({ id: channelId });
-    const b = routeBuckets.get(key);
-    if (b) {
-      b.q = [];
-      b.ids = new Set();
-      routeBuckets.delete(key);
-      try { metrics.route_queue_depth.set({ channel: String(channelId) }, 0); } catch {}
+    const prefix = `chan:${channelId}`;
+    for (const k of Array.from(routeBuckets.keys())) {
+      if (!k.startsWith(prefix)) continue;
+      const b = routeBuckets.get(k);
+      if (b) { b.q = []; b.ids = new Set(); routeBuckets.delete(k); }
     }
+    try { metrics.route_queue_depth.set({ channel: String(channelId) }, 0); } catch {}
     const st = chanBuf.get(channelId);
     if (st) {
       try { clearInterval(st.timer); } catch {}
