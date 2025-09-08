@@ -29,8 +29,8 @@ export function tierOf(ruleId) {
 
 export const TIER_TARGET_SEC = {
   // More aggressive polling defaults to keep discovery in the 10–30s band
-  T0: Number(process.env.T0_TARGET_SEC || 6),
-  T1: Number(process.env.T1_TARGET_SEC || 10),
-  T2: Number(process.env.T2_TARGET_SEC || 15),
+  T0: Number(process.env.T0_TARGET_SEC || 5),
+  T1: Number(process.env.T1_TARGET_SEC || 8),
+  T2: Number(process.env.T2_TARGET_SEC || 12),
 };
 
