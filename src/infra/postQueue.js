@@ -130,6 +130,8 @@ export async function sendQueued(channel, payload, meta = {}) {
     return { ok: false, reason: 'too_old' };
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
+  // Use a per-route enqueue timestamp to measure queue latency fairly per channel
+  const discoveredAtLocal = Date.now();
   // Optional: ensure webhooks synchronously before first enqueue when ALWAYS_WEBHOOK=1
   if (ALWAYS_WEBHOOK && channel?.id) {
     try {
@@ -152,13 +154,13 @@ export async function sendQueued(channel, payload, meta = {}) {
   if (!isFreshFast && REORDER_WINDOW_MS > 0 && channel?.id) {
     if (itemId && _isQueued(channel.id, itemId)) return { ok: true, buffered: true };
     const st = ensureChannelBuffer(channel);
-    st.buf.push({ discoveredAt, createdAt, firstMatchedAt, channel, payload, itemId });
+    st.buf.push({ discoveredAt: discoveredAtLocal, createdAt, firstMatchedAt, channel, payload, itemId });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
     if (itemId) _markQueued(channel.id, itemId);
     diag('enqueue', { cid: channel?.id || null, item: itemId, mode: 'buffer', reorder_depth: st.buf.length });
     return { ok: true, buffered: true };
   }
-  enqueueRoute(channel, payload, discoveredAt, createdAt, itemId, firstMatchedAt);
+  enqueueRoute(channel, payload, discoveredAtLocal, createdAt, itemId, firstMatchedAt);
   diag('enqueue', { cid: channel?.id || null, item: itemId, mode: 'route' });
   return { ok: true, enqueued: true };
 }
@@ -260,7 +262,8 @@ setInterval(() => {
                         : 1;
   // do up to perBucketSends passes for fairness
   // prioritize buckets with freshest head createdAt when backlog is high
-  if (totalQ > 100) {
+  // Prioritize buckets with freshest heads sooner to reduce tail latencies
+  if (totalQ > 20) {
     const headCreated = (k)=>{ const b=routeBuckets.get(k); const q=b?.q||[]; if(!q.length) return 0; let m=0; for (const it of q) { const v=Number(it?.createdAt||0); if (v>m) m=v; } return m; };
     keys = keys.slice().sort((a,b)=> headCreated(b)-headCreated(a));
   }
