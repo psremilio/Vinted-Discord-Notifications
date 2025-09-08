@@ -2,9 +2,11 @@
 // Allow CROSS_RULE_DEDUP=1 to force global scope
 const CROSS = String(process.env.CROSS_RULE_DEDUP || '0') === '1';
 // Supported scopes: 'per_rule', 'global', 'channel', 'family'
+// Accept both DEDUPE_SCOPE and common typo DEDUPLE_SCOPE
+const _RAW_SCOPE = process.env.DEDUPE_SCOPE || process.env.DEDUPLE_SCOPE || 'channel';
 // Default to 'channel' to allow cross-posting between parent/children while
 // preventing duplicates within the same Discord channel.
-export const DEDUPE_SCOPE = CROSS ? 'global' : (process.env.DEDUPE_SCOPE || 'channel');
+export const DEDUPE_SCOPE = CROSS ? 'global' : _RAW_SCOPE;
 export const PROCESSED_TTL_MIN = parseInt(process.env.PROCESSED_TTL_MIN ?? '60', 10);
 export const ttlMs = PROCESSED_TTL_MIN * 60 * 1000;
 
