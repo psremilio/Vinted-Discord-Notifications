@@ -253,12 +253,13 @@ setInterval(() => {
   // dynamic per-bucket sends (burst window)
   const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
   const cooldown = metrics.discord_cooldown_active.get?.() || 0;
-  const perBucketSends = (!cooldown && totalQ > 1500) ? 12
-                        : (!cooldown && totalQ > 800)  ? 8
-                        : (!cooldown && totalQ > 400)  ? 6
-                        : (!cooldown && totalQ > 200)  ? 4
-                        : (!cooldown && totalQ > 60)   ? 3
-                        : (!cooldown && totalQ > 20)   ? 2
+  // More eager multi-pass when backlog is moderate to cut tails
+  const perBucketSends = (!cooldown && totalQ > 600) ? 12
+                        : (!cooldown && totalQ > 300) ? 8
+                        : (!cooldown && totalQ > 150) ? 6
+                        : (!cooldown && totalQ > 60)  ? 4
+                        : (!cooldown && totalQ > 25)  ? 3
+                        : (!cooldown && totalQ > 10)  ? 2
                         : 1;
   // do up to perBucketSends passes for fairness
   // prioritize buckets with freshest head createdAt when backlog is high
@@ -294,12 +295,13 @@ setInterval(() => {
         continue;
       }
       // per-bucket dynamic concurrency: 1–4 depending on backlog and cooldown (more aggressive when backlog high)
+      // Slightly lower thresholds so small per-bucket queues can send 2-3 in flight
       const CHAN_CONC = (!cooldown && b.q.length > 200) ? 12
                       : (!cooldown && b.q.length > 120) ? 9
                       : (!cooldown && b.q.length > 60)  ? 7
                       : (!cooldown && b.q.length > 30)  ? 4
-                      : (!cooldown && b.q.length > 10)  ? 3
-                      : (!cooldown && b.q.length > 3)   ? 2
+                      : (!cooldown && b.q.length > 6)   ? 3
+                      : (!cooldown && b.q.length > 2)   ? 2
                       : 1;
       if ((b.inflight || 0) >= CHAN_CONC) continue;
       // priority: createdAt desc, then firstMatchedAt desc, then discoveredAt desc
