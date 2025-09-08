@@ -108,9 +108,11 @@ export async function sendQueued(channel, payload, meta = {}) {
   const FRESH_FAST_MS = Math.max(0, Number(process.env.FRESH_FASTPATH_MS || 60_000));
   const isFreshFast = FRESH_FAST_MS > 0 && createdAt && (Date.now() - createdAt) <= FRESH_FAST_MS;
   if (!isFreshFast && REORDER_WINDOW_MS > 0 && channel?.id) {
+    if (itemId && _isQueued(channel.id, itemId)) return { ok: true, buffered: true };
     const st = ensureChannelBuffer(channel);
     st.buf.push({ discoveredAt, createdAt, firstMatchedAt, channel, payload, itemId });
     try { metrics.reorder_buffer_depth.set({ channel: channel.id }, st.buf.length); } catch {}
+    if (itemId) _markQueued(channel.id, itemId);
     return { ok: true, buffered: true };
   }
   enqueueRoute(channel, payload, discoveredAt, createdAt, itemId, firstMatchedAt);
@@ -118,8 +120,13 @@ export async function sendQueued(channel, payload, meta = {}) {
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
-const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl}>, cooldownUntil: number, ids:Set<string>, inflight:number, channelId:string }
+const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl,_retries?:number}>, cooldownUntil: number, ids:Set<string>, inflight:number, channelId:string }
 const rrByChannel = new Map(); // channelId -> next webhook index
+const chanQueued = new Map(); // channelId -> Set<itemId>
+function _getChanSet(cid) { let s = chanQueued.get(cid); if (!s) { s = new Set(); chanQueued.set(cid, s); } return s; }
+function _isQueued(cid, id) { if (!cid || !id) return false; const s = chanQueued.get(cid); return s ? s.has(id) : false; }
+function _markQueued(cid, id) { if (!cid || !id) return; _getChanSet(cid).add(id); }
+function _unmarkQueued(cid, id) { if (!cid || !id) return; const s = chanQueued.get(cid); if (s) s.delete(id); }
 function getBucketByKey(key, channelId) {
   let b = routeBuckets.get(key);
   if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), inflight: 0, channelId: String(channelId || '') }; routeBuckets.set(key, b); }
@@ -128,6 +135,13 @@ function getBucketByKey(key, channelId) {
 
 function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   const cid = channel?.id || 'UNKNOWN';
+  // Determine item id early for global dedupe
+  let itemId = typeof arguments[4] === 'string' ? arguments[4] : null;
+  if (!itemId) itemId = payload?.embeds?.[0]?.data?.fields?.find?.(f => /`\d+`/.test(f?.value || ''))?.value?.replace(/`/g,'');
+  const firstMatchedAt = typeof arguments[5] === 'number' ? arguments[5] : undefined;
+  const idKey = itemId ? String(itemId) : null;
+  if (idKey && _isQueued(cid, idKey)) return; // already queued globally for this channel
+
   // Decide route (per-webhook when available)
   let routeKey = `chan:${cid}`;
   let chosenWebhook = null;
@@ -146,17 +160,12 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
     }
   }
   const [, b] = getBucketByKey(routeKey, cid);
-  // coalesce duplicates per channel by itemId if present
-  let itemId = payload?.embeds?.[0]?.data?.fields?.find?.(f => /`\d+`/.test(f?.value || ''))?.value?.replace(/`/g,'');
-  // prefer explicit meta if provided in route (we pass via meta.itemId earlier)
-  if (typeof arguments[4] === 'string') itemId = arguments[4];
-  const firstMatchedAt = typeof arguments[5] === 'number' ? arguments[5] : undefined;
-  const idKey = itemId ? String(itemId) : null;
-  if (idKey && b.ids.has(idKey)) return; // already queued
+  // coalesce duplicates per bucket
+  if (idKey && b.ids.has(idKey)) return;
   const job = { channel, payload, discoveredAt, createdAt, firstMatchedAt, itemId: idKey };
   if (chosenWebhook) job.webhookUrl = chosenWebhook;
   b.q.push(job);
-  if (idKey) b.ids.add(idKey);
+  if (idKey) { b.ids.add(idKey); _markQueued(cid, idKey); }
 }
 
 // WFQ-like scheduler: per second serve up to currentQps, 1 msg per bucket per tick
@@ -225,6 +234,7 @@ export function purgeChannelQueues(channelId) {
       const b = routeBuckets.get(k);
       if (b) { b.q = []; b.ids = new Set(); routeBuckets.delete(k); }
     }
+    try { const s = chanQueued.get(String(channelId)); if (s) s.clear(); } catch {}
     try { metrics.route_queue_depth.set({ channel: String(channelId) }, 0); } catch {}
     const st = chanBuf.get(channelId);
     if (st) {
@@ -283,6 +293,8 @@ async function doSend(job, bucket) {
         console.log('[diag.post]', 'channel=', String(job?.channel?.id || ''), 'item=', String(job?.itemId || ''), 'age_listed_ms=', createdAge, 'queued_ms=', latency);
       }
     } catch {}
+    // mark channel-level as done
+    try { if (job?.itemId && job?.channel?.id) _unmarkQueued(job.channel.id, job.itemId); } catch {}
     return res;
   } catch (e) {
     if (is429(e)) metrics.discord_rate_limit_hits.inc();
