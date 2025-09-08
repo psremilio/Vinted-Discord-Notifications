@@ -732,11 +732,24 @@ export function rebuildFromList(client, list) {
   try { metrics.scheduler_rules_total.set(activeSearches.size); } catch {}
 }
 
+function resolveChannelsPath(fsmod, path) {
+  try {
+    const pData = path.resolve('./data/channels.json');
+    if (fsmod.existsSync(path.resolve('./data')) && fsmod.existsSync(pData)) return pData;
+  } catch {}
+  try {
+    const pData = path.resolve('/data/channels.json');
+    if (fsmod.existsSync('/data') && fsmod.existsSync(pData)) return pData;
+  } catch {}
+  return path.resolve('./config/channels.json');
+}
+
 export async function rebuildFromDisk(client) {
   try {
     const fsmod = await import('fs');
     const path = await import('path');
-    const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    const p = resolveChannelsPath(fsmod, path);
+    const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
     try { learnFromRules(searches || []); } catch {}
     rebuildFromList(client, searches);
   } catch (e) {
@@ -749,7 +762,8 @@ export async function incrementalRebuildFromDisk(client) {
   try {
     const fsmod = await import('fs');
     const path = await import('path');
-    const searches = JSON.parse(fsmod.readFileSync(path.resolve('./config/channels.json'),'utf-8'));
+    const p = resolveChannelsPath(fsmod, path);
+    const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
     setTimeout(() => {
       try {
         console.log('[rebuild] mode=incremental');
