@@ -40,6 +40,19 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
     if (!list.length) return;
 
     for (const item of list) {
+        // Early guard: avoid building payload for items that will be dropped by posting-age policy
+        try {
+          const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
+          if (POST_MAX_AGE_MS > 0) {
+            const createdMs0 = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+            if (createdMs0 && (Date.now() - createdMs0) > POST_MAX_AGE_MS) {
+              if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+                try { console.log('[post.skip_old.pre]', 'item=', item.id, 'age_ms=', (Date.now() - createdMs0)); } catch {}
+              }
+              continue;
+            }
+          }
+        } catch {}
         const origin = new URL(item.url).origin;
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()

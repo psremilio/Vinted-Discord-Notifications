@@ -37,6 +37,7 @@ export const metrics = {
   fetch_ok_total: new Counter('fetch_ok_total'),
   fetch_skipped_total: new Counter('fetch_skipped_total'),
   fetch_softfail_total: new Counter('fetch_softfail_total'),
+  ingest_dropped_too_old_total: new LabeledCounter('ingest_dropped_too_old_total', ['rule']),
   discord_rate_limit_hits: new Counter('discord_rate_limit_hits'),
   discord_queue_depth: new Gauge('discord_queue_depth'),
   discord_dropped_total: new Counter('discord_dropped_total'),
@@ -119,6 +120,8 @@ export function serializeMetrics() {
   lineHelpType('fetch_ok_total', 'Total successful fetches', 'counter'); out.push(`fetch_ok_total ${metrics.fetch_ok_total.get()}`);
   lineHelpType('fetch_skipped_total', 'Total skipped fetch slots', 'counter'); out.push(`fetch_skipped_total ${metrics.fetch_skipped_total.get()}`);
   lineHelpType('fetch_softfail_total', 'Total soft fails', 'counter'); out.push(`fetch_softfail_total ${metrics.fetch_softfail_total.get()}`);
+  lineHelpType('ingest_dropped_too_old_total', 'Ingest drops due to age over threshold', 'counter');
+  for (const e of metrics.ingest_dropped_too_old_total.entries()) out.push(`ingest_dropped_too_old_total{rule=\"${e.labels.rule}\"} ${e.value}`);
   lineHelpType('discord_rate_limit_hits', 'Discord 429 hits observed', 'counter'); out.push(`discord_rate_limit_hits ${metrics.discord_rate_limit_hits.get()}`);
   // Gauges (scalar)
   lineHelpType('rules_active', 'Active rules', 'gauge'); out.push(`rules_active ${metrics.rules_active.get()}`);

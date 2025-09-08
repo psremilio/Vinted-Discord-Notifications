@@ -270,12 +270,31 @@ const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
   const cutoff = Date.now() - recentMs;
   let familyKey = null; try { familyKey = buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch {}
-  const filteredArticles = items.filter(({ photo, id, title }) =>
-    photo &&
-    (DISABLE_RECENT || (photo.high_resolution?.timestamp || 0) * 1000 > cutoff) &&
-    !processedStore?.has?.(dedupeKeyForChannel(channel, id, familyKey)) &&
-    !titleBlacklist.some(word => (title || '').toLowerCase().includes(word))
-  );
+  const INGEST_MAX_AGE_MS = Math.max(0, Number(process.env.INGEST_MAX_AGE_MS || 0));
+  const now = Date.now();
+  const filteredArticles = items.filter((it) => {
+    try {
+      const id = it.id;
+      const title = it.title;
+      const photo = it.photo;
+      const hasPhoto = !!photo;
+      const tsSec = Number(photo?.high_resolution?.timestamp || 0);
+      const recentOk = DISABLE_RECENT || (tsSec * 1000 > cutoff);
+      const key = dedupeKeyForChannel(channel, id, familyKey);
+      const dup = !!processedStore?.has?.(key);
+      // Hard ingest age cap (created_at_ts preferred, else photo.timestamp)
+      const createdMs = Number(((it.created_at_ts || 0) * 1000)) || (tsSec * 1000) || 0;
+      const tooOldIngest = INGEST_MAX_AGE_MS > 0 && createdMs > 0 && (now - createdMs) > INGEST_MAX_AGE_MS;
+      if (tooOldIngest) {
+        try { processedStore?.set?.(key, Date.now(), { ttl: undefined }); } catch {}
+        try { metrics.ingest_dropped_too_old_total?.inc({ rule: String(channel.channelName || '') }); } catch {}
+      }
+      const titleBlocked = titleBlacklist.some(word => String(title || '').toLowerCase().includes(word));
+      return hasPhoto && recentOk && !dup && !tooOldIngest && !titleBlocked;
+    } catch {
+      return false;
+    }
+  });
 
   d(`[debug][rule:${channel.channelName}] matches=${filteredArticles.length} ` +
     `firstIds=${filteredArticles.slice(0, 5).map(x => x.id).join(',')}`);

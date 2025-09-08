@@ -148,8 +148,9 @@ export const runSearch = async (client, channel, opts = {}) => {
         const qDepth = (metrics.discord_queue_depth?.get?.() ?? 0);
         const HIGHQ = Math.max(200, Number(process.env.QUEUE_HIGH_WATER || 500));
         const lowBacklog = qDepth < HIGHQ;
-        const bfDefault = Number(process.env.BACKFILL_PAGES || 1);
-        const bfPages = useBackfill && lowBacklog ? Number(process.env.NO_NEW_BACKFILL_PAGES || Math.max(2, bfDefault)) : 1;
+        const bfDefault = Math.max(1, Number(process.env.BACKFILL_PAGES || 1));
+        // When backlog is low and backfill condition is on, use configured BACKFILL_PAGES; otherwise stick to 1 page
+        const bfPages = useBackfill && lowBacklog ? bfDefault : 1;
         try { metrics.backfill_pages_active.set(countActiveBackfill()); } catch {}
         const tPoll0 = Date.now();
         const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, { ...opts, backfillPages: bfPages }));
