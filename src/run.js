@@ -429,6 +429,25 @@ export const runSearch = async (client, channel, opts = {}) => {
                 if (FANOUT_DEBUG) ll('[fanout.child.result]', 'child=', childRule.channelName, 'post=', gated.length, 'drop_stale=', dropStale, 'drop_gate=', dropGate);
                 if (!gated.length) continue;
                 await postArticles(gated, dest, childRule.channelName);
+                // Optional: also mirror child posts to the parent channel so the
+                // aggregator (e.g., nike-all) always receives items even if the
+                // parent fetch is slow or temporarily failing.
+                try {
+                  if (String(process.env.FANOUT_MIRROR_TO_PARENT || '1') === '1') {
+                    const parentDest = await getChannelById(client, channel.channelId);
+                    if (parentDest) {
+                      await postArticles(gated, parentDest, channel.channelName);
+                      // mark as processed for parent rule to avoid later duplicates
+                      try {
+                        for (const it of gated) {
+                          const fkP = (()=>{ try { return buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch { return null; } })();
+                          const keyP = dedupeKeyForChannel(channel, it.id, fkP);
+                          processedStore.set(keyP, Date.now(), { ttl: ttlMs });
+                        }
+                      } catch {}
+                    }
+                  }
+                } catch {}
                 try { for (const it of gated) childCovered.add(String(it.id)); } catch {}
                 // mark seen for child rule after post
                 gated.forEach(article => {
