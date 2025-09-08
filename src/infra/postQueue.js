@@ -1,6 +1,7 @@
 import Bottleneck from 'bottleneck';
 import { metrics } from './metrics.js';
 import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksManager.js';
+import { remove as removeWebhookFromStore } from './webhooksStore.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 4));
@@ -319,6 +320,21 @@ async function doSend(job, bucket) {
       } catch {}
       return null;
     }
+    // Non-429 error: if webhook path failed, attempt channel fallback and prune bad webhook
+    try {
+      if (job?.webhookUrl) {
+        try { removeWebhookFromStore(String(job?.channel?.id || ''), String(job.webhookUrl)); } catch {}
+        try {
+          const res2 = await job.channel.send(job.payload);
+          try { metrics.discord_channel_send_ok_total.inc({ channel: String(job?.channel?.id || '') }); } catch {}
+          try { if (job?.itemId && job?.channel?.id) _unmarkQueued(job.channel.id, job.itemId); } catch {}
+          if (String(process.env.LOG_ROUTE || '0') === '1') {
+            try { console.log('[post.send]', 'via=fallback-channel', 'channel=', String(job?.channel?.id||''), 'item=', String(job?.itemId||'')); } catch {}
+          }
+          return res2;
+        } catch {}
+      }
+    } catch {}
     throw e;
   }
 }
@@ -342,6 +358,9 @@ async function sendWebhook(url, payload, channelId) {
     try {
       console.log('[webhooks.send] channel=%s status=%d reset_after=%s', String(channelId||''), res.status, res.headers.get('x-ratelimit-reset-after'));
     } catch {}
+  }
+  if (String(process.env.LOG_ROUTE || '0') === '1') {
+    try { console.log('[post.send]', 'via=webhook', 'channel=', String(channelId||'')); } catch {}
   }
   if (res.status === 429) {
     metrics.discord_rate_limit_hits.inc();
