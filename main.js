@@ -168,7 +168,7 @@ async function startMonitorsOnce(where = 'unknown'){
 // Enable slash commands by default; can be disabled via COMMANDS_DISABLE=1
 const COMMANDS_ENABLED = String(process.env.COMMANDS_DISABLE || '0') !== '1';
 
-client.on('ready',async()=>{
+async function onClientReady() {
   clientReady = true;
   console.log(`Logged in as ${client.user.tag}!`);
   try { state.watchers = Array.isArray(mySearches) ? mySearches.length : 0; } catch {}
@@ -183,7 +183,10 @@ client.on('ready',async()=>{
     const GRACE = Math.max(0, Number(process.env.COMMANDS_BOOT_GRACE_MS || 3000));
     setTimeout(() => startMonitorsOnce('ready_grace'), GRACE);
   } catch { startMonitorsOnce('ready'); }
-});
+}
+client.on('ready', onClientReady);
+// Prepare for discord.js v15 rename (clientReady)
+try { client.on('clientReady', onClientReady); } catch {}
 // Always handle interactions when commands are enabled
 client.on('interactionCreate',interaction=>{
   if (!COMMANDS_ENABLED) return;

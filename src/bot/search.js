@@ -270,7 +270,8 @@ const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
   const cutoff = Date.now() - recentMs;
   let familyKey = null; try { familyKey = buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch {}
-  const INGEST_MAX_AGE_MS = Math.max(0, Number(process.env.INGEST_MAX_AGE_MS || 0));
+  const defaultCap = (String(process.env.DISABLE_RECENT || '0') === '1') ? Number(process.env.INGEST_DEFAULT_CAP_MS || 30 * 60 * 1000) : 0; // 30min when RECENT filter is disabled
+  const INGEST_MAX_AGE_MS = Math.max(0, Number(process.env.INGEST_MAX_AGE_MS || defaultCap));
   const now = Date.now();
   const filteredArticles = items.filter((it) => {
     try {

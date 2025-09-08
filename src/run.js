@@ -191,11 +191,39 @@ export const runSearch = async (client, channel, opts = {}) => {
                 if (st && st.warmup > 0) { st.warmup -= 1; familyState.set(sig, st); fanoutEnabled = false; }
               } catch {}
               if (!fanoutEnabled) ll('[fanout.warmup]', 'parent=', channel.channelName, 'parent_url=', canonicalizeUrl(channel.url));
-  for (const child of (fanoutEnabled ? channel.children : [])) {
+  const PARTITION = String(process.env.FANOUT_PRICE_PARTITION || '1') === '1';
+  const rawChildren = fanoutEnabled ? (channel.children || []) : [];
+  const childrenSeq = (() => {
+    if (!PARTITION) return rawChildren;
+    try {
+      const withPrices = rawChildren.map(c => ({
+        node: c,
+        f: c.filters || parseRuleFilters((c.rule||c).url)
+      }));
+      // sort by priceTo ascending; items without numeric priceTo at the end
+      withPrices.sort((a,b) => {
+        const at = Number.isFinite(a.f?.priceTo) ? Number(a.f.priceTo) : Infinity;
+        const bt = Number.isFinite(b.f?.priceTo) ? Number(b.f.priceTo) : Infinity;
+        return at - bt;
+      });
+      return withPrices.map(x => x.node);
+    } catch { return rawChildren; }
+  })();
+  let prevBucketTo = null;
+  for (const child of childrenSeq) {
     const childRule = child.rule || child; // tolerate shape
     const baseFilters = child.filters || parseRuleFilters(childRule.url);
     // Policy: if parent has no catalog constraint, do not enforce child catalogs to avoid empty buckets
     const filters = { ...baseFilters };
+    // Optional: enforce non-overlapping price buckets across children by setting a moving lower bound
+    try {
+      if (PARTITION && Number.isFinite(filters.priceTo)) {
+        const eps = Number(process.env.PRICE_BUCKET_EPSILON || 0.01);
+        const lb = prevBucketTo != null ? (Number(prevBucketTo) + eps) : (Number.isFinite(filters.priceFrom) ? Number(filters.priceFrom) : undefined);
+        if (Number.isFinite(lb)) filters.priceFrom = lb;
+        prevBucketTo = Number(filters.priceTo);
+      }
+    } catch {}
     // Family key guard: ensure child and parent share the same strict key (brand+catalog)
     try {
       const pk = buildFamilyKeyFromURL(channel.url, 'auto');
@@ -318,6 +346,8 @@ export const runSearch = async (client, channel, opts = {}) => {
                 ll('[fanout.eval.child]', 'child=', childRule.channelName, 'child_url=', canonicalizeUrl(childRule.url), 'family_key=', cfk);
                 const matched = [];
                 for (const it of articles) {
+                  const id = String(it?.id ?? '');
+                  if (childCovered.has(id)) continue; // already allocated to a previous child bucket
                   if (itemMatchesFilters(it, filters)) matched.push(it);
                 }
                 // Quarantine logic: if leader has items but child keeps matching 0 for several cycles
@@ -438,7 +468,7 @@ export const runSearch = async (client, channel, opts = {}) => {
               }
               }
             }
-            // Also post to parent rule's channel as usual, unless FANOUT suppresses it
+            // Also post to parent rule's channel, unless suppressed or set to unmatched-only
             if (String(process.env.FANOUT_SUPPRESS_PARENT_POST || '0') !== '1') {
               const dest = await getChannelById(client, channel.channelId);
               if (!dest) {
@@ -461,8 +491,10 @@ export const runSearch = async (client, channel, opts = {}) => {
                   if (ENFORCE_MAX && hardMax > 0 && listedAge > hardMax) continue;
                   fresh.push(it);
                 }
-                // Parent post mode: all|unmatched|fresh (default all)
-                let PMODE = String(process.env.FANOUT_PARENT_POST_MODE || 'all').toLowerCase();
+                // Parent post mode: all|unmatched|fresh (default: unmatched when children exist)
+                const hasChildren = Array.isArray(channel.children) && channel.children.length > 0;
+                const defaultMode = hasChildren ? 'unmatched' : 'all';
+                let PMODE = String(process.env.FANOUT_PARENT_POST_MODE || defaultMode).toLowerCase();
                 try {
                   const qd = (metrics.discord_queue_depth?.get?.() ?? 0);
                   const HW = Math.max(200, Number(process.env.QUEUE_HIGH_WATER || 500));
