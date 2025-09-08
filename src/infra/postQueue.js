@@ -294,6 +294,14 @@ async function doSend(job, bucket) {
       bucket.cooldownUntil = Date.now() + retry;
       discordCooldownUntil = Math.max(discordCooldownUntil, bucket.cooldownUntil);
       try { metrics.discord_cooldown_active.set(1); } catch {}
+      // Requeue the job to attempt after cooldown, to avoid losing items on 429
+      try {
+        job._retries = (job._retries || 0) + 1;
+        if (job._retries <= Number(process.env.POST_MAX_RETRIES_429 || 3)) {
+          bucket.q.unshift(job);
+        }
+      } catch {}
+      return null;
     }
     throw e;
   }
