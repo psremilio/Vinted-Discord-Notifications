@@ -16,7 +16,7 @@ function computeRecentMs() {
   let ms = Math.max(0, RECENT_MAX_MIN) * 60 * 1000;
   // Optional bootstrap: relax recency on cold start until first successful post
   try {
-    const bootMin = Math.max(0, parseInt(process.env.RECENT_BOOTSTRAP_MIN ?? '0', 10));
+    const bootMin = Math.max(0, parseInt(process.env.RECENT_BOOTSTRAP_MIN ?? '60', 10));
     if (!state.lastPostAt && bootMin > 0) {
       const bootMs = bootMin * 60 * 1000;
       if (bootMs > ms) ms = bootMs;
@@ -298,12 +298,11 @@ const selectNewArticles = (items, processedStore, channel) => {
       const title = it.title;
       const photo = it.photo;
       const hasPhoto = !!photo;
-      const tsSec = Number(photo?.high_resolution?.timestamp || 0);
-      const recentOk = DISABLE_RECENT || (tsSec * 1000 > cutoff);
+      const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+      const recentOk = DISABLE_RECENT || (createdMs > cutoff);
       const key = dedupeKeyForChannel(channel, id, familyKey);
       const dup = !!processedStore?.has?.(key);
       // Hard ingest age cap (created_at_ts preferred, else photo.timestamp)
-      const createdMs = Number(((it.created_at_ts || 0) * 1000)) || (tsSec * 1000) || 0;
       const tooOldIngest = INGEST_MAX_AGE_MS > 0 && createdMs > 0 && (now - createdMs) > INGEST_MAX_AGE_MS;
       if (tooOldIngest) {
         try { processedStore?.set?.(key, Date.now(), { ttl: undefined }); } catch {}
@@ -320,11 +319,12 @@ const selectNewArticles = (items, processedStore, channel) => {
     `firstIds=${filteredArticles.slice(0, 5).map(x => x.id).join(',')}`);
 
   if (filteredArticles.length === 0 && items.length) {
+    try { const mins = Math.round(computeRecentMs() / 60000); console.log('[recent.window]', 'mins=', mins, 'rule=', String(channel.channelName||'')); } catch {}
     const sample = items.slice(0, 5);
     for (const item of sample) {
       const hasPhoto = !!item.photo;
-      const tsSec = item.photo?.high_resolution?.timestamp || 0;
-      const isRecent = tsSec * 1000 > cutoff;
+      const createdMs = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+      const isRecent = createdMs > cutoff;
       const wasProcessed = !!processedStore?.has?.(dedupeKeyForChannel(channel, item.id, familyKey));
       const isBlacklisted = titleBlacklist.some(word => (item.title || '').toLowerCase().includes(word));
       let reason = 'unknown';
