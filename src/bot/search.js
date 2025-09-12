@@ -334,6 +334,41 @@ const selectNewArticles = (items, processedStore, channel) => {
       else if (isBlacklisted) reason = 'title_blacklist';
       console.log('[match.debug]', 'rule=', channel.channelName, 'item=', item.id, 'fail=', reason);
     }
+    // Bootstrapping fallback: if no matches and we have never posted since boot,
+    // allow a small number of newest items within a safe max age window.
+    try {
+      if (!state.lastPostAt) {
+        const allowN = Math.max(0, Number(process.env.BOOTSTRAP_ALLOW_TOPN || 3));
+        const maxAgeMs = Math.max(0, Number(process.env.BOOTSTRAP_MAX_AGE_MS || 24 * 60 * 60 * 1000));
+        if (allowN > 0 && maxAgeMs > 0) {
+          const now = Date.now();
+          // Sort by created desc
+          const sorted = items.slice().sort((a,b) => {
+            const ac = Number(((a.created_at_ts || 0) * 1000)) || Number((a.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+            const bc = Number(((b.created_at_ts || 0) * 1000)) || Number((b.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+            return bc - ac;
+          });
+          const picked = [];
+          for (const it of sorted) {
+            if (picked.length >= allowN) break;
+            try {
+              const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+              if (createdMs && (now - createdMs) > maxAgeMs) continue;
+              const key = dedupeKeyForChannel(channel, it.id, familyKey);
+              if (processedStore?.has?.(key)) continue;
+              const isBlacklisted = titleBlacklist.some(word => (it.title || '').toLowerCase().includes(word));
+              if (isBlacklisted) continue;
+              picked.push(it);
+              try { processedStore?.set?.(key, Date.now(), { ttl: ttlMs }); } catch {}
+            } catch {}
+          }
+          if (picked.length) {
+            console.warn('[bootstrap.select]', 'rule=', channel.channelName, 'picked=', picked.length, 'window_ms=', maxAgeMs);
+            return picked;
+          }
+        }
+      }
+    } catch {}
   }
 
   return filteredArticles;
