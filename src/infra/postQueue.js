@@ -449,6 +449,8 @@ async function doSend(job, bucket) {
         } catch {}
       }
     } catch {}
+    // Always log non-429 send errors to surface failures
+    try { console.error('[post.error]', 'channel=', String(job?.channel?.id||''), 'item=', String(job?.itemId||''), 'via=', job?.webhookUrl ? 'webhook' : 'channel', 'err=', e?.message || e); } catch {}
     diag('send.error', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), via: job.webhookUrl ? 'webhook' : 'channel', error: String(e?.message || e) });
     throw e;
   }

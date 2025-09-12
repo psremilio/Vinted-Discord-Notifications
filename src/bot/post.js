@@ -5,7 +5,8 @@ import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
 import { metrics } from '../infra/metrics.js';
 
-const isTextChannelLike = ch => ch && typeof ch.send === "function";
+const isTextChannelLike = ch => ch && typeof ch.send === 'function';
+
 async function sendToTargetsSafely(targets, payload, meta = {}) {
   const list = Array.isArray(targets) ? targets : [targets];
   const results = [];
@@ -30,93 +31,78 @@ async function sendToTargetsSafely(targets, payload, meta = {}) {
   }
   return results;
 }
-const normKey = s => (s ?? "").toLowerCase().trim().replace(/\s+/g,"").replace(/-+/g,"-");
-const singularFallback = k => k.replace(/s$/, "");
 
 export async function postArticles(newArticles, channelToSend, ruleName) {
-    const LIMIT = Math.max(0, Number(process.env.POST_BATCH_LIMIT || 0));
-    const list = Array.isArray(newArticles) ? (LIMIT > 0 ? newArticles.slice(0, LIMIT) : newArticles) : [];
-    const targets = Array.isArray(channelToSend) ? channelToSend : [channelToSend];
-    if (!list.length) return;
+  const LIMIT = Math.max(0, Number(process.env.POST_BATCH_LIMIT || 0));
+  const list = Array.isArray(newArticles) ? (LIMIT > 0 ? newArticles.slice(0, LIMIT) : newArticles) : [];
+  const targets = Array.isArray(channelToSend) ? channelToSend : [channelToSend];
+  if (!list.length) return;
 
-    for (const item of list) {
-        // Early guard: avoid building payload for items that will be dropped by posting-age policy
-        try {
-          const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
-          if (POST_MAX_AGE_MS > 0) {
-            const createdMs0 = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
-            if (createdMs0 && (Date.now() - createdMs0) > POST_MAX_AGE_MS) {
-              if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
-                try { console.log('[post.skip_old.pre]', 'item=', item.id, 'age_ms=', (Date.now() - createdMs0)); } catch {}
-              }
-              continue;
-            }
+  for (const item of list) {
+    try {
+      const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
+      if (POST_MAX_AGE_MS > 0) {
+        const createdMs0 = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+        if (createdMs0 && (Date.now() - createdMs0) > POST_MAX_AGE_MS) {
+          if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+            try { console.log('[post.skip_old.pre]', 'item=', item.id, 'age_ms=', (Date.now() - createdMs0)); } catch {}
           }
-        } catch {}
-        const origin = new URL(item.url).origin;
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setLabel('Details')
-                .setEmoji('🗄️')
-                .setStyle(ButtonStyle.Link)
-                .setURL(`${origin}/items/${item.id}`),
-            new ButtonBuilder()
-                .setLabel('Message')
-                .setEmoji('🪐')
-                .setStyle(ButtonStyle.Link)
-                .setURL(`${origin}/items/${item.id}/want_it/new?`)
-        );
-
-        const ts = (item.created_at_ts != null ? item.created_at_ts : item.photo?.high_resolution?.timestamp); // seconds
-        const listing = {
-            id: item.id,
-            title: (item.__priceDrop ? '[PRICE DROP] ' : '') + (item.title || ''),
-            url: item.url,
-            brand: item.brand_title,
-            size: item.size_title,
-            status: item.status,
-            price: item.price?.amount,
-            currency: item.price?.currency_code,
-            price_eur: item.price?.converted_amount,
-            // pass timestamp in milliseconds for embed time rendering
-            createdAt: ts ? ts * 1000 : undefined,
-            seller_name: item.user?.login,
-            seller_avatar: item.user?.profile_picture?.url,
-            image_url: item.photo?.url,
-            country_code: item.user?.country_code,
-            description: item.description,
-        };
-
-        const payload = {
-            embeds: [buildListingEmbed(listing)],
-            components: [row],
-        };
-        // pass discoveredAt & createdAt through to postQueue for ordering
-        const meta = {
-          discoveredAt: item.discoveredAt || Date.now(),
-          createdAt: listing.createdAt || Date.now(),
-          firstMatchedAt: Number(item.__firstMatchedAt || 0) || undefined,
-          itemId: String(item.id)
-        };
-        try {
-          if (meta.firstMatchedAt) {
-            const age = Math.max(0, Date.now() - Number(meta.firstMatchedAt));
-            metrics.match_age_ms_histogram?.set({ rule: String(ruleName || '') }, age);
-          }
-        } catch {}
-        const rlist = await sendToTargetsSafely(targets, payload, meta);
-        const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
-        if (anyOk) {
-          try {
-            console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
-            stats.posted += 1;
-            markPosted();
-          } catch {}
-        } else {
-          // all drops or failures: optional debug
-          if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
-            try { console.log('[post.skip]', 'item=', item.id, 'reasons=', JSON.stringify(rlist)); } catch {}
-          }
+          continue;
         }
+      }
+    } catch {}
+
+    const origin = new URL(item.url).origin;
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setLabel('Details').setEmoji('🔎').setStyle(ButtonStyle.Link).setURL(`${origin}/items/${item.id}`),
+      new ButtonBuilder().setLabel('Message').setEmoji('✉️').setStyle(ButtonStyle.Link).setURL(`${origin}/items/${item.id}/want_it/new?`),
+    );
+
+    const ts = (item.created_at_ts != null ? item.created_at_ts : item.photo?.high_resolution?.timestamp); // seconds
+    const listing = {
+      id: item.id,
+      title: (item.__priceDrop ? '[PRICE DROP] ' : '') + (item.title || ''),
+      url: item.url,
+      brand: item.brand_title,
+      size: item.size_title,
+      status: item.status,
+      price: item.price?.amount,
+      currency: item.price?.currency_code,
+      price_eur: item.price?.converted_amount,
+      createdAt: ts ? ts * 1000 : undefined,
+      seller_name: item.user?.login,
+      seller_avatar: item.user?.profile_picture?.url,
+      image_url: item.photo?.url,
+      country_code: item.user?.country_code,
+      description: item.description,
+    };
+
+    const payload = { embeds: [buildListingEmbed(listing)], components: [row] };
+    const meta = {
+      discoveredAt: item.discoveredAt || Date.now(),
+      createdAt: listing.createdAt || Date.now(),
+      firstMatchedAt: Number(item.__firstMatchedAt || 0) || undefined,
+      itemId: String(item.id),
+    };
+    try {
+      if (meta.firstMatchedAt) {
+        const age = Math.max(0, Date.now() - Number(meta.firstMatchedAt));
+        metrics.match_age_ms_histogram?.set({ rule: String(ruleName || '') }, age);
+      }
+    } catch {}
+    const rlist = await sendToTargetsSafely(targets, payload, meta);
+    const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
+    if (anyOk) {
+      try {
+        console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
+        stats.posted += 1;
+        markPosted();
+      } catch {}
+    } else {
+      if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+        try { console.log('[post.skip]', 'item=', item.id, 'reasons=', JSON.stringify(rlist)); } catch {}
+      }
     }
+  }
 }
+
