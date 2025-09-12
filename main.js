@@ -123,6 +123,14 @@ let clientReady = false;
 let monitorsStarted = false;
 
 function resolveChannelsPath() {
+  try {
+    // Prefer repo-configured channels unless explicitly running with an external /data mount
+    if (fs.existsSync('./config/channels.json')) {
+      // If a data file also exists, warn to avoid confusion
+      try { if (fs.existsSync('./data/channels.json') || fs.existsSync('/data/channels.json')) console.warn('[config] Both config/channels.json and data/channels.json found — using config/channels.json'); } catch {}
+      return './config/channels.json';
+    }
+  } catch {}
   try { if (fs.existsSync('./data/channels.json')) return './data/channels.json'; } catch {}
   try { if (fs.existsSync('/data/channels.json')) return '/data/channels.json'; } catch {}
   return './config/channels.json';
@@ -133,6 +141,7 @@ try {
   const p = resolveChannelsPath();
   const raw = fs.readFileSync(p, 'utf-8');
   mySearches = JSON.parse(raw);
+  try { console.log('[config] loaded channels from', p, 'count=', Array.isArray(mySearches)?mySearches.length:0); } catch {}
 } catch (e) {
   console.warn('[config] channels.json not found or invalid, starting with 0 searches:', e?.message || e);
   mySearches = [];
@@ -205,9 +214,10 @@ async function onClientReady() {
     const WANT = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 6));
     setTimeout(async () => {
       try {
-        const raw = fs.readFileSync('./config/channels.json','utf8');
-        const cfg = JSON.parse(raw);
-        const ids = Array.from(new Set((Array.isArray(cfg)?cfg:[]).map(x=>String(x.channelId||'')).filter(Boolean)));
+        // Use already-loaded searches to avoid path mismatches
+        const ids = Array.from(new Set((Array.isArray(mySearches)?mySearches:[])
+          .map(x=>String(x?.channelId||''))
+          .filter(Boolean)));
         for (const id of ids) {
           try {
             const ch = await client.channels.fetch(id).catch(()=>null) || client.channels.cache.get(id);

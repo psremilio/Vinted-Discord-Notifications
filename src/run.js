@@ -804,6 +804,17 @@ export function rebuildFromList(client, list) {
 
 function resolveChannelsPath(fsmod, path) {
   try {
+    const pCfg = path.resolve('./config/channels.json');
+    if (fsmod.existsSync(pCfg)) {
+      try {
+        const pData1 = path.resolve('./data/channels.json');
+        const pData2 = path.resolve('/data/channels.json');
+        if (fsmod.existsSync(pData1) || fsmod.existsSync(pData2)) console.warn('[config] Both config/channels.json and data/channels.json found — using config/channels.json');
+      } catch {}
+      return pCfg;
+    }
+  } catch {}
+  try {
     const pData = path.resolve('./data/channels.json');
     if (fsmod.existsSync(path.resolve('./data')) && fsmod.existsSync(pData)) return pData;
   } catch {}
@@ -820,6 +831,7 @@ export async function rebuildFromDisk(client) {
     const path = await import('path');
     const p = resolveChannelsPath(fsmod, path);
     const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
+    try { console.log('[config] reloaded channels from', p, 'count=', Array.isArray(searches)?searches.length:0); } catch {}
     try { learnFromRules(searches || []); } catch {}
     rebuildFromList(client, searches);
   } catch (e) {
