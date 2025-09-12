@@ -214,7 +214,9 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   let routeKey = `chan:${cid}`;
   let chosenWebhook = null;
   const webhooks = cid ? getWebhooksForChannelId(cid) : null;
-  if (webhooks && webhooks.length) {
+  if (String(process.env.FORCE_CHANNEL_POST || '0') === '1') {
+    // bypass webhooks route for debugging/troubleshooting
+  } else if (webhooks && webhooks.length) {
     const rr = (rrByChannel.has(cid) ? rrByChannel.get(cid) : Math.floor(Math.random() * webhooks.length));
     chosenWebhook = webhooks[rr % webhooks.length];
     rrByChannel.set(cid, (rr + 1) % webhooks.length);
