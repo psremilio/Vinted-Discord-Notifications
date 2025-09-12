@@ -11,7 +11,19 @@ const TRACE = String(process.env.TRACE_SEARCH || '0') === '1';
 const d = (...args) => { if (DEBUG_POLL || String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(...args); };
 const trace = (...a) => { if (TRACE) console.log('[trace]', ...a); };
 const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
-const recentMs = RECENT_MAX_MIN * 60 * 1000;
+function computeRecentMs() {
+  // Base recency window
+  let ms = Math.max(0, RECENT_MAX_MIN) * 60 * 1000;
+  // Optional bootstrap: relax recency on cold start until first successful post
+  try {
+    const bootMin = Math.max(0, parseInt(process.env.RECENT_BOOTSTRAP_MIN ?? '0', 10));
+    if (!state.lastPostAt && bootMin > 0) {
+      const bootMs = bootMin * 60 * 1000;
+      if (bootMs > ms) ms = bootMs;
+    }
+  } catch {}
+  return ms;
+}
 // When DISABLE_RECENT_FILTER=1, we still want a safety cap on ingest age to
 // avoid flooding the queue with very old items. Use INGEST_DEFAULT_CAP_MS when
 // RECENT filter is disabled.
@@ -272,7 +284,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
 // chooses only articles not already seen & posted in the last 10min
 const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
-  const cutoff = Date.now() - recentMs;
+  const cutoff = Date.now() - computeRecentMs();
   let familyKey = null; try { familyKey = buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch {}
   // Respect DISABLE_RECENT_FILTER for ingest default cap as well (bugfix)
   const defaultCap = (DISABLE_RECENT || String(process.env.DISABLE_RECENT || '0') === '1')
