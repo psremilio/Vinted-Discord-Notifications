@@ -195,26 +195,23 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 const age0 = ts0 ? (Date.now()-ts0) : null;
                 console.log(`[found] rule=${channel.channelName} items=${filtered.length} firstId=${filtered[0]?.id} firstAgeMs=${age0}`);
               }
-              // Startup fresh-only window: skip posting of old items for first N minutes
-              // Default: drop old items briefly after boot to avoid initial spam
-              const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 2);
-              if (skipMin > 0) {
-                const sinceStartMs = Date.now() - (state.startedAt?.getTime?.() || 0);
-                if (sinceStartMs < skipMin * 60 * 1000) {
-                  const cutoff = Date.now() - skipMin * 60 * 1000;
-                  const old = [];
-                  const fresh = [];
-                  for (const it of filtered) {
-                    const ts = (it.photo?.high_resolution?.timestamp || 0) * 1000;
-                    if (ts && ts < cutoff) old.push(it); else fresh.push(it);
-                  }
-                  // mark old as processed to avoid later posting, but do not return them
-                  for (const it of old) {
-                    try { processedStore.set(dedupeKeyForChannel(channel, it.id, familyKey), Date.now()); } catch {}
-                  }
-                  if (old.length) { try { metrics.fetch_skipped_total.inc(old.length); } catch {} }
-                  filtered = fresh;
+              // Startup old-drop window: only apply AFTER the first successful post
+              // to avoid starving initial posting. Disabled by default.
+              const skipMin = Number(process.env.STARTUP_SKIP_OLD_MINUTES || 0);
+              if (skipMin > 0 && state.lastPostAt) {
+                const cutoff = Date.now() - skipMin * 60 * 1000;
+                const old = [];
+                const fresh = [];
+                for (const it of filtered) {
+                  const ts = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                  if (ts && ts < cutoff) old.push(it); else fresh.push(it);
                 }
+                // mark old as processed to avoid later posting, but do not return them
+                for (const it of old) {
+                  try { processedStore.set(dedupeKeyForChannel(channel, it.id, familyKey), Date.now()); } catch {}
+                }
+                if (old.length) { try { metrics.fetch_skipped_total.inc(old.length); } catch {} }
+                filtered = fresh;
               }
               // annotate discovery time for posting/metrics
               const tdisc = Date.now();
