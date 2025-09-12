@@ -6,7 +6,7 @@
     "main": "main.js",
     "type": "module",
     "engines": {
-        "node": ">=20 <21"
+        "node": ">=20 <23"
     },
     "scripts": {
         "test": "node --test",
@@ -26,3 +26,4 @@
         "better-sqlite3": "^9.4.1"
     }
 }
+

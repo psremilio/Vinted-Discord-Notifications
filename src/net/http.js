@@ -246,6 +246,18 @@ export async function hedgedGet(url, config = {}, base = BASE) {
   const results = await Promise.all(attempts);
   const winner = results.find(x => x && x.res);
   if (winner) return winner.res;
+  // Optional direct fallback when all hedged proxy requests fail
+  try {
+    const ALLOW = String(process.env.ALLOW_DIRECT_ON_HEDGE_FAIL || process.env.ALLOW_DIRECT || '1') === '1';
+    if (ALLOW) {
+      const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000), validateStatus: () => true });
+      const code = Number(res?.status || 0);
+      if (code >= 200 && code < 300) {
+        try { recordOutcome({ ok: true }); } catch {}
+        return res;
+      }
+    }
+  } catch {}
   throw new Error('Hedged requests failed');
 }
 

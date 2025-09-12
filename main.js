@@ -121,7 +121,22 @@ process.on('beforeExit', (code) => console.warn('[proc] beforeExit', code));
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
 let clientReady = false;
 let monitorsStarted = false;
-const mySearches = JSON.parse(fs.readFileSync('./config/channels.json','utf-8'));
+
+function resolveChannelsPath() {
+  try { if (fs.existsSync('./data/channels.json')) return './data/channels.json'; } catch {}
+  try { if (fs.existsSync('/data/channels.json')) return '/data/channels.json'; } catch {}
+  return './config/channels.json';
+}
+
+let mySearches = [];
+try {
+  const p = resolveChannelsPath();
+  const raw = fs.readFileSync(p, 'utf-8');
+  mySearches = JSON.parse(raw);
+} catch (e) {
+  console.warn('[config] channels.json not found or invalid, starting with 0 searches:', e?.message || e);
+  mySearches = [];
+}
 
 // Pre-ack all slash commands as early as possible to avoid 3s timeouts
 client.on('interactionCreate', async (interaction) => {
