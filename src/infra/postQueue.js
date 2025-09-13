@@ -1,4 +1,5 @@
 import Bottleneck from 'bottleneck';
+import { Pool } from 'undici';
 import { metrics } from './metrics.js';
 import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksManager.js';
 import { remove as removeWebhookFromStore } from './webhooksStore.js';
@@ -24,6 +25,27 @@ const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER
 // Default: do NOT drop older items unless explicitly enabled via env
 const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
 const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
+
+// Shared HTTP connection pools per-origin for webhook posts (keep-alive)
+const dispatcherPools = new Map(); // origin -> Pool
+function originOf(url) {
+  try { const u = new URL(url); return `${u.protocol}//${u.host}`; } catch { return null; }
+}
+function getDispatcher(url) {
+  const origin = originOf(url);
+  if (!origin) return null;
+  let p = dispatcherPools.get(origin);
+  if (!p) {
+    p = new Pool(origin, {
+      connections: Math.max(8, Number(process.env.WEBHOOK_POOL_CONNECTIONS || 32)),
+      pipelining: Math.max(1, Number(process.env.WEBHOOK_POOL_PIPELINING || 1)),
+      keepAliveTimeout: Math.max(1000, Number(process.env.WEBHOOK_KEEPALIVE_TIMEOUT_MS || 5000)),
+      keepAliveMaxTimeout: Math.max(2000, Number(process.env.WEBHOOK_KEEPALIVE_MAX_TIMEOUT_MS || 10000)),
+    });
+    dispatcherPools.set(origin, p);
+  }
+  return p;
+}
 
 export const postLimiter = new Bottleneck({
   maxConcurrent: CONC,
@@ -271,14 +293,13 @@ setInterval(() => {
   // dynamic per-bucket sends (burst window)
   const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
   const cooldown = metrics.discord_cooldown_active.get?.() || 0;
-  // More eager multi-pass when backlog is moderate to cut tails
-  const perBucketSends = (!cooldown && totalQ > 600) ? 12
-                        : (!cooldown && totalQ > 300) ? 8
-                        : (!cooldown && totalQ > 150) ? 6
-                        : (!cooldown && totalQ > 60)  ? 4
-                        : (!cooldown && totalQ > 25)  ? 3
-                        : (!cooldown && totalQ > 10)  ? 2
-                        : 1;
+  const MAX_PER_BUCKET = Math.max(1, Number(process.env.MAX_PER_BUCKET || 25));
+  const ready = keys.filter(k => (routeBuckets.get(k)?.q?.length||0)>0).length || 1;
+  // Distribute work proportionally across buckets: ceil(totalQ/ready)
+  let perBucketSends = Math.ceil(totalQ / ready);
+  perBucketSends = Math.max(1, Math.min(MAX_PER_BUCKET, perBucketSends));
+  // Reduce aggressiveness when cooldown active
+  if (cooldown) perBucketSends = Math.max(1, Math.floor(perBucketSends / 2));
   // do up to perBucketSends passes for fairness
   // prioritize buckets with freshest head createdAt when backlog is high
   // Prioritize buckets with freshest heads sooner to reduce tail latencies
@@ -337,7 +358,6 @@ setInterval(() => {
     }
   }
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug' || String(process.env.LOG_QUEUE_TICK||'0')==='1') {
-    const ready = keys.filter(k => (routeBuckets.get(k)?.q?.length||0)>0).length;
     console.log(`[post.tick] qps=${currentQps} bucketsReady=${ready} slotsLeft=${slots} totalQ=${totalQ} perBucket=${perBucketSends}`);
   }
   // per-route depth metric
@@ -488,7 +508,8 @@ setInterval(() => {
 async function sendWebhook(url, payload, channelId) {
   // Discord expects JSON with content/embeds/components; payload passthrough
   const body = JSON.stringify(payload);
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  const dispatcher = getDispatcher(url);
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, dispatcher });
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
     try {
       console.log('[webhooks.send] channel=%s status=%d reset_after=%s', String(channelId||''), res.status, res.headers.get('x-ratelimit-reset-after'));
