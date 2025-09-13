@@ -15,6 +15,57 @@ import { recordFirstMatch } from "./bot/matchStore.js";
 import { hadSoftFailRecently } from "./state.js";
 import { learnFromRules } from "./rules/catalogLearn.js";
 
+// Robust channels store loader with fallback when module missing at runtime
+async function loadChannelsStore() {
+  try {
+    return await import('./config/channelsStore.js');
+  } catch (e) {
+    // Fallback: minimal inline store to avoid hard crashes during rebuilds
+    const fs = await import('fs');
+    const path = await import('path');
+    const defaultPath = (() => {
+      try { if (process.env.CHANNELS_PATH) return process.env.CHANNELS_PATH; } catch {}
+      try { return (fs.existsSync('/data') ? '/data/channels.json' : path.resolve('./data/channels.json')); }
+      catch { return path.resolve('./data/channels.json'); }
+    })();
+    const cfgPath = path.resolve('./config/channels.json');
+    function ensure() {
+      try { fs.mkdirSync(path.dirname(defaultPath), { recursive: true }); } catch {}
+      try {
+        if (!fs.existsSync(defaultPath)) {
+          let seed = '[]';
+          try { if (fs.existsSync(cfgPath)) seed = fs.readFileSync(cfgPath, 'utf8'); } catch {}
+          fs.writeFileSync(defaultPath, seed);
+          try { console.log('[config.fallback] channels.seed wrote', defaultPath, 'size=', seed.length); } catch {}
+        }
+      } catch {}
+    }
+    function channelsPath() { ensure(); return defaultPath; }
+    function loadChannels() {
+      ensure();
+      try {
+        const raw = fs.readFileSync(channelsPath(), 'utf8');
+        const arr = JSON.parse(raw);
+        return { list: Array.isArray(arr) ? arr : [], path: defaultPath };
+      } catch (e2) {
+        try { console.warn('[config.fallback] channels.load failed:', e2?.message || e2); } catch {}
+        return { list: [], path: defaultPath };
+      }
+    }
+    function saveChannels(list) {
+      ensure();
+      const p = channelsPath();
+      const dir = path.dirname(p);
+      const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.${Date.now()}.tmp`);
+      fs.writeFileSync(tmp, JSON.stringify(list, null, 2));
+      fs.renameSync(tmp, p);
+      try { fs.copyFileSync(p, path.join(dir, `${path.basename(p)}.bak`)); } catch {}
+      return p;
+    }
+    return { channelsPath, loadChannels, saveChannels };
+  }
+}
+
 // Map of channel names that are already scheduled.  addSearch() consults
 // this via `activeSearches.has(name)` so repeated /new_search commands don't
 // create duplicate timers. The value holds the last scheduled timeout ID.
@@ -833,7 +884,7 @@ export function rebuildFromList(client, list) {
 
 export async function rebuildFromDisk(client) {
   try {
-    const store = await import('./config/channelsStore.js');
+    const store = await loadChannelsStore();
     const { list: searches, path: p } = store.loadChannels();
     try { console.log('[config] reloaded from', p, 'count=', Array.isArray(searches)?searches.length:0); } catch {}
     try { learnFromRules(searches || []); } catch {}
@@ -846,7 +897,7 @@ export async function rebuildFromDisk(client) {
 // Non-blocking incremental rebuild wrapper for commands
 export async function incrementalRebuildFromDisk(client) {
   try {
-    const store = await import('./config/channelsStore.js');
+    const store = await loadChannelsStore();
     const { list: searches, path: p } = store.loadChannels();
     setTimeout(() => {
       try {
