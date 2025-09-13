@@ -4,20 +4,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
 import { activeSearches } from '../run.js';
+import { channelsPath } from '../infra/paths.js';
+import { writeJsonAtomic, appendWal } from '../infra/atomicJson.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Resolve channels.json consistently with the scheduler (prefer ./data, fallback to ./config)
-function resolveChannelsPath() {
-  try {
-    const pData = path.resolve(__dirname, '../../data/channels.json');
-    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
-    return pData;
-  } catch {}
-  return path.resolve(__dirname, '../../config/channels.json');
-}
-const filePath = resolveChannelsPath();
+// Centralized path for channels.json
+const filePath = channelsPath();
 
 export const data = new SlashCommandBuilder()
   .setName('filter')
@@ -80,9 +74,7 @@ function loadSearches() {
 }
 async function saveSearches(arr) {
   try {
-    await fs.promises.writeFile(filePath, JSON.stringify(arr, null, 2));
-    // Best-effort: mirror to config for compatibility
-    try { await fs.promises.writeFile(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(arr, null, 2)); } catch {}
+    writeJsonAtomic(filePath, arr);
   } catch (e) { console.warn('[cmd.filter] save failed:', e?.message || e); }
 }
 
@@ -211,6 +203,7 @@ export const execute = async (interaction) => {
       next = Array.from(new Set([...next, ...kw])).slice(0, 200).sort((a,b)=>a.localeCompare(b));
       searches[idx].titleBlacklist = next;
       await saveSearches(searches);
+      try { appendWal('filter_create', { name, delta: kw.length, mode }); } catch {}
       try { const mod = await import('../run.js'); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
       await edit(interaction, `✅ Filter ${mode === 'replace' ? 'gesetzt' : 'ergänzt'}: ${name} → ${next.join(', ') || '—'}`);
       try { console.log('[cmd.filter] create ok name=%s delta=%d size=%d', name, kw.length, next.length); } catch {}
@@ -229,6 +222,7 @@ export const execute = async (interaction) => {
       if (!kw.length) {
         searches[idx].titleBlacklist = [];
         await saveSearches(searches);
+        try { appendWal('filter_delete_all', { name }); } catch {}
         try { const mod = await import('../run.js'); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
         await edit(interaction, `🗑️ Filter gelöscht: ${name}`);
       } else {
@@ -237,6 +231,7 @@ export const execute = async (interaction) => {
         const next = prev.filter(x => !remove.has(x));
         searches[idx].titleBlacklist = next;
         await saveSearches(searches);
+        try { appendWal('filter_delete', { name, removed: kw }); } catch {}
         try { const mod = await import('../run.js'); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
         await edit(interaction, `🧹 Entfernt: ${kw.join(', ')} | übrig: ${next.join(', ') || '—'}`);
       }

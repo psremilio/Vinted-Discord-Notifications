@@ -7,18 +7,12 @@ import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
 import { ensureWebhooksForChannel } from '../infra/webhooksManager.js';
 import { metrics } from '../infra/metrics.js';
 import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
+import { channelsPath } from '../infra/paths.js';
+import { writeJsonAtomic, appendWal } from '../infra/atomicJson.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function resolveChannelsPath() {
-  try {
-    const pData = path.resolve(__dirname, '../../data/channels.json');
-    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
-    return pData;
-  } catch {}
-  return path.resolve(__dirname, '../../config/channels.json');
-}
-const filePath = resolveChannelsPath();
+const filePath = channelsPath();
 
 export const data = new SlashCommandBuilder()
     .setName('new_search')
@@ -172,9 +166,8 @@ export const execute = async (interaction) => {
           }
 
           try {
-            await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
-            // mirror to config for compatibility
-            try { await fs.promises.writeFile(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(searches, null, 2)); } catch {}
+            writeJsonAtomic(filePath, searches);
+            appendWal('new_search', { name: next.channelName, url: next.url, channelId: next.channelId });
           } catch (error) { console.error('[cmd] error saving new search:', error?.message || error); }
 
           // Apply in-memory update to scheduler

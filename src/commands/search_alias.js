@@ -4,19 +4,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { addSearch } from '../run.js';
 import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
+import { channelsPath } from '../infra/paths.js';
+import { writeJsonAtomic, appendWal } from '../infra/atomicJson.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-function resolveChannelsPath() {
-  try {
-    const pData = path.resolve(__dirname, '../../data/channels.json');
-    // ensure /data dir exists when writable
-    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
-    return pData;
-  } catch {}
-  return path.resolve(__dirname, '../../config/channels.json');
-}
-const filePath = resolveChannelsPath();
+const filePath = channelsPath();
 
 // Keep this as an alias of new_search but registered under name "search"
 export const data = new SlashCommandBuilder()
@@ -136,9 +129,8 @@ export const execute = async (interaction) => {
       searches.push(next);
     }
     try {
-      fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
-      // best effort: also mirror to config path for compatibility
-      try { fs.writeFileSync(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(searches, null, 2)); } catch {}
+      writeJsonAtomic(filePath, searches);
+      appendWal('search_alias_add', { name: next.channelName, url: next.url, channelId: next.channelId });
     } catch (e) {
       console.error('\nError saving new search (alias):', e);
       await safeEdit({ content: 'There was an error starting the monitoring.' });

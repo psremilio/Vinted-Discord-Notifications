@@ -3,18 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
+import { channelsPath } from '../infra/paths.js';
+import { writeJsonAtomic, appendWal } from '../infra/atomicJson.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-function resolveChannelsPath() {
-  try {
-    const pData = path.resolve(__dirname, '../../data/channels.json');
-    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
-    return pData;
-  } catch {}
-  return path.resolve(__dirname, '../../config/channels.json');
-}
-const filePath = resolveChannelsPath();
+const filePath = channelsPath();
 
 export const data = new SlashCommandBuilder()
   .setName('search')
@@ -92,10 +86,7 @@ export const execute = async (interaction) => {
   }
   function parseKeywords(s) { return String(s || '').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean).slice(0,100); }
   function loadSearches() { try { return JSON.parse(fs.readFileSync(filePath,'utf8')); } catch { return []; } }
-  async function saveSearches(arr) {
-    fs.writeFileSync(filePath, JSON.stringify(arr, null, 2));
-    try { fs.writeFileSync(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(arr, null, 2)); } catch {}
-  }
+  async function saveSearches(arr) { writeJsonAtomic(filePath, arr); }
 
   if (sub === 'list') {
     const arr = loadSearches();
@@ -136,6 +127,7 @@ export const execute = async (interaction) => {
     const removed = arr[idx];
     arr.splice(idx,1);
     await saveSearches(arr);
+    try { appendWal('search_delete', { name, key, keyNoPrice }); } catch {}
     try { const mod = await import('../run.js'); if (removed?.channelName) mod.removeJob?.(removed.channelName); await mod.incrementalRebuildFromDisk?.(interaction.client); } catch {}
     await safeEdit(`OK. Search ${removed?.channelName || name || key} gelöscht.`);
     return;
@@ -195,6 +187,7 @@ export const execute = async (interaction) => {
       searches.push(next);
     }
     await saveSearches(searches);
+    try { appendWal('search_add', { name: next.channelName, url: next.url, channelId: next.channelId }); } catch {}
 
     try {
       const mod = await import('../run.js');
@@ -229,4 +222,3 @@ export const execute = async (interaction) => {
     await safeEdit({ content: 'Fehler beim Starten der Überwachung.' });
   }
 };
-

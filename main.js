@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import http from 'http';
 import { Client, GatewayIntentBits } from 'discord.js';
 import fs from 'fs';
+import { channelsPath } from './src/infra/paths.js';
 
 import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
@@ -122,26 +123,12 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 let clientReady = false;
 let monitorsStarted = false;
 
-function resolveChannelsPath() {
-  try {
-    // Prefer repo-configured channels unless explicitly running with an external /data mount
-    if (fs.existsSync('./config/channels.json')) {
-      // If a data file also exists, warn to avoid confusion
-      try { if (fs.existsSync('./data/channels.json') || fs.existsSync('/data/channels.json')) console.warn('[config] Both config/channels.json and data/channels.json found — using config/channels.json'); } catch {}
-      return './config/channels.json';
-    }
-  } catch {}
-  try { if (fs.existsSync('./data/channels.json')) return './data/channels.json'; } catch {}
-  try { if (fs.existsSync('/data/channels.json')) return '/data/channels.json'; } catch {}
-  return './config/channels.json';
-}
-
 let mySearches = [];
 try {
-  const p = resolveChannelsPath();
+  const p = channelsPath();
   const raw = fs.readFileSync(p, 'utf-8');
   mySearches = JSON.parse(raw);
-  try { console.log('[config] loaded channels from', p, 'count=', Array.isArray(mySearches)?mySearches.length:0); } catch {}
+  try { console.log('[config] using', p, 'count=', Array.isArray(mySearches)?mySearches.length:0); } catch {}
 } catch (e) {
   console.warn('[config] channels.json not found or invalid, starting with 0 searches:', e?.message || e);
   mySearches = [];

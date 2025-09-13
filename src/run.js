@@ -802,36 +802,15 @@ export function rebuildFromList(client, list) {
   try { metrics.scheduler_rules_total.set(activeSearches.size); } catch {}
 }
 
-function resolveChannelsPath(fsmod, path) {
-  try {
-    const pCfg = path.resolve('./config/channels.json');
-    if (fsmod.existsSync(pCfg)) {
-      try {
-        const pData1 = path.resolve('./data/channels.json');
-        const pData2 = path.resolve('/data/channels.json');
-        if (fsmod.existsSync(pData1) || fsmod.existsSync(pData2)) console.warn('[config] Both config/channels.json and data/channels.json found — using config/channels.json');
-      } catch {}
-      return pCfg;
-    }
-  } catch {}
-  try {
-    const pData = path.resolve('./data/channels.json');
-    if (fsmod.existsSync(path.resolve('./data')) && fsmod.existsSync(pData)) return pData;
-  } catch {}
-  try {
-    const pData = path.resolve('/data/channels.json');
-    if (fsmod.existsSync('/data') && fsmod.existsSync(pData)) return pData;
-  } catch {}
-  return path.resolve('./config/channels.json');
-}
+// centralized path resolver is in infra/paths.js
 
 export async function rebuildFromDisk(client) {
   try {
     const fsmod = await import('fs');
-    const path = await import('path');
-    const p = resolveChannelsPath(fsmod, path);
+    const paths = await import('./infra/paths.js');
+    const p = paths.channelsPath();
     const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
-    try { console.log('[config] reloaded channels from', p, 'count=', Array.isArray(searches)?searches.length:0); } catch {}
+    try { console.log('[config] reloaded from', p, 'count=', Array.isArray(searches)?searches.length:0); } catch {}
     try { learnFromRules(searches || []); } catch {}
     rebuildFromList(client, searches);
   } catch (e) {
@@ -843,8 +822,8 @@ export async function rebuildFromDisk(client) {
 export async function incrementalRebuildFromDisk(client) {
   try {
     const fsmod = await import('fs');
-    const path = await import('path');
-    const p = resolveChannelsPath(fsmod, path);
+    const paths = await import('./infra/paths.js');
+    const p = paths.channelsPath();
     const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
     setTimeout(() => {
       try {

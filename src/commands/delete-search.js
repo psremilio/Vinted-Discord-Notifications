@@ -7,18 +7,12 @@ import { tombstoneRule } from '../run.js';
 import { purgeChannelQueues } from '../infra/postQueue.js';
 import { metrics } from '../infra/metrics.js';
 import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
+import { channelsPath } from '../infra/paths.js';
+import { writeJsonAtomic, appendWal } from '../infra/atomicJson.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function resolveChannelsPath() {
-  try {
-    const pData = path.resolve(__dirname, '../../data/channels.json');
-    try { fs.mkdirSync(path.resolve(__dirname, '../../data'), { recursive: true }); } catch {}
-    return pData;
-  } catch {}
-  return path.resolve(__dirname, '../../config/channels.json');
-}
-const filePath = resolveChannelsPath();
+const filePath = channelsPath();
 
 export const data = new SlashCommandBuilder()
     .setName('delete_search')
@@ -114,9 +108,8 @@ export const execute = async (interaction) => {
           metrics.cmd_exec_ms_p95?.set({ command: nameKey }, p95);
         } catch {}
           try {
-            await fs.promises.writeFile(filePath, JSON.stringify(searches, null, 2));
-            // mirror to config for compatibility
-            try { await fs.promises.writeFile(path.resolve(__dirname, '../../config/channels.json'), JSON.stringify(searches, null, 2)); } catch {}
+            writeJsonAtomic(filePath, searches);
+            appendWal('delete_search', { name: removedName, key, keyNoPrice, channelId: removed?.channelId || null });
           } catch (e) { console.warn('[cmd] save after delete failed:', e?.message || e); }
           try { tombstoneRule(removedName, removed?.url); } catch {}
           try { const mod = await import('../run.js'); if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client); else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client); } catch (e) { console.warn('[cmd] rebuild after delete failed:', e?.message || e); }

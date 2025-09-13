@@ -2,14 +2,10 @@ import { SlashCommandBuilder } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { addSearch, removeJob, restartAll } from '../run.js';
+import { channelsPath } from '../infra/paths.js';
 
-function resolveChannelsPath() {
-  try {
-    const pData = path.resolve('./data/channels.json');
-    if (fs.existsSync(pData)) return pData;
-  } catch {}
-  return path.resolve('./config/channels.json');
-}
+// Use centralized resolver
+function resolveChannelsPath() { return channelsPath(); }
 
 async function ack(interaction){
   try {
