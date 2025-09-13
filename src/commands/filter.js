@@ -52,9 +52,9 @@ async function ack(interaction) {
   try {
     if (!interaction?.deferred && !interaction?.replied) {
       // Prefer immediate ephemeral reply via flags to maximize first-interaction success
-      try { await interaction.reply({ content: '…', flags: 1 << 6 }); }
+      try { await interaction.reply({ content: '…', ephemeral: true }); }
       catch {
-        try { await interaction.deferReply({ flags: 1 << 6 }); } catch {}
+        try { await interaction.deferReply({ ephemeral: true }); } catch {}
       }
     }
   } catch {}
@@ -63,9 +63,9 @@ async function ack(interaction) {
 async function edit(interaction, contentOrOptions) {
   try {
     if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
-    return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
+    return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true });
   } catch (e) {
-    try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 }); } catch {}
+    try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true }); } catch {}
   }
 }
 
@@ -141,7 +141,7 @@ export const execute = async (interaction) => {
       const pages = [];
       for (let i = 0; i < lines.length; i += CHUNK) pages.push(lines.slice(i, i + CHUNK).join('\n'));
       await edit(interaction, pages[0]);
-      for (let i = 1; i < pages.length; i++) { try { await interaction.followUp({ content: pages[i], flags: 1 << 6 }); } catch {} }
+      for (let i = 1; i < pages.length; i++) { try { await interaction.followUp({ content: pages[i], ephemeral: true }); } catch {} }
       try { console.log('[cmd.filter] list ok count=%d', lines.length); } catch {}
     } catch (e) {
       console.error('[cmd.filter] list error', e);
@@ -180,7 +180,7 @@ export const execute = async (interaction) => {
       const pages = [];
       for (let i = 0; i < lines.length; i += CHUNK) pages.push(lines.slice(i, i + CHUNK).join('\n'));
       await edit(interaction, pages[0]);
-      for (let i = 1; i < pages.length; i++) { try { await interaction.followUp({ content: pages[i], flags: 1 << 6 }); } catch {} }
+      for (let i = 1; i < pages.length; i++) { try { await interaction.followUp({ content: pages[i], ephemeral: true }); } catch {} }
       try { console.log('[cmd.filter] list ok count=%d', lines.length); } catch {}
     }, async (e) => { console.error('[cmd.filter] list error', e); await edit(interaction, 'Fehler beim Anzeigen der Filter.'); });
     return;

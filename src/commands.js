@@ -82,13 +82,13 @@ export const registerCommands = async (client) => {
 export const handleCommands = async (interaction, mySearches) => {
   try { console.log('[cmd.interaction]', 'name=', interaction.commandName, 'user=', interaction.user?.id, 'guild=', interaction.guildId); } catch {}
   try {
-    // brief pause to prioritize command ack/reply over polling
-    try { EdfGate.pause(Number(process.env.CMD_PAUSE_MS || 800)); } catch {}
-    // Ack ASAP before any heavy work: prefer ephemeral via flags
+    // Ack ASAP before any heavy work
     if (!interaction.deferred && !interaction.replied) {
-      try { await interaction.deferReply({ flags: 1 << 6 }); }
-      catch (e1) { try { await interaction.reply({ content: '…', flags: 1 << 6 }); } catch {} }
+      try { await interaction.deferReply({ ephemeral: true }); }
+      catch (e1) { try { await interaction.reply({ content: '…', ephemeral: true }); } catch {} }
     }
+    // brief pause to prioritize command edits over polling
+    try { EdfGate.pause(Number(process.env.CMD_PAUSE_MS || 800)); } catch {}
     const name = interaction.commandName;
     const skipAuth = (name === 'filter');
 
@@ -143,9 +143,9 @@ export const handleCommands = async (interaction, mySearches) => {
   } catch (error) {
     console.error('\nError handling command:', error);
     try {
-      await interaction.followUp({ content: 'There was an error while executing this command!', flags: 1 << 6 });
+      await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
     } catch {
-      try { await interaction.reply({ content: 'There was an error while executing this command!', flags: 1 << 6 }); } catch {}
+      try { await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true }); } catch {}
     }
   }
 };

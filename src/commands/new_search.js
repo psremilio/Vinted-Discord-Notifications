@@ -58,8 +58,8 @@ export const execute = async (interaction) => {
     // Ensure we have an ack to enable editReply/followUp safely
     try {
       if (!interaction?.deferred && !interaction?.replied) {
-        try { await interaction.deferReply({ flags: 1 << 6 }); }
-        catch { try { await interaction.reply({ content: '⏳ …', flags: 1 << 6 }); } catch {} }
+        try { await interaction.deferReply({ ephemeral: true }); }
+        catch { try { await interaction.reply({ content: '⏳ …', ephemeral: true }); } catch {} }
       }
     } catch (e) {
       try { console.warn('[cmd.warn] /new_search failed to defer:', e?.message || e); } catch {}
@@ -69,10 +69,10 @@ export const execute = async (interaction) => {
     async function safeEdit(contentOrOptions) {
         try {
             if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
-            return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
-        } catch (e) {
-            try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 }); } catch {}
-        }
+            return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true });
+          } catch (e) {
+            try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true }); } catch {}
+          }
     }
 
     if (!interaction) {

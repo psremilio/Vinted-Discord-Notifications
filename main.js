@@ -175,16 +175,15 @@ client.on('interactionCreate', async (interaction) => {
   try {
     const isCmd = interaction.isChatInputCommand ? interaction.isChatInputCommand() : interaction.isCommand?.();
     if (!isCmd) return;
-    // Briefly pause scheduler to guarantee a clean window for ack/edit
-    try { EdfGate.pause(Number(process.env.COMMANDS_PAUSE_MS || 1500)); } catch {}
     const t0 = Date.now();
+    // Ack ASAP: ephemeral defer; fallback to minimal ephemeral reply
     if (!interaction.deferred && !interaction.replied) {
-      // Preferred: ephemeral defer within 3s; fallback to quick ephemeral reply
-      try { await interaction.deferReply({ flags: 1 << 6 }); }
-      catch (e1) {
-        try { await interaction.reply({ content: '…', flags: 1 << 6 }); } catch {}
+      try { await interaction.deferReply({ ephemeral: true }); }
+      catch (e1) { try { await interaction.reply({ content: '…', ephemeral: true }); } catch {}
       }
     }
+    // Briefly pause scheduler after ack to favor command edits
+    try { EdfGate.pause(Number(process.env.COMMANDS_PAUSE_MS || 1500)); } catch {}
     try {
       const dt = Date.now() - t0;
       const name = (()=>{ try { return String(interaction.commandName || '_'); } catch { return '_'; } })();
