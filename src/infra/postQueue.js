@@ -5,7 +5,16 @@ import { remove as removeWebhookFromStore } from './webhooksStore.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
 const DIAG_ALL = String(process.env.DIAG_ALL || '0') === '1';
-function diag(tag, obj) { try { if (DIAG_ALL) console.log(`[diag.${tag}]`, JSON.stringify(obj)); } catch {} }
+const DIAG_SAMPLE_N = Math.max(1, Number(process.env.DIAG_SAMPLE_N || 1));
+let __diag_i = 0;
+function diag(tag, obj) {
+  if (!DIAG_ALL) return;
+  try {
+    __diag_i += 1;
+    const n = DIAG_SAMPLE_N;
+    if ((__diag_i % n) === 0) console.log(`[diag.${tag}]`, JSON.stringify(obj));
+  } catch {}
+}
 // Higher defaults to improve send throughput while keeping QPS guardrails
 const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 8));
 const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX || 24));

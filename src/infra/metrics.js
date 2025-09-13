@@ -45,7 +45,9 @@ export const metrics = {
   // misc gauges
   rules_active: new Gauge('rules_active'),
   proxy_healthy: new Gauge('proxy_healthy'),
+  families_count: new Gauge('families_count'),
   global_rpm_effective: new Gauge('global_rpm_effective'),
+  rules_invalid_target_total: new Gauge('rules_invalid_target_total'),
   // aggregated, low-cardinality gauges
   http_429_rate_60s: new Gauge('http_429_rate_60s'),
   global_latency_p95_ms: new Gauge('global_latency_p95_ms'),
@@ -198,6 +200,8 @@ export function serializeMetrics() {
   lineHelpType('scheduler_reload_events_total', 'Scheduler rebuild/reload events', 'counter'); out.push(`scheduler_reload_events_total ${metrics.scheduler_reload_events_total.get()}`);
   lineHelpType('scheduler_rules_total', 'Scheduler rules total', 'gauge'); out.push(`scheduler_rules_total ${metrics.scheduler_rules_total.get()}`);
   lineHelpType('rules_removed_total', 'Rules removed from scheduler', 'counter'); out.push(`rules_removed_total ${metrics.rules_removed_total.get()}`);
+  lineHelpType('families_count', 'Number of active families', 'gauge'); out.push(`families_count ${metrics.families_count.get()}`);
+  lineHelpType('rules_invalid_target_total', 'Rules with invalid targets (no channel or unsupported)', 'gauge'); out.push(`rules_invalid_target_total ${metrics.rules_invalid_target_total.get()}`);
   // E2E latency alias
   lineHelpType('e2e_latency_ms_p95', 'End-to-end latency p95 (found->sent) per channel', 'gauge');
   for (const e of metrics.e2e_latency_ms_p95.entries()) out.push(`e2e_latency_ms_p95{channel="${e.labels.channel}"} ${e.value}`);

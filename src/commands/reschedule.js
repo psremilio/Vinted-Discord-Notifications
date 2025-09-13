@@ -10,8 +10,8 @@ function resolveChannelsPath() { return channelsPath(); }
 async function ack(interaction){
   try {
     if (!interaction?.deferred && !interaction?.replied) {
-      try { await interaction.deferReply({ ephemeral: true }); }
-      catch { try { await interaction.reply({ content: '…', ephemeral: true }); } catch {} }
+      try { await interaction.deferReply({ flags: 1 << 6 }); }
+      catch { try { await interaction.reply({ content: '…', flags: 1 << 6 }); } catch {} }
     }
   } catch {}
 }

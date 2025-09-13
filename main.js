@@ -8,6 +8,7 @@ import http from 'http';
 import { Client, GatewayIntentBits } from 'discord.js';
 import fs from 'fs';
 import { channelsPath } from './src/infra/paths.js';
+import { loadChannels } from './src/config/channelsStore.js';
 
 import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
@@ -92,10 +93,26 @@ try {
               // update aggregate gauges so dashboards can be light
               metrics.http_429_rate_60s.set(rateCtl.errorRateSec(60));
               metrics.global_latency_p95_ms.set(rateCtl.latencyP95Sec(60));
+              try {
+                const fams = getFamiliesSnapshot();
+                metrics.families_count?.set?.(Array.isArray(fams) ? fams.length : 0);
+              } catch {}
             } catch {}
           } catch {}
           res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' });
           res.end(serializeMetrics()); return;
+        }
+        if (req.url === '/configz') {
+          try {
+            const p = channelsPath();
+            let stat = null; try { stat = fs.statSync(p); } catch {}
+            const count = Array.isArray(mySearches) ? mySearches.length : 0;
+            const sample = (mySearches || []).slice(0, 5).map(s => ({ name: s.channelName, id: s.channelId }));
+            const body = JSON.stringify({ path: p, count, mtime: stat?.mtime?.toISOString?.() || null, sample }, null, 2);
+            res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(body); return;
+          } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e?.message || String(e) })); return;
+          }
         }
         if (req.url === '/families') {
           try {
@@ -125,10 +142,8 @@ let monitorsStarted = false;
 
 let mySearches = [];
 try {
-  const p = channelsPath();
-  const raw = fs.readFileSync(p, 'utf-8');
-  mySearches = JSON.parse(raw);
-  try { console.log('[config] using', p, 'count=', Array.isArray(mySearches)?mySearches.length:0); } catch {}
+  const res = loadChannels();
+  mySearches = Array.isArray(res?.list) ? res.list : [];
 } catch (e) {
   console.warn('[config] channels.json not found or invalid, starting with 0 searches:', e?.message || e);
   mySearches = [];
@@ -145,9 +160,9 @@ client.on('interactionCreate', async (interaction) => {
     const t0 = Date.now();
     if (!interaction.deferred && !interaction.replied) {
       // Preferred: ephemeral defer within 3s; fallback to quick ephemeral reply
-      try { await interaction.deferReply({ ephemeral: true }); }
+      try { await interaction.deferReply({ flags: 1 << 6 }); }
       catch (e1) {
-        try { await interaction.reply({ content: '…', ephemeral: true }); } catch {}
+        try { await interaction.reply({ content: '…', flags: 1 << 6 }); } catch {}
       }
     }
     try {

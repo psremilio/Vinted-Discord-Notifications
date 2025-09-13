@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url';
 import { REST, Routes } from 'discord.js';
 import { EdfGate } from './schedule/edf.js';
 import { isAuthorized, isAdmin } from './utils/authz.js';
+import { cmdQueue } from './infra/cmdQueue.js';
+import { incCommands, decCommands } from './infra/cmdState.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,10 +84,10 @@ export const handleCommands = async (interaction, mySearches) => {
   try {
     // brief pause to prioritize command ack/reply over polling
     try { EdfGate.pause(Number(process.env.CMD_PAUSE_MS || 800)); } catch {}
-    // Ack ASAP before any heavy work: prefer ephemeral defer
+    // Ack ASAP before any heavy work: prefer ephemeral via flags
     if (!interaction.deferred && !interaction.replied) {
-      try { await interaction.deferReply({ ephemeral: true }); }
-      catch (e1) { try { await interaction.reply({ content: '…', ephemeral: true }); } catch {} }
+      try { await interaction.deferReply({ flags: 1 << 6 }); }
+      catch (e1) { try { await interaction.reply({ content: '…', flags: 1 << 6 }); } catch {} }
     }
     const name = interaction.commandName;
     const skipAuth = (name === 'filter');
@@ -130,14 +132,20 @@ export const handleCommands = async (interaction, mySearches) => {
     }
     // Execute command after ack to avoid race conditions
     try { console.log('[cmd.enqueued]', 'name=', name); } catch {}
-    try { await module.execute(interaction, mySearches); }
-    catch (err) { console.error('\nError handling command:', err); }
+    try {
+      incCommands();
+      await cmdQueue.schedule(() => module.execute(interaction, mySearches));
+    } catch (err) {
+      console.error('\nError handling command:', err);
+    } finally {
+      try { decCommands(); } catch {}
+    }
   } catch (error) {
     console.error('\nError handling command:', error);
     try {
-      await interaction.followUp({ content: 'There was an error while executing this command!' });
+      await interaction.followUp({ content: 'There was an error while executing this command!', flags: 1 << 6 });
     } catch {
-      try { await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true }); } catch {}
+      try { await interaction.reply({ content: 'There was an error while executing this command!', flags: 1 << 6 }); } catch {}
     }
   }
 };

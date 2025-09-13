@@ -51,10 +51,10 @@ function parseKeywords(s) {
 async function ack(interaction) {
   try {
     if (!interaction?.deferred && !interaction?.replied) {
-      // Prefer immediate ephemeral reply to maximize first-interaction success
-      try { await interaction.reply({ content: '…', ephemeral: true }); }
+      // Prefer immediate ephemeral reply via flags to maximize first-interaction success
+      try { await interaction.reply({ content: '…', flags: 1 << 6 }); }
       catch {
-        try { await interaction.deferReply({ ephemeral: true }); } catch {}
+        try { await interaction.deferReply({ flags: 1 << 6 }); } catch {}
       }
     }
   } catch {}
@@ -63,9 +63,9 @@ async function ack(interaction) {
 async function edit(interaction, contentOrOptions) {
   try {
     if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
-    return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true });
+    return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 });
   } catch (e) {
-    try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions } : { ...contentOrOptions }); } catch {}
+    try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, flags: 1 << 6 } : { ...contentOrOptions, flags: 1 << 6 }); } catch {}
   }
 }
 
@@ -134,9 +134,14 @@ export const execute = async (interaction) => {
       const all = searches || [];
       for (const s of all) {
         const list = Array.isArray(s.titleBlacklist) ? s.titleBlacklist : [];
-        lines.push(`â€¢ ${s.channelName}: ${list.join(', ') || 'â€”'}`);
+        lines.push(`- ${s.channelName}: ${list.join(', ') || '—'}`);
       }
-      await edit(interaction, lines.length ? lines.join('\n') : 'Keine Suchen konfiguriert.');
+      if (!lines.length) { await edit(interaction, 'Keine Suchen konfiguriert.'); return; }
+      const CHUNK = 25;
+      const pages = [];
+      for (let i = 0; i < lines.length; i += CHUNK) pages.push(lines.slice(i, i + CHUNK).join('\n'));
+      await edit(interaction, pages[0]);
+      for (let i = 1; i < pages.length; i++) { try { await interaction.followUp({ content: pages[i], flags: 1 << 6 }); } catch {} }
       try { console.log('[cmd.filter] list ok count=%d', lines.length); } catch {}
     } catch (e) {
       console.error('[cmd.filter] list error', e);
@@ -168,9 +173,14 @@ export const execute = async (interaction) => {
       const all = searches || [];
       for (const s of all) {
         const list = Array.isArray(s.titleBlacklist) ? s.titleBlacklist : [];
-        lines.push(`• ${s.channelName}: ${list.join(', ') || '—'}`);
+        lines.push(`- ${s.channelName}: ${list.join(', ') || '—'}`);
       }
-      await edit(interaction, lines.length ? lines.join('\n') : 'Keine Suchen konfiguriert.');
+      if (!lines.length) { await edit(interaction, 'Keine Suchen konfiguriert.'); return; }
+      const CHUNK = 25;
+      const pages = [];
+      for (let i = 0; i < lines.length; i += CHUNK) pages.push(lines.slice(i, i + CHUNK).join('\n'));
+      await edit(interaction, pages[0]);
+      for (let i = 1; i < pages.length; i++) { try { await interaction.followUp({ content: pages[i], flags: 1 << 6 }); } catch {} }
       try { console.log('[cmd.filter] list ok count=%d', lines.length); } catch {}
     }, async (e) => { console.error('[cmd.filter] list error', e); await edit(interaction, 'Fehler beim Anzeigen der Filter.'); });
     return;

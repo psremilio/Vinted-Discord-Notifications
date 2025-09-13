@@ -462,7 +462,14 @@ export const runSearch = async (client, channel, opts = {}) => {
                       const sibTo = Number.isFinite(sf?.priceTo) ? Number(sf.priceTo) : null;
                       if (sibTo === null) continue; // only mirror within price family
                       if (childTo !== null && sibTo < childTo) continue; // only to larger/equal buckets
-                      const sibDest = await getChannelById(client, sibRule.channelId);
+                      let sibDest = await getChannelById(client, sibRule.channelId);
+                      if (!sibDest) {
+                        const fbId = String(process.env.DISCORD_FALLBACK_CHANNEL_ID || '');
+                        if (fbId) {
+                          try { sibDest = await getChannelById(client, fbId); } catch {}
+                          if (sibDest) console.warn(`[post.fallback] siblings: ${sibRule.channelName} (orig=${sibRule.channelId} → fb=${fbId})`);
+                        }
+                      }
                       if (!sibDest) continue;
                       let toPost = gated;
                       if (STRICT) { try { toPost = gated.filter(it => itemMatchesFilters(it, sf)); } catch {} }
@@ -494,13 +501,26 @@ export const runSearch = async (client, channel, opts = {}) => {
             }
             // Also post to parent rule's channel as usual
             if (String(process.env.FANOUT_SUPPRESS_PARENT_POST || '0') !== '1') {
-              const dest = await getChannelById(client, channel.channelId);
+              let dest = await getChannelById(client, channel.channelId);
               if (!dest) {
-                if (!warnedMissing.has(channel.channelId)) {
-                  console.warn(`[post] no valid targets for ${channel.channelName} (${channel.channelId})`);
-                  warnedMissing.add(channel.channelId);
+                const fbId = String(process.env.DISCORD_FALLBACK_CHANNEL_ID || '');
+                if (fbId) {
+                  try {
+                    const fb = await getChannelById(client, fbId);
+                    if (fb) {
+                      console.warn(`[post.fallback] parent: ${channel.channelName} (orig=${channel.channelId} → fb=${fbId})`);
+                      dest = fb;
+                    }
+                  } catch {}
                 }
-              } else {
+                if (!dest) {
+                  if (!warnedMissing.has(channel.channelId)) {
+                    console.warn(`[post] no valid targets for ${channel.channelName} (${channel.channelId})`);
+                    warnedMissing.add(channel.channelId);
+                  }
+                }
+              }
+              if (dest) {
                 // Apply optional hard freshness gate for parent as well
                 const now = Date.now();
                 const stH2 = ruleState.get(channel.channelName);
@@ -567,7 +587,14 @@ export const runSearch = async (client, channel, opts = {}) => {
                   try {
                     const childArts = await limiter.schedule(() => vintedSearch(childRule, processedStore, { ...opts, backfillPages: 1 }));
                     if (childArts?.length) {
-                      const dest = await getChannelById(client, childRule.channelId);
+                      let dest = await getChannelById(client, childRule.channelId);
+                      if (!dest) {
+                        const fbId = String(process.env.DISCORD_FALLBACK_CHANNEL_ID || '');
+                        if (fbId) {
+                          try { dest = await getChannelById(client, fbId); } catch {}
+                          if (dest) console.warn(`[post.fallback] child_fetch: ${childRule.channelName} (orig=${childRule.channelId} → fb=${fbId})`);
+                        }
+                      }
                       if (dest) await postArticles(childArts, dest, childRule.channelName);
                       childArts.forEach(article => {
                         try {
@@ -806,10 +833,8 @@ export function rebuildFromList(client, list) {
 
 export async function rebuildFromDisk(client) {
   try {
-    const fsmod = await import('fs');
-    const paths = await import('./infra/paths.js');
-    const p = paths.channelsPath();
-    const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
+    const store = await import('./config/channelsStore.js');
+    const { list: searches, path: p } = store.loadChannels();
     try { console.log('[config] reloaded from', p, 'count=', Array.isArray(searches)?searches.length:0); } catch {}
     try { learnFromRules(searches || []); } catch {}
     rebuildFromList(client, searches);
@@ -821,10 +846,8 @@ export async function rebuildFromDisk(client) {
 // Non-blocking incremental rebuild wrapper for commands
 export async function incrementalRebuildFromDisk(client) {
   try {
-    const fsmod = await import('fs');
-    const paths = await import('./infra/paths.js');
-    const p = paths.channelsPath();
-    const searches = JSON.parse(fsmod.readFileSync(p,'utf-8'));
+    const store = await import('./config/channelsStore.js');
+    const { list: searches, path: p } = store.loadChannels();
     setTimeout(() => {
       try {
         console.log('[rebuild] mode=incremental');
@@ -860,12 +883,15 @@ export const run = async (client, mySearches) => {
 
     // Validate configured channel IDs up-front to surface misconfig early
     try {
+        let invalid = 0;
         await Promise.all((mySearches || []).map(async (s) => {
             const ch = await getChannelById(client, s.channelId);
             if (!ch) {
+                invalid += 1;
                 console.warn(`[post] Warnung: Zielkanal ungültig oder nicht erreichbar für "${s.channelName}" (id=${s.channelId}).`);
             }
         }));
+        try { metrics.rules_invalid_target_total.set(invalid); } catch {}
     } catch {}
 
     // Dump configured rules early to diagnose URL/filters/family-keys
