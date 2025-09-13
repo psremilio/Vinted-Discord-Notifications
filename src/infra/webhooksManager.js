@@ -14,6 +14,11 @@ await loadStore().catch(()=>{});
 export async function ensureWebhooksForChannel(channel, count = WEBHOOKS_PER_CHANNEL, namePrefix = WEBHOOK_NAME_PREFIX) {
   if (!AUTO_ON) return getWebhooksForChannelId(channel?.id);
   if (!channel) return [];
+  // Guard: Some channel types (e.g., forum threads) don't support webhooks
+  if (typeof channel.createWebhook !== 'function') {
+    try { console.warn('webhooks.ensure unsupported channel type for webhooks:', String(channel?.id || 'unknown')); } catch {}
+    return getWebhooksForChannelId(channel.id);
+  }
   try {
     const me = channel.guild?.members?.me;
     const perms = channel.permissionsFor?.(me);

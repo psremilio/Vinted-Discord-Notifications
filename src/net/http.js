@@ -40,11 +40,32 @@ function getHedgeBudget() {
 }
 
 function createClient(proxyStr) {
-  const existing = clientsByProxy.get(proxyStr);
+  const key = String(proxyStr || '').trim();
+  const existing = clientsByProxy.get(key);
   if (existing) return existing;
 
-  const [host, portStr] = proxyStr.split(':');
-  const port = Number(portStr);
+  // Treat DIRECT/invalid proxies as direct client (no proxy agent)
+  const parts = key.split(':');
+  const port = Number(parts[1]);
+  const isDirect = !key || key.toUpperCase() === 'DIRECT' || parts.length < 2 || !Number.isFinite(port);
+  if (isDirect) {
+    const http = axios.create({
+      withCredentials: true,
+      maxRedirects: 5,
+      timeout: Number(process.env.FETCH_TIMEOUT_MS || 4000),
+      proxy: false,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        Accept: 'application/json, text/plain, */*',
+        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+    });
+    const client = { http, warmedAt: Date.now(), proxyAgent: null, proxyLabel: 'DIRECT' };
+    clientsByProxy.set('DIRECT', client);
+    return client;
+  }
+
+  const [host] = parts;
 
   // Create HTTPS proxy agent for proper tunneling
   const proxyAgent = new HttpsProxyAgent({
@@ -84,7 +105,7 @@ function createClient(proxyStr) {
   });
 
   const client = { http, warmedAt: 0, proxyAgent, proxyLabel: `${host}:${port}` };
-  clientsByProxy.set(proxyStr, client);
+  clientsByProxy.set(key, client);
   return client;
 }
 
@@ -94,6 +115,8 @@ const bootstrapFailCounts = new Map(); // proxyLabel -> count
 async function bootstrapSession(client, base = BASE) {
   const TTL = 45 * 60 * 1000; // 45 minutes
   if (client.warmedAt && Date.now() - client.warmedAt < TTL) return;
+  // Do not bootstrap for direct clients (no proxy agent)
+  if (!client.proxyAgent) { client.warmedAt = Date.now(); return; }
   try {
     const res = await axios.get(base, {
       proxy: false,

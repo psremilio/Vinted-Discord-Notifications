@@ -95,11 +95,11 @@ async function getChannelById(client, id) {
         try {
             ch = await client.channels.fetch(id);
         } catch (e) {
-            // ignore; will cache as null and warn once below
+            // ignore; do NOT cache null to avoid permanent negative caching
         }
     }
-    channelCache.set(id, ch || null);
-    return ch;
+    if (ch) channelCache.set(id, ch);
+    return ch || null;
 }
 
 const ruleState = new Map(); // name -> { noNewStreak: number, tokens: number, backfillOnUntil?: number, backfillCooldownUntil?: number, noDataCycles?: number }

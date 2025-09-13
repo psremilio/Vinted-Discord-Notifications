@@ -132,6 +132,13 @@ export async function sendQueued(channel, payload, meta = {}) {
   const itemId = meta?.itemId ? String(meta.itemId) : null;
   // Use a per-route enqueue timestamp to measure queue latency fairly per channel
   const discoveredAtLocal = Date.now();
+  // If channel cannot send and no webhooks configured, emit a clear warning once.
+  try {
+    const hooks = getWebhooksForChannelId?.(channel?.id) || [];
+    if (!hooks.length && !(channel && typeof channel.send === 'function')) {
+      console.warn('post channel has no webhooks and does not support send:', String(channel?.id || 'unknown'));
+    }
+  } catch {}
   // Optional: ensure webhooks synchronously before first enqueue when ALWAYS_WEBHOOK=1
   if (ALWAYS_WEBHOOK && channel?.id) {
     try {
