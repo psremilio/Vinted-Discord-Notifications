@@ -8,7 +8,27 @@ import http from 'http';
 import { Client, GatewayIntentBits } from 'discord.js';
 import fs from 'fs';
 import { channelsPath } from './src/infra/paths.js';
-import { loadChannels } from './src/config/channelsStore.js';
+// channelsStore is optional; fall back to legacy loader if module missing
+let channelsStore = null;
+try {
+  channelsStore = await import('./src/config/channelsStore.js');
+  try { console.log('[config] channelsStore loaded'); } catch {}
+} catch (e) {
+  console.warn('[config] channelsStore missing, using legacy path logic (safe fallback)');
+  channelsStore = {
+    loadChannels: () => {
+      try {
+        const p = channelsPath();
+        const raw = fs.readFileSync(p, 'utf-8');
+        const arr = JSON.parse(raw);
+        return { list: Array.isArray(arr) ? arr : [], path: p };
+      } catch (e2) {
+        console.warn('[config] fallback load failed:', e2?.message || e2);
+        return { list: [], path: channelsPath() };
+      }
+    },
+  };
+}
 
 import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
@@ -142,7 +162,7 @@ let monitorsStarted = false;
 
 let mySearches = [];
 try {
-  const res = loadChannels();
+  const res = channelsStore.loadChannels();
   mySearches = Array.isArray(res?.list) ? res.list : [];
 } catch (e) {
   console.warn('[config] channels.json not found or invalid, starting with 0 searches:', e?.message || e);
