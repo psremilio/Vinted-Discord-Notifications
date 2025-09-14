@@ -1,7 +1,6 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildListingEmbed } from '../embeds.js';
 import { sanitizeEmbed } from '../discord/ensureValidEmbed.js';
-import { sanitizeEmbed } from '../discord/ensureValidEmbed.js';
 import { stats } from '../utils/stats.js';
 import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
