@@ -45,6 +45,7 @@ import { rateCtl } from './src/schedule/rateControl.js';
 import { ensureWebhooksForChannel } from './src/infra/webhooksManager.js';
 import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
 import { startPosterWorker } from './src/poster/worker.js';
+import { startLocalPoster } from './src/poster/localPoster.js';
 import { buildChannelsStore } from './src/bootstrap/channels.js';
 import { ChannelType } from 'discord.js';
 
@@ -230,6 +231,14 @@ async function onClientReady() {
     const ids = Array.from(new Set((Array.isArray(mySearches) ? mySearches : []).map(x => String(x?.channelId || '')).filter(Boolean)));
     const { store, invalid } = await buildChannelsStore(client, ids, STRICT);
     globalThis.channelsStore = store; // Map<channelId, Array<{id,token}>>
+    // Build name->id map for families routing
+    try {
+      const m = new Map();
+      for (const it of (Array.isArray(mySearches) ? mySearches : [])) {
+        if (it?.channelName && it?.channelId) m.set(String(it.channelName), String(it.channelId));
+      }
+      globalThis.ruleChannelIdMap = m;
+    } catch {}
     const validSet = new Set(store.keys());
     // Filter searches to valid channels to avoid blind posts
     mySearches = (Array.isArray(mySearches) ? mySearches : []).filter(x => validSet.has(String(x?.channelId || '')));
@@ -263,6 +272,16 @@ async function onClientReady() {
     }
   } catch (e) {
     console.warn('[streams.worker.init] failed:', e?.message || e);
+  }
+
+  // Start local spool poster if enabled
+  try {
+    if (String(process.env.POST_VIA_LOCAL_SPOOL || '0') === '1') {
+      startLocalPoster();
+      console.log('[localPoster] started');
+    }
+  } catch (e) {
+    console.warn('[localPoster.init] failed:', e?.message || e);
   }
 }
 client.on('ready', onClientReady);

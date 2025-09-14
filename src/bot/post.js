@@ -7,6 +7,8 @@ import { sendQueued } from '../infra/postQueue.js';
 import { metrics } from '../infra/metrics.js';
 import { setIfAbsent as postedSetIfAbsent } from '../infra/postedStore.js';
 import { xaddPostTask } from '../queue/streams.js';
+import { aggQueue } from '../queue/aggQueue.js';
+import { familyForRule, channelIdsForFamily } from '../core/families.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === 'function';
 
@@ -127,6 +129,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       }
     } catch {}
     const VIA_STREAMS = String(process.env.POST_VIA_STREAMS || '0') === '1';
+    const VIA_SPOOL = String(process.env.POST_VIA_LOCAL_SPOOL || '0') === '1';
     if (VIA_STREAMS) {
       // Publish one task per channel into Redis Streams; worker posts it
       const createdAtMs = listing.createdAt || Date.now();
@@ -143,6 +146,13 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
         });
       }
       continue; // defer actual sending to worker
+    } else if (VIA_SPOOL) {
+      // Local spool: enqueue once for all family channels; poster loop will send
+      const fam = familyForRule(String(ruleName || ''));
+      const chIds = channelIdsForFamily(fam);
+      const job = { id: String(item.id), createdAtMs: listing.createdAt || Date.now(), embed: embedJson, components: null, content: null };
+      aggQueue.putItemToChannels(job, chIds);
+      continue;
     } else {
       // Per-target idempotency in-process: allow cross-posting across channels
       const ttlSec = Math.max(60, Number(process.env.DEDUPE_TTL_SEC || 86400));
