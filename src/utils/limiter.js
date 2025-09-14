@@ -62,7 +62,8 @@ if (!DISABLE_RES && ADAPTIVE) {
   try { console.log(`[limiter.adapt] on rpm=${currentRpm} min=${MIN_RPM} max=${MAX_RPM} inc=${INC_FACTOR} dec=${DEC_FACTOR} thr=${RATE_THR}`); } catch {}
   setInterval(() => {
     try {
-      const ratePct = Number(metrics.http_429_rate_60s?.get?.() ?? 0);
+      // Use Vinted-specific 429 rate only for search adaptation
+      const ratePct = Number(metrics.vinted_http_429_rate_60s?.get?.() ?? 0);
       const rate = isFinite(ratePct) ? Math.max(0, Math.min(1, ratePct / 100)) : 0;
       let next = currentRpm;
       if (rate > RATE_THR) {

@@ -9,9 +9,11 @@ import { metrics } from '../infra/metrics.js';
 const clientsByProxy = new Map();
 const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
 
-// Sliding-window softfail tracker (60s) to drive gentle hedging adjustments
+// Sliding-window trackers (60s) to drive gentle hedging adjustments and vinted 429 gauge
 const softFails = [];
 const totalReqs = [];
+const vinted429s = [];
+const vintedReqs = [];
 function _gcWindow(arr) {
   const cutoff = Date.now() - 60_000;
   while (arr.length && arr[0] < cutoff) arr.shift();
@@ -29,6 +31,16 @@ function getSoftfailRate60s() {
   _gcWindow(totalReqs); _gcWindow(softFails);
   const t = totalReqs.length || 1;
   return Math.min(1, Math.max(0, softFails.length / t));
+}
+function recordVinted429Sample({ is429 = false } = {}) {
+  const now = Date.now();
+  vintedReqs.push(now); _gcWindow(vintedReqs);
+  if (is429) { vinted429s.push(now); _gcWindow(vinted429s); }
+  try {
+    const t = vintedReqs.length || 1;
+    const rate = Math.min(1, Math.max(0, vinted429s.length / t));
+    metrics.vinted_http_429_rate_60s?.set(Math.round(rate * 100));
+  } catch {}
 }
 function getHedgeBudget() {
   const baseN = Math.max(1, Number(process.env.HEDGE_REQUESTS || 3));
@@ -400,6 +412,8 @@ export async function fetchRule(ruleId, url, opts = {}) {
         if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] quarantine proxy=${proxy} ms=${latency}`);
       }
     } catch {}
+    // record vinted 429 sample for adaptive search limiter
+    try { recordVinted429Sample({ is429: code === 429 }); } catch {}
     if (code === 429 || code === 403) {
       // treat as fail for controller, but return softFail path below
       rateCtl.observe(proxy, { ok: false, code, latency });

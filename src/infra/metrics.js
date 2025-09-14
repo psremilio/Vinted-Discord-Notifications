@@ -28,6 +28,9 @@ class LabeledCounter {
 }
 
 export const metrics = {
+  // split 429 rate gauges by domain
+  vinted_http_429_rate_60s: new Gauge('vinted_http_429_rate_60s'),
+  discord_http_429_rate_60s: new Gauge('discord_http_429_rate_60s'),
   // per-proxy gauges
   proxy_rpm_current: new LabeledGauge('proxy_rpm_current', ['proxy']),
   proxy_rpm_target: new LabeledGauge('proxy_rpm_target', ['proxy']),
@@ -130,6 +133,8 @@ export function serializeMetrics() {
   lineHelpType('rules_active', 'Active rules', 'gauge'); out.push(`rules_active ${metrics.rules_active.get()}`);
   lineHelpType('proxy_healthy', 'Healthy proxies', 'gauge'); out.push(`proxy_healthy ${metrics.proxy_healthy.get()}`);
   lineHelpType('global_rpm_effective', 'Sum of per-proxy rpm', 'gauge'); out.push(`global_rpm_effective ${metrics.global_rpm_effective.get()}`);
+  lineHelpType('vinted_http_429_rate_60s', 'Vinted 429 rate over 60s window (percent)', 'gauge'); out.push(`vinted_http_429_rate_60s ${metrics.vinted_http_429_rate_60s.get()}`);
+  lineHelpType('discord_http_429_rate_60s', 'Discord 429 rate over 60s window (percent)', 'gauge'); out.push(`discord_http_429_rate_60s ${metrics.discord_http_429_rate_60s.get()}`);
   lineHelpType('http_429_rate_60s', 'Global 429/403 rate over 60s window', 'gauge'); out.push(`http_429_rate_60s ${metrics.http_429_rate_60s.get()}`);
   lineHelpType('global_latency_p95_ms', 'Global p95 latency over window (ms)', 'gauge'); out.push(`global_latency_p95_ms ${metrics.global_latency_p95_ms.get()}`);
   lineHelpType('discord_queue_depth', 'Discord posting queue depth', 'gauge'); out.push(`discord_queue_depth ${metrics.discord_queue_depth.get()}`);

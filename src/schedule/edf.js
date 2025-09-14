@@ -23,7 +23,8 @@ export class EdfScheduler {
     const tier = tierOf(name);
     // Prefer per-rule frequency when provided, else fall back to tier target
     const freqSec = Number(rule?.frequency || 0);
-    const targetMs = Math.max(1000, Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000));
+    const MIN_PERIOD = Math.max(1000, Number(process.env.SEARCH_PERIOD_MIN_MS || 1200));
+    const targetMs = Math.max(MIN_PERIOD, Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000));
     // Phase anchor: fixed 10s grid with per-rule offset + jitter ±1s
     const PHASE_MS = 10_000;
     const h = [...String(name)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 0);
@@ -32,7 +33,12 @@ export class EdfScheduler {
     const phaseOffset = Math.max(0, Math.min(PHASE_MS - 1, baseOffset + jitterMs));
     const now = Date.now();
     const nextAnchor = Math.floor(now / PHASE_MS) * PHASE_MS + PHASE_MS;
-    const nextAt = nextAnchor + phaseOffset;
+    let nextAt = nextAnchor + phaseOffset;
+    // Fast-start: dispatch promptly after start to avoid initial idle window
+    if (String(process.env.SEARCH_FAST_START || '1') === '1') {
+      const soon = Date.now() + Math.floor(Math.random() * 200);
+      nextAt = Math.min(nextAt, soon);
+    }
     this.rules.set(name, { rule, tier, targetMs, nextAt, running: false, phaseOffset });
   }
 

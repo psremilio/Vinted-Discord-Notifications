@@ -27,8 +27,8 @@ const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
 const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
 
 // Micro-batching controls
-const BATCH_WINDOW_MS = Math.max(0, Number(process.env.POST_BATCH_WINDOW_MS || 250));
-const BATCH_MAX = Math.max(1, Number(process.env.POST_BATCH_EMBEDS_MAX || 5));
+const BATCH_WINDOW_MS = Math.max(0, Number(process.env.POST_BATCH_WINDOW_MS || 200));
+const BATCH_MAX = Math.max(1, Number(process.env.POST_BATCH_EMBEDS_MAX || 2));
 const ENABLE_BATCHING = String(process.env.POST_BATCHING || '1') === '1';
 
 // Per-route concurrency guard: Discord webhook buckets behave best with 1 in-flight
@@ -220,7 +220,16 @@ export async function sendQueued(channel, payload, meta = {}) {
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
 const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl,_retries?:number}>, cooldownUntil: number, ids:Set<string>, inflight:number, channelId:string }
-const rrByChannel = new Map(); // channelId -> next webhook index
+const rrByChannel = new Map(); // channelId -> next webhook index (fallback)
+// Lightweight per-route header cache to enable proactive rotation when near limit
+const routeHdr = new Map(); // routeKey -> { remaining:number, resetUntil:number, bucketId?:string }
+function _setHdr(key, { remaining, resetMs, bucketId }) {
+  try {
+    const until = resetMs > 0 ? Date.now() + resetMs : 0;
+    routeHdr.set(String(key), { remaining: Number.isFinite(remaining) ? remaining : undefined, resetUntil: until, bucketId: bucketId || undefined });
+  } catch {}
+}
+function _getHdr(key) { return routeHdr.get(String(key)) || {}; }
 const chanQueued = new Map(); // channelId -> Set<itemId>
 function _getChanSet(cid) { let s = chanQueued.get(cid); if (!s) { s = new Set(); chanQueued.set(cid, s); } return s; }
 function _isQueued(cid, id) { if (!cid || !id) return false; const s = chanQueued.get(cid); return s ? s.has(id) : false; }
@@ -270,9 +279,11 @@ function _markRecentlyPostedGlobal(id) {
 }
 function getBucketByKey(key, channelId) {
   let b = routeBuckets.get(key);
-  if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), inflight: 0, channelId: String(channelId || '') }; routeBuckets.set(key, b); }
+  if (!b) { b = { q: [], cooldownUntil: 0, ids: new Set(), inflight: 0, channelId: String(channelId || ''), key: String(key) }; routeBuckets.set(key, b); }
   return [key, b];
 }
+
+function fnv1a32(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h >>> 0) + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)); } return h >>> 0; }
 
 function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   const cid = channel?.id || 'UNKNOWN';
@@ -290,10 +301,17 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   if (String(process.env.FORCE_CHANNEL_POST || '0') === '1') {
     // bypass webhooks route for debugging/troubleshooting
   } else if (webhooks && webhooks.length) {
-    const rr = (rrByChannel.has(cid) ? rrByChannel.get(cid) : Math.floor(Math.random() * webhooks.length));
-    chosenWebhook = webhooks[rr % webhooks.length];
-    rrByChannel.set(cid, (rr + 1) % webhooks.length);
-    routeKey = `chan:${cid}:wh:${rr % webhooks.length}`;
+    // Deterministic sharding by itemId when available, else round-robin
+    let idx = null;
+    if (idKey) {
+      idx = fnv1a32(idKey) % webhooks.length;
+    } else {
+      const rr = (rrByChannel.has(cid) ? rrByChannel.get(cid) : Math.floor(Math.random() * webhooks.length));
+      idx = rr % webhooks.length;
+      rrByChannel.set(cid, (rr + 1) % webhooks.length);
+    }
+    chosenWebhook = webhooks[idx];
+    routeKey = `chan:${cid}:wh:${idx}`;
   } else if (cid && String(process.env.AUTO_WEBHOOKS_ON_POST || '1') === '1') {
     // lazy auto-ensure (non-blocking)
     if (!ensureInFlight.has(cid)) {
@@ -345,11 +363,38 @@ setInterval(() => {
   // Do not migrate across webhooks while a bucket is cooling down. When webhooks
   // share a route bucket, migration causes repeated 429s. Default OFF.
   const MIGRATE_ON_COOLDOWN = String(process.env.MIGRATE_ON_COOLDOWN || '0') === '1';
+  const PROACTIVE_ROTATE = String(process.env.PROACTIVE_ROTATE || '1') === '1';
   for (let pass = 0; pass < perBucketSends && slots > 0; pass++) {
     for (const key of keys) {
       if (slots <= 0) break;
       const b = routeBuckets.get(key);
       if (!b || b.q.length === 0) continue;
+      // Proactive rotation: if this bucket is near limit (remaining<=1) and we have siblings with headroom, move head job
+      if (PROACTIVE_ROTATE && b.q.length > 1) {
+        const hdr = _getHdr(key);
+        if (hdr && typeof hdr.remaining === 'number' && hdr.remaining <= 1) {
+          const sibs = byChannel.get(String(b.channelId || '')) || [];
+          const targetKey = sibs.find(k2 => {
+            if (k2 === key) return false;
+            const hb = routeBuckets.get(k2); if (!hb || hb.cooldownUntil > now) return false;
+            const h2 = _getHdr(k2);
+            if (typeof h2.remaining === 'number' && h2.remaining >= 2) return true;
+            return false;
+          });
+          if (targetKey) {
+            const job = b.q.shift();
+            const tb = routeBuckets.get(targetKey);
+            if (job && tb) {
+              try { if (job?.itemId) b.ids.delete(job.itemId); } catch {}
+              tb.q.push(job);
+              try { if (job?.itemId) tb.ids.add(job.itemId); } catch {}
+              if (String(process.env.LOG_ROUTE || '0') === '1') {
+                try { console.log('[post.rotate]', 'cid=', String(b.channelId||''), 'item=', String(job?.itemId||''), 'from=', key, 'to=', targetKey); } catch {}
+              }
+            }
+          }
+        }
+      }
       if (b.cooldownUntil > now) {
         if (MIGRATE_ON_COOLDOWN) {
           // try to migrate head job to another webhook bucket of same channel without cooldown
@@ -501,6 +546,8 @@ async function doSend(job, bucket) {
         const resetAfterMs = Math.floor(Number(res.headers.get('x-ratelimit-reset-after') || '0') * 1000);
         const isGlobal = String(res.headers.get('x-ratelimit-global') || '').toLowerCase() === 'true';
         const bucketHdr = res.headers.get('x-ratelimit-bucket') || '';
+        // update header cache for proactive rotation
+        try { if (bucket?.key) _setHdr(bucket.key, { remaining: rem, resetMs: resetAfterMs, bucketId: bucketHdr }); } catch {}
         if (Number.isFinite(rem) && rem <= 0 && resetAfterMs > 0) {
           const jitter = Math.floor(Math.random() * 120) + 30;
           const wait = resetAfterMs + jitter;
@@ -540,6 +587,7 @@ async function doSend(job, bucket) {
       Number(e?.headers?.['x-ratelimit-reset-after'] || 0) * 1000
     );
     if (retry > 0) {
+      try { if (bucket?.key) _setHdr(bucket.key, { remaining: 0, resetMs: retry, bucketId: undefined }); } catch {}
       bucket.cooldownUntil = Date.now() + retry;
       discordCooldownUntil = Math.max(discordCooldownUntil, bucket.cooldownUntil);
       try { metrics.discord_cooldown_active.set(1); } catch {}
@@ -646,6 +694,7 @@ async function sendWebhook(url, payload, channelId) {
 
 // Auto-tune QPS based on recent 429s
 let last429 = 0;
+let lastOk = 0;
 let currentQps = QPS;
 const MAX_QPS = Math.max(QPS, Number(process.env.DISCORD_QPS_MAX || 120));
 // Fix default floor: use a low sane value when env unset
@@ -658,6 +707,13 @@ setInterval(() => {
     const total = metrics.discord_rate_limit_hits.get?.() ?? 0;
     const delta = total - last429;
     last429 = total;
+    // compute ok delta from labeled counter sum
+    let okSum = 0;
+    try { for (const e of metrics.discord_webhook_send_ok_total.entries()) okSum += Number(e.value || 0); } catch {}
+    const okDelta = okSum - lastOk; lastOk = okSum;
+    const denom = Math.max(1, okDelta + delta);
+    const ratePct = Math.max(0, Math.min(100, Math.round((delta / denom) * 100)));
+    try { metrics.discord_http_429_rate_60s?.set(ratePct); } catch {}
     if (delta > 0) {
       currentQps = Math.max(MIN_QPS, Math.floor(currentQps * DEC_FACTOR));
     } else {
