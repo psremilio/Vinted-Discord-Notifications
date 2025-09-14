@@ -591,9 +591,19 @@ async function sendWebhook(url, payload, channelId) {
   // Discord expects JSON with content/embeds/components; payload passthrough
   try {
     if (payload && typeof payload === 'object') {
-      // Ensure no accidental link previews when content contains URLs
+      // Default: avoid content previews by using empty content when not provided
       if (payload.content == null) payload.content = '';
-      if (payload.flags == null) payload.flags = 4; // SUPPRESS_EMBEDS
+      // Only suppress auto-embeds from content when we actually have a content URL
+      // and no explicit embeds are provided. Never suppress our own embeds.
+      const hasEmbeds = Array.isArray(payload.embeds) && payload.embeds.length > 0;
+      const hasContentUrl = typeof payload.content === 'string' && /https?:\/\//.test(payload.content);
+      if (payload.flags == null && hasContentUrl && !hasEmbeds) {
+        payload.flags = 4; // SUPPRESS_EMBEDS for content-only URLs
+      }
+      // Ensure EmbedBuilders are serialized to raw objects
+      if (Array.isArray(payload.embeds)) {
+        payload.embeds = payload.embeds.map(e => (e && typeof e.toJSON === 'function') ? e.toJSON() : e);
+      }
       // Safety: avoid mentions by default
       if (!payload.allowed_mentions) payload.allowed_mentions = { parse: [] };
     }
