@@ -44,6 +44,7 @@ import { startLoopLagMonitor, getLagP95 } from './src/infra/loopLag.js';
 import { rateCtl } from './src/schedule/rateControl.js';
 import { ensureWebhooksForChannel } from './src/infra/webhooksManager.js';
 import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
+import { buildChannelsStore } from './src/bootstrap/channels.js';
 import { ChannelType } from 'discord.js';
 
 dotenv.config();
@@ -222,9 +223,18 @@ async function onClientReady() {
   console.log(`Logged in as ${client.user.tag}!`);
   try { state.watchers = Array.isArray(mySearches) ? mySearches.length : 0; } catch {}
   setTimeout(() => { sendStartupPing().catch(()=>{}); }, 1000);
-  // Preflight: validate configured channels and ensure usable webhooks
+  // Preflight: build channels store from configured IDs; filter invalid but do not crash unless STRICT_CHANNELS=1
   try {
-    await preflightTargets(client, mySearches);
+    const STRICT = String(process.env.STRICT_CHANNELS || '0') === '1';
+    const ids = Array.from(new Set((Array.isArray(mySearches) ? mySearches : []).map(x => String(x?.channelId || '')).filter(Boolean)));
+    const { store, invalid } = await buildChannelsStore(client, ids, STRICT);
+    globalThis.channelsStore = store; // Map<channelId, Array<{id,token}>>
+    const validSet = new Set(store.keys());
+    // Filter searches to valid channels to avoid blind posts
+    mySearches = (Array.isArray(mySearches) ? mySearches : []).filter(x => validSet.has(String(x?.channelId || '')));
+    if (invalid?.length) {
+      console.warn(`[preflight] filtered ${invalid.length} invalid channel(s); continuing with ${store.size}`);
+    }
   } catch (e) {
     console.error('[preflight] failed — aborting startup:', e?.message || e);
     process.exit(1);
@@ -239,11 +249,9 @@ async function onClientReady() {
     const GRACE = Math.max(0, Number(process.env.COMMANDS_BOOT_GRACE_MS || 3000));
     setTimeout(() => startMonitorsOnce('ready_grace'), GRACE);
   } catch { startMonitorsOnce('ready'); }
-  // Start periodic webhook ensure loop (boot + interval with jitter)
+  // Start periodic webhook ensure loop (boot + interval with jitter) using valid channels only
   try {
-    const ids = Array.from(new Set((Array.isArray(mySearches) ? mySearches : [])
-      .map(x => String(x?.channelId || ''))
-      .filter(Boolean)));
+    const ids = Array.from(globalThis.channelsStore?.keys?.() || []);
     scheduleEnsureLoop(ids);
   } catch {}
 }
@@ -368,35 +376,7 @@ async function sendStartupPing() {
   }
 }
 
-// Validate channels and webhooks before starting monitors
-async function preflightTargets(client, searches) {
-  const ids = Array.from(new Set((Array.isArray(searches) ? searches : [])
-    .map(x => String(x?.channelId || ''))
-    .filter(Boolean)));
-  if (!ids.length) {
-    throw new Error('No target channels configured');
-  }
-  const want = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 6));
-  const invalid = [];
-  for (const id of ids) {
-    try {
-      const ch = await client.channels.fetch(id).catch(() => null) || client.channels.cache.get(id);
-      const isText = !!ch && (typeof ch.send === 'function' || ch.type === ChannelType.GuildText || ch.type === 0);
-      if (!isText) { invalid.push({ id, reason: 'invalid_channel_type' }); continue; }
-      // Ensure we have at least one usable webhook (token present)
-      try { await ensureWebhooksForChannel(ch, want); } catch {}
-      const hooks = await ch.fetchWebhooks().catch(()=>null);
-      const usable = Array.from(hooks?.values?.() || hooks || []).filter(h => h?.token);
-      if (!usable.length) { invalid.push({ id, reason: 'no_usable_webhook' }); continue; }
-    } catch (e) {
-      invalid.push({ id, reason: e?.message || 'fetch_failed' });
-    }
-  }
-  if (invalid.length) {
-    const msg = invalid.map(x => `${x.id}:${x.reason}`).join(', ');
-    throw new Error(`Invalid target channels: ${msg}`);
-  }
-}
+// (unused) old preflightTargets removed in favor of buildChannelsStore
 
 // Graceful shutdown
 function shutdown(signal){
