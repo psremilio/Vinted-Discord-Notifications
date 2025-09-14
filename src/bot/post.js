@@ -5,6 +5,7 @@ import { stats } from '../utils/stats.js';
 import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
 import { metrics } from '../infra/metrics.js';
+import { setIfAbsent as postedSetIfAbsent } from '../infra/postedStore.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === 'function';
 
@@ -124,7 +125,19 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
         metrics.match_age_ms_histogram?.set({ rule: String(ruleName || '') }, age);
       }
     } catch {}
-    const rlist = await sendToTargetsSafely(targets, payload, meta);
+    // Per-target idempotency: allow cross-posting but prevent duplicates per (rule, itemId, channelId)
+    const ttlSec = Math.max(60, Number(process.env.DEDUPE_TTL_SEC || 86400));
+    const planned = [];
+    for (const ch of targets) {
+      try {
+        const cid = String(ch?.id || '');
+        if (!cid) continue;
+        const key = `posted:${String(ruleName||'')}:${String(item.id)}:${cid}`;
+        const ok = await postedSetIfAbsent(key, ttlSec);
+        if (ok) planned.push(ch);
+      } catch { planned.push(ch); }
+    }
+    const rlist = await sendToTargetsSafely(planned, payload, meta);
     const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
     if (anyOk) {
       try {
