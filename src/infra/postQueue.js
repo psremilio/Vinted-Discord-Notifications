@@ -499,10 +499,25 @@ async function doSend(job, bucket) {
       if (isWebhook && res && typeof res.headers?.get === 'function') {
         const rem = Number(res.headers.get('x-ratelimit-remaining') || '1');
         const resetAfterMs = Math.floor(Number(res.headers.get('x-ratelimit-reset-after') || '0') * 1000);
+        const isGlobal = String(res.headers.get('x-ratelimit-global') || '').toLowerCase() === 'true';
+        const bucketHdr = res.headers.get('x-ratelimit-bucket') || '';
         if (Number.isFinite(rem) && rem <= 0 && resetAfterMs > 0) {
-          bucket.cooldownUntil = Date.now() + resetAfterMs;
+          const jitter = Math.floor(Math.random() * 120) + 30;
+          const wait = resetAfterMs + jitter;
+          bucket.cooldownUntil = Date.now() + wait;
+          try { metrics.discord_webhook_cooldowns_total?.inc({ channel: String(job?.channel?.id || '') }); } catch {}
           discordCooldownUntil = Math.max(discordCooldownUntil, bucket.cooldownUntil);
           try { metrics.discord_cooldown_active.set(1); } catch {}
+        }
+        if (isGlobal && resetAfterMs > 0) {
+          const jitter = Math.floor(Math.random() * 120) + 30;
+          const wait = resetAfterMs + jitter;
+          discordCooldownUntil = Math.max(discordCooldownUntil, Date.now() + wait);
+          try { metrics.discord_cooldown_active.set(1); } catch {}
+        }
+        // optional diagnostic
+        if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+          try { console.log('[ratelimit.hdr]', 'cid=', String(job?.channel?.id||''), 'bucket=', bucketHdr, 'rem=', rem, 'reset_ms=', resetAfterMs); } catch {}
         }
       }
     } catch {}
@@ -574,6 +589,15 @@ setInterval(() => {
 // Minimal webhook sender via fetch (undici or global)
 async function sendWebhook(url, payload, channelId) {
   // Discord expects JSON with content/embeds/components; payload passthrough
+  try {
+    if (payload && typeof payload === 'object') {
+      // Ensure no accidental link previews when content contains URLs
+      if (payload.content == null) payload.content = '';
+      if (payload.flags == null) payload.flags = 4; // SUPPRESS_EMBEDS
+      // Safety: avoid mentions by default
+      if (!payload.allowed_mentions) payload.allowed_mentions = { parse: [] };
+    }
+  } catch {}
   const body = JSON.stringify(payload);
   const dispatcher = getDispatcher(url);
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, dispatcher });
@@ -588,8 +612,18 @@ async function sendWebhook(url, payload, channelId) {
   if (res.status === 429) {
     metrics.discord_rate_limit_hits.inc();
     try { metrics.discord_webhook_send_429_total.inc({ channel: String(channelId || '') }); } catch {}
-    const retryAfter = Number((await res.json().catch(()=>({})))?.retry_after || 0) * 1000;
-    if (retryAfter > 0) await new Promise(r => setTimeout(r, retryAfter));
+    const j = Math.floor(Math.random() * 120) + 30;
+    const body = await res.json().catch(()=>({}));
+    const retryAfter = Number(body?.retry_after || 0) * 1000;
+    const isGlobal = String(res.headers.get('x-ratelimit-global') || '').toLowerCase() === 'true';
+    const wait = retryAfter > 0 ? retryAfter + j : 0;
+    if (isGlobal && wait > 0) {
+      try { metrics.discord_cooldown_active.set(1); } catch {}
+      // set a brief global cooldown to avoid hammering
+      const until = Date.now() + wait;
+      if (until > discordCooldownUntil) discordCooldownUntil = until;
+    }
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
     throw new Error('429');
   }
   if (!res.ok) {
