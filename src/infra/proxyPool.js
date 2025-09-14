@@ -36,7 +36,8 @@ async function writeList(list, logger = console) {
   try {
     await fs.mkdir(path.dirname(FILE), { recursive: true });
     await fs.writeFile(FILE, list.join('\n'), 'utf8');
-    logger.info?.(`[proxy] wrote list to ${FILE} (${list.length})`);
+    const sample = list.slice(0, 3).join(', ');
+    logger.info?.(`[proxy] wrote list to ${FILE} (count=${list.length}) sample=[${sample}]`);
   } catch (e) {
     logger.warn?.('[proxy] failed to write list:', e?.message || e);
   }
@@ -46,7 +47,8 @@ async function tryReadLocal(logger = console) {
   try {
     const txt = await fs.readFile(FILE, 'utf8');
     const list = normalize(txt);
-    logger.info?.(`[proxy] loaded cached list (${list.length}) from ${FILE}`);
+    const sample = list.slice(0, 3).join(', ');
+    logger.info?.(`[proxy] loaded cached list count=${list.length} from ${FILE} sample=[${sample}]`);
     return list;
   } catch { return null; }
 }
@@ -90,7 +92,11 @@ export async function tryProvidersWithBackoff(logger = console) {
         }
         if (typeof data === 'string' && data.trim()) {
           const list = normalize(data);
-          if (list.length) return list;
+          if (list.length) {
+            const sample = list.slice(0, 3).join(', ');
+            logger.info?.(`[proxy] provider ${url} parsed count=${list.length} sample=[${sample}]`);
+            return list;
+          }
         }
       } catch (e) {
         if (e?.response?.status === 429) {

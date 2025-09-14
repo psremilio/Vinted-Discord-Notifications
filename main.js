@@ -299,7 +299,17 @@ client.on('interactionCreate',interaction=>{
 (async function boot(){
   // Kick off proxy setup in parallel to avoid long pre-login stalls
   try { await whitelistCurrentEgressIP(); } catch {}
-  try { await ensureProxyPool(console); } catch (e) { console.error('[proxy.boot] failed:', e?.message || e); process.exit(1); }
+  try {
+    const list = await ensureProxyPool(console);
+    const min = Math.max(0, Number(process.env.MIN_PROXIES_AT_BOOT || 5));
+    if (Array.isArray(list)) {
+      console.log(`[proxy.boot] pool ready: ${list.length} proxies`);
+      if (min > 0 && list.length < min) {
+        console.error(`[proxy.boot] insufficient proxies (${list.length} < ${min}) — check PROXY_LIST_URL(S) or provider; refusing DIRECT fallback`);
+        process.exit(1);
+      }
+    }
+  } catch (e) { console.error('[proxy.boot] failed:', e?.message || e); process.exit(1); }
   try { scheduleProxyRefresh(console); } catch {}
   const poolInit = initProxyPool().catch(()=>{});
   const DEADLINE_SEC = Number(process.env.STARTUP_DEADLINE_SEC || 60);

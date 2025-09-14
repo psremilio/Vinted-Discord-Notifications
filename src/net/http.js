@@ -224,7 +224,10 @@ export async function getHttp(base) {
 
   // Optional direct fallback when no proxies are immediately available.
   // Enabled by ALLOW_DIRECT=1 or (by default) ALLOW_DIRECT_ON_EMPTY=1.
-  const DIRECT_OK = String(process.env.ALLOW_DIRECT || '0') === '1' || String(process.env.ALLOW_DIRECT_ON_EMPTY || '1') === '1';
+  const DIRECT_OK =
+    String(process.env.ALLOW_DIRECT || '0') === '1' ||
+    String(process.env.ALLOW_DIRECT_ON_EMPTY || '0') === '1' ||
+    String(process.env.PROXY_ALLOW_DIRECT_WHEN_EMPTY || '0') === '1';
   if (DIRECT_OK) {
     const http = axios.create({
       withCredentials: true,
@@ -287,7 +290,7 @@ export async function hedgedGet(url, config = {}, base = BASE) {
   if (winner) return winner.res;
   // Optional direct fallback when all hedged proxy requests fail
   try {
-    const ALLOW = String(process.env.ALLOW_DIRECT_ON_HEDGE_FAIL || process.env.ALLOW_DIRECT || '1') === '1';
+    const ALLOW = String(process.env.ALLOW_DIRECT_ON_HEDGE_FAIL || process.env.ALLOW_DIRECT || '0') === '1';
     if (ALLOW) {
       const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000), validateStatus: () => true });
       const code = Number(res?.status || 0);

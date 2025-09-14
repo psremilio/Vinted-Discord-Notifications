@@ -22,7 +22,7 @@ async function writeStore(obj) {
 }
 
 export async function ensure(host, opts = {}) {
-  const allowDirect = opts.allowDirect ?? (String(process.env.TOKEN_BOOTSTRAP_ALLOW_DIRECT || '1') === '1');
+  const allowDirect = opts.allowDirect ?? (String(process.env.TOKEN_BOOTSTRAP_ALLOW_DIRECT || '0') === '1');
   const key = String(host || '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
   if (!key) throw new Error('tokens.ensure: host required');
   const store = await readStore();
@@ -81,4 +81,3 @@ export async function get(host) {
   const store = await readStore();
   return store[key] || null;
 }
-
