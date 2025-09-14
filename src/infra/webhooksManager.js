@@ -54,6 +54,20 @@ export async function ensureWebhooksForChannel(channel, count = WEBHOOKS_PER_CHA
 export function getWebhooksForChannelId(channelId) {
   if (!channelId) return [];
   const storeUrls = getStore(channelId) || [];
+  // Include preflight-built channelsStore if available (id+token -> URL)
+  let built = [];
+  try {
+    const gs = globalThis.channelsStore;
+    if (gs && typeof gs.get === 'function') {
+      const entries = gs.get(String(channelId)) || [];
+      built = (entries || []).map(e => {
+        try {
+          const id = String(e.id); const token = String(e.token);
+          return `https://discord.com/api/v10/webhooks/${id}/${token}`;
+        } catch { return null; }
+      }).filter(Boolean);
+    }
+  } catch {}
   const envUrls = ENV_MAP && Array.isArray(ENV_MAP[channelId]) ? ENV_MAP[channelId] : [];
-  return Array.from(new Set([...storeUrls, ...envUrls])).filter(Boolean);
+  return Array.from(new Set([...storeUrls, ...built, ...envUrls])).filter(Boolean);
 }

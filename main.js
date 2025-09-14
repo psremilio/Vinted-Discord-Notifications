@@ -33,7 +33,7 @@ try {
 import { registerCommands, handleCommands } from './src/commands.js';
 import { run } from './src/run.js';
 import { whitelistCurrentEgressIP } from './src/net/whitelist.js';
-import { ensureProxyList, startProxyRefreshLoop } from './src/net/ensureProxyList.js';
+import { ensureProxyPool, scheduleProxyRefresh } from './src/infra/proxyPool.js';
 import { initProxyPool, startHeartbeat, stopHeartbeat, healthyCount, coolingCount, badCount } from './src/net/proxyHealth.js';
 import { state } from './src/state.js';
 import { get as httpGet } from './src/net/http.js';
@@ -269,8 +269,8 @@ client.on('interactionCreate',interaction=>{
 (async function boot(){
   // Kick off proxy setup in parallel to avoid long pre-login stalls
   try { await whitelistCurrentEgressIP(); } catch {}
-  try { await ensureProxyList(); } catch {}
-  startProxyRefreshLoop();
+  try { await ensureProxyPool(console); } catch (e) { console.error('[proxy.boot] failed:', e?.message || e); process.exit(1); }
+  try { scheduleProxyRefresh(console); } catch {}
   const poolInit = initProxyPool().catch(()=>{});
   const DEADLINE_SEC = Number(process.env.STARTUP_DEADLINE_SEC || 60);
   const t0 = Date.now();
