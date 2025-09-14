@@ -44,6 +44,7 @@ import { startLoopLagMonitor, getLagP95 } from './src/infra/loopLag.js';
 import { rateCtl } from './src/schedule/rateControl.js';
 import { ensureWebhooksForChannel } from './src/infra/webhooksManager.js';
 import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
+import { startPosterWorker } from './src/poster/worker.js';
 import { buildChannelsStore } from './src/bootstrap/channels.js';
 import { ChannelType } from 'discord.js';
 
@@ -254,6 +255,15 @@ async function onClientReady() {
     const ids = Array.from(globalThis.channelsStore?.keys?.() || []);
     scheduleEnsureLoop(ids);
   } catch {}
+
+  // Start Redis Streams poster worker if enabled
+  try {
+    if (String(process.env.POST_VIA_STREAMS || '0') === '1') {
+      await startPosterWorker();
+    }
+  } catch (e) {
+    console.warn('[streams.worker.init] failed:', e?.message || e);
+  }
 }
 client.on('ready', onClientReady);
 // Prepare for discord.js v15 rename (clientReady)

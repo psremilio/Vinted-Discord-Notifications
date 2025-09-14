@@ -6,6 +6,7 @@ import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
 import { metrics } from '../infra/metrics.js';
 import { setIfAbsent as postedSetIfAbsent } from '../infra/postedStore.js';
+import { xaddPostTask } from '../queue/streams.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === 'function';
 
@@ -125,29 +126,48 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
         metrics.match_age_ms_histogram?.set({ rule: String(ruleName || '') }, age);
       }
     } catch {}
-    // Per-target idempotency: allow cross-posting but prevent duplicates per (rule, itemId, channelId)
-    const ttlSec = Math.max(60, Number(process.env.DEDUPE_TTL_SEC || 86400));
-    const planned = [];
-    for (const ch of targets) {
-      try {
-        const cid = String(ch?.id || '');
-        if (!cid) continue;
-        const key = `posted:${String(ruleName||'')}:${String(item.id)}:${cid}`;
-        const ok = await postedSetIfAbsent(key, ttlSec);
-        if (ok) planned.push(ch);
-      } catch { planned.push(ch); }
-    }
-    const rlist = await sendToTargetsSafely(planned, payload, meta);
-    const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
-    if (anyOk) {
-      try {
-        console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
-        stats.posted += 1;
-        markPosted();
-      } catch {}
+    const VIA_STREAMS = String(process.env.POST_VIA_STREAMS || '0') === '1';
+    if (VIA_STREAMS) {
+      // Publish one task per channel into Redis Streams; worker posts it
+      const createdAtMs = listing.createdAt || Date.now();
+      const compJson = (payload.components || []).map(c => (typeof c.toJSON === 'function' ? c.toJSON() : c));
+      for (const ch of targets) {
+        const cid = String(ch?.id || ''); if (!cid) continue;
+        await xaddPostTask(cid, {
+          itemId: String(item.id),
+          rule: String(ruleName || ''),
+          createdAtMs: String(createdAtMs),
+          embed: payload.embeds ? payload.embeds[0] : null,
+          components: compJson && compJson.length ? compJson : null,
+          content: payload.content || '',
+        });
+      }
+      continue; // defer actual sending to worker
     } else {
-      if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
-        try { console.log('[post.skip]', 'item=', item.id, 'reasons=', JSON.stringify(rlist)); } catch {}
+      // Per-target idempotency in-process: allow cross-posting across channels
+      const ttlSec = Math.max(60, Number(process.env.DEDUPE_TTL_SEC || 86400));
+      const planned = [];
+      for (const ch of targets) {
+        try {
+          const cid = String(ch?.id || '');
+          if (!cid) continue;
+          const key = `posted:${String(ruleName||'')}:${String(item.id)}:${cid}`;
+          const ok = await postedSetIfAbsent(key, ttlSec);
+          if (ok) planned.push(ch);
+        } catch { planned.push(ch); }
+      }
+      const rlist = await sendToTargetsSafely(planned, payload, meta);
+      const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
+      if (anyOk) {
+        try {
+          console.log(`[debug][rule:${ruleName || (targets?.[0]?.name ?? 'unknown')}] posted item=${item.id}`);
+          stats.posted += 1;
+          markPosted();
+        } catch {}
+      } else {
+        if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+          try { console.log('[post.skip]', 'item=', item.id, 'reasons=', JSON.stringify(rlist)); } catch {}
+        }
       }
     }
   }
