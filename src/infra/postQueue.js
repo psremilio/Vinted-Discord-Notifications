@@ -1,5 +1,7 @@
 import Bottleneck from 'bottleneck';
 import { Pool } from 'undici';
+import { sanitizeEmbeds } from '../discord/ensureValidEmbed.js';
+import { DiscordBucket } from '../post/DiscordBucket.js';
 import { metrics } from './metrics.js';
 import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksManager.js';
 import { remove as removeWebhookFromStore } from './webhooksStore.js';
@@ -29,7 +31,8 @@ const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
 // Micro-batching controls
 const BATCH_WINDOW_MS = Math.max(0, Number(process.env.POST_BATCH_WINDOW_MS || 200));
 const BATCH_MAX = Math.max(1, Number(process.env.POST_BATCH_EMBEDS_MAX || 2));
-const ENABLE_BATCHING = String(process.env.POST_BATCHING || '1') === '1';
+// Default batching OFF until per-bucket limiter is stable
+const ENABLE_BATCHING = String(process.env.POST_BATCHING || '0') === '1';
 
 // Per-route concurrency guard: Discord webhook buckets behave best with 1 in-flight
 // Default to 1 to avoid parallel sends on the same route. Can be raised via env
@@ -57,12 +60,8 @@ function getDispatcher(url) {
   return p;
 }
 
-export const postLimiter = new Bottleneck({
-  maxConcurrent: CONC,
-  reservoir: QPS,
-  reservoirRefreshAmount: QPS,
-  reservoirRefreshInterval: 1000,
-});
+// Concurrency-only limiter; no global QPS reservoir
+export const postLimiter = new Bottleneck({ maxConcurrent: CONC });
 // Track current concurrency for auto-tune adjustments
 let currentConc = CONC;
 
@@ -219,10 +218,18 @@ export async function sendQueued(channel, payload, meta = {}) {
 }
 
 // Route-aware per-bucket queues (bucket ≈ channel route)
-const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl,_retries?:number}>, cooldownUntil: number, ids:Set<string>, inflight:number, channelId:string }
+const routeBuckets = new Map(); // key -> { q: Array<{channel,payload,discoveredAt,createdAt,itemId,webhookUrl,_retries?:number}>, cooldownUntil: number, ids:Set<string>, inflight:number, channelId:string, dbKey?:string, db?:DiscordBucket }
 const rrByChannel = new Map(); // channelId -> next webhook index (fallback)
 // Lightweight per-route header cache to enable proactive rotation when near limit
 const routeHdr = new Map(); // routeKey -> { remaining:number, resetUntil:number, bucketId?:string }
+// Shared Discord buckets keyed by x-ratelimit-bucket (or temporary route key)
+const discordBuckets = new Map(); // dkey -> DiscordBucket
+function discordBucketsGet(key) {
+  const k = String(key || '');
+  let b = discordBuckets.get(k);
+  if (!b) { b = new DiscordBucket(k); discordBuckets.set(k, b); }
+  return b;
+}
 function _setHdr(key, { remaining, resetMs, bucketId }) {
   try {
     const until = resetMs > 0 ? Date.now() + resetMs : 0;
@@ -369,6 +376,12 @@ setInterval(() => {
       if (slots <= 0) break;
       const b = routeBuckets.get(key);
       if (!b || b.q.length === 0) continue;
+      // Determine Discord bucket object: use learned x-ratelimit-bucket id if available,
+      // otherwise use a temporary per-route key to avoid thundering herd until we learn it.
+      if (!b.db) {
+        const tmpKey = b.dbKey || `route:${key}`;
+        b.db = discordBucketsGet(tmpKey);
+      }
       // Proactive rotation: if this bucket is near limit (remaining<=1) and we have siblings with headroom, move head job
       if (PROACTIVE_ROTATE && b.q.length > 1) {
         const hdr = _getHdr(key);
@@ -394,6 +407,12 @@ setInterval(() => {
             }
           }
         }
+      }
+      // Enforce per-bucket token availability
+      if (b.db && !b.db.canSend(now)) {
+        // schedule resume at bucket reset; set route cooldown as a hint
+        b.cooldownUntil = Math.max(b.cooldownUntil || 0, b.db.resetAt + b.db.safetyMs);
+        continue;
       }
       if (b.cooldownUntil > now) {
         if (MIGRATE_ON_COOLDOWN) {
@@ -428,12 +447,14 @@ setInterval(() => {
       job = b.q.shift();
       if (job?.itemId) try { b.ids.delete(job.itemId); } catch {}
       slots--;
+      // Virtually take a token before we dispatch to avoid stampedes
+      try { b.db?.onRequestQueued(); } catch {}
       b.inflight = (b.inflight || 0) + 1;
       postLimiter.schedule(() => doSend(job, b)).catch(() => {}).finally(() => { b.inflight = Math.max(0, (b.inflight||1) - 1); });
     }
   }
   if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug' || String(process.env.LOG_QUEUE_TICK||'0')==='1') {
-    console.log(`[post.tick] qps=${currentQps} bucketsReady=${ready} slotsLeft=${slots} totalQ=${totalQ} perBucket=${perBucketSends}`);
+    console.log(`[post.tick] bucketsReady=${ready} slotsLeft=${slots} totalQ=${totalQ} perBucket=${perBucketSends}`);
   }
   // per-route depth metric
   try {
@@ -548,6 +569,13 @@ async function doSend(job, bucket) {
         const bucketHdr = res.headers.get('x-ratelimit-bucket') || '';
         // update header cache for proactive rotation
         try { if (bucket?.key) _setHdr(bucket.key, { remaining: rem, resetMs: resetAfterMs, bucketId: bucketHdr }); } catch {}
+        // Attach/migrate route to Discord bucket id so limits are shared
+        if (bucketHdr) {
+          bucket.dbKey = bucketHdr;
+          bucket.db = discordBucketsGet(bucketHdr);
+        }
+        // Update bucket-level token bucket state
+        try { bucket.db?.onHeaders(res.headers); } catch {}
         if (Number.isFinite(rem) && rem <= 0 && resetAfterMs > 0) {
           const jitter = Math.floor(Math.random() * 120) + 30;
           const wait = resetAfterMs + jitter;
@@ -591,6 +619,7 @@ async function doSend(job, bucket) {
       bucket.cooldownUntil = Date.now() + retry;
       discordCooldownUntil = Math.max(discordCooldownUntil, bucket.cooldownUntil);
       try { metrics.discord_cooldown_active.set(1); } catch {}
+      try { if (bucket?.db) bucket.db.on429RetryAfter((retry || 0) / 1000); } catch {}
       // Requeue the job to attempt after cooldown, to avoid losing items on 429
       try {
         job._retries = (job._retries || 0) + 1;
@@ -639,24 +668,15 @@ async function sendWebhook(url, payload, channelId) {
   // Discord expects JSON with content/embeds/components; payload passthrough
   try {
     if (payload && typeof payload === 'object') {
-      // Default: avoid content previews by using empty content when not provided
+      // Always use empty content by default to avoid auto-previews
       if (payload.content == null) payload.content = '';
-      // Only suppress auto-embeds from content when we actually have a content URL
-      // and no explicit embeds are provided. Never suppress our own embeds.
-      const hasEmbeds = Array.isArray(payload.embeds) && payload.embeds.length > 0;
-      const hasContentUrl = typeof payload.content === 'string' && /https?:\/\//.test(payload.content);
-      if (payload.flags == null && hasContentUrl && !hasEmbeds) {
-        payload.flags = 4; // SUPPRESS_EMBEDS for content-only URLs
-      }
-      // Ensure EmbedBuilders are serialized to raw objects
+      // Drop any flags to avoid suppressing embeds accidentally (FORCE_NO_FLAGS)
+      if (payload.flags != null && String(process.env.FORCE_NO_FLAGS || '1') === '1') delete payload.flags;
+      // Ensure embeds serialized and sanitized
       if (Array.isArray(payload.embeds)) {
-        payload.embeds = payload.embeds.map(e => {
-          try {
-            if (e && typeof e.toJSON === 'function') return e.toJSON();
-            if (e && typeof e === 'object' && e.data) return e.data; // discord.js builder internal
-          } catch {}
-          return e;
-        });
+        const cleaned = sanitizeEmbeds(payload.embeds);
+        payload.embeds = cleaned;
+        try { if (cleaned.length) metrics.post_embed_sanitized_total.inc(); } catch {}
       }
       // Ensure components (ActionRowBuilder/ButtonBuilder) are serialized
       if (Array.isArray(payload.components)) {
@@ -683,8 +703,9 @@ async function sendWebhook(url, payload, channelId) {
     metrics.discord_rate_limit_hits.inc();
     try { metrics.discord_webhook_send_429_total.inc({ channel: String(channelId || '') }); } catch {}
     const j = Math.floor(Math.random() * 120) + 30;
-    const body = await res.json().catch(()=>({}));
-    const retryAfter = Number(body?.retry_after || 0) * 1000;
+    const jbody = await res.json().catch(()=>({}));
+    const retryAfterSec = Number(jbody?.retry_after || 0);
+    const retryAfter = retryAfterSec * 1000;
     const isGlobal = String(res.headers.get('x-ratelimit-global') || '').toLowerCase() === 'true';
     const wait = retryAfter > 0 ? retryAfter + j : 0;
     if (isGlobal && wait > 0) {
@@ -694,45 +715,50 @@ async function sendWebhook(url, payload, channelId) {
       if (until > discordCooldownUntil) discordCooldownUntil = until;
     }
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
-    throw new Error('429');
+    const err = new Error('429');
+    err.status = 429;
+    err.retry_after = retryAfterSec;
+    err.headers = { 'x-ratelimit-global': isGlobal ? 'true' : 'false', 'x-ratelimit-reset-after': res.headers.get('x-ratelimit-reset-after') };
+    throw err;
   }
   if (!res.ok) {
     const txt = await res.text().catch(()=> '');
-    throw new Error(`webhook ${res.status} ${txt}`);
+    // Try to detect invalid embed payloads for telemetry
+    if (res.status === 400) {
+      try { metrics.post_embed_invalid_total.inc(); } catch {}
+      try { console.warn('[post.embed.invalid]', 'channel=', String(channelId||''), 'body_bytes=', Buffer.byteLength(body), 'resp=', txt.slice(0, 300)); } catch {}
+    }
+    const err = new Error(`webhook ${res.status} ${txt}`);
+    err.status = res.status;
+    throw err;
   }
   try { metrics.discord_webhook_send_ok_total.inc({ channel: String(channelId || '') }); } catch {}
+  // Heuristic: if we sent embeds but Discord responds 204, we cannot know render; just log payload size for investigation
+  try {
+    const hadEmbeds = (() => { try { const j = JSON.parse(body); return Array.isArray(j?.embeds) && j.embeds.length > 0; } catch { return false; } })();
+    if (hadEmbeds) {
+      const sz = Buffer.byteLength(body);
+      if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log('[post.embed.sent]', 'channel=', String(channelId||''), 'embeds=', 'yes', 'bytes=', sz);
+    }
+  } catch {}
   return res;
 }
 
 // Auto-tune QPS based on recent 429s
 let last429 = 0;
 let lastOk = 0;
-let currentQps = QPS;
-const MAX_QPS = Math.max(QPS, Number(process.env.DISCORD_QPS_MAX || 120));
-// Fix default floor: use a low sane value when env unset
-const MIN_QPS = Math.max(5, Number(process.env.DISCORD_QPS_MIN || 5));
-const INC_STEP = Math.max(1, Number(process.env.DISCORD_QPS_INC || 8));
-const DEC_FACTOR = Number(process.env.DISCORD_QPS_DEC_FACTOR || 0.92);
-
+// Keep gauge update but remove global QPS adaptation
 setInterval(() => {
   try {
     const total = metrics.discord_rate_limit_hits.get?.() ?? 0;
     const delta = total - last429;
     last429 = total;
-    // compute ok delta from labeled counter sum
     let okSum = 0;
     try { for (const e of metrics.discord_webhook_send_ok_total.entries()) okSum += Number(e.value || 0); } catch {}
     const okDelta = okSum - lastOk; lastOk = okSum;
     const denom = Math.max(1, okDelta + delta);
     const ratePct = Math.max(0, Math.min(100, Math.round((delta / denom) * 100)));
     try { metrics.discord_http_429_rate_60s?.set(ratePct); } catch {}
-    if (delta > 0) {
-      currentQps = Math.max(MIN_QPS, Math.floor(currentQps * DEC_FACTOR));
-    } else {
-      currentQps = Math.min(MAX_QPS, currentQps + INC_STEP);
-    }
-    // apply
-    postLimiter.updateSettings({ reservoir: currentQps, reservoirRefreshAmount: currentQps });
   } catch {}
 }, 60 * 1000);
 
@@ -804,20 +830,8 @@ if (PURGE_ENABLED) {
 }
 
 // Fast queue-based QPS boost (10s cadence)
-setInterval(() => {
-  try {
-    let keys = Array.from(routeBuckets.keys());
-    const totalQ = keys.reduce((a,k)=> a + (routeBuckets.get(k)?.q?.length||0), 0);
-    const cooldown = metrics.discord_cooldown_active.get?.() || 0;
-    if (!cooldown && totalQ > 60) {
-      const boost = Math.floor(MAX_QPS * 0.9);
-      if (currentQps < boost) {
-        currentQps = Math.min(MAX_QPS, boost);
-        postLimiter.updateSettings({ reservoir: currentQps, reservoirRefreshAmount: currentQps });
-      }
-    }
-  } catch {}
-}, 10 * 1000);
+// Disable global QPS boost; token buckets govern pacing
+setInterval(() => { try { /* noop */ } catch {} }, 10 * 1000);
 
 // Concurrency auto-tune based on backlog (every 10s)
 setInterval(() => {

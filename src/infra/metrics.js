@@ -66,6 +66,10 @@ export const metrics = {
   discord_webhook_send_429_total: new LabeledCounter('discord_webhook_send_429_total', ['channel']),
   discord_webhook_cooldowns_total: new LabeledCounter('discord_webhook_cooldowns_total', ['channel']),
   discord_channel_send_ok_total: new LabeledCounter('discord_channel_send_ok_total', ['channel']),
+  // embeds validation/diagnostics
+  post_embed_sanitized_total: new Counter('post_embed_sanitized_total'),
+  post_embed_invalid_total: new Counter('post_embed_invalid_total'),
+  post_embed_suspected_suppressed_total: new LabeledCounter('post_embed_suspected_suppressed_total', ['channel']),
   // fanout + gating + http extras
   parent_fanout_items_total: new LabeledCounter('parent_fanout_items_total', ['parent','child']),
   child_fetch_saved_total: new LabeledCounter('child_fetch_saved_total', ['child']),
@@ -160,6 +164,11 @@ export function serializeMetrics() {
   for (const e of metrics.discord_webhook_cooldowns_total.entries()) out.push(`discord_webhook_cooldowns_total{channel="${e.labels.channel}"} ${e.value}`);
   lineHelpType('discord_channel_send_ok_total', 'Plain channel.send posts (no webhook)', 'counter');
   for (const e of metrics.discord_channel_send_ok_total.entries()) out.push(`discord_channel_send_ok_total{channel="${e.labels.channel}"} ${e.value}`);
+  // embeds
+  lineHelpType('post_embed_sanitized_total', 'Embeds sanitized (clamped/truncated)', 'counter'); out.push(`post_embed_sanitized_total ${metrics.post_embed_sanitized_total.get()}`);
+  lineHelpType('post_embed_invalid_total', 'Embeds invalid (400 errors)', 'counter'); out.push(`post_embed_invalid_total ${metrics.post_embed_invalid_total.get()}`);
+  lineHelpType('post_embed_suspected_suppressed_total', 'Suspected suppressed embeds by channel', 'counter');
+  for (const e of metrics.post_embed_suspected_suppressed_total.entries()) out.push(`post_embed_suspected_suppressed_total{channel="${e.labels.channel}"} ${e.value}`);
   // fanout + gating + http extras
   lineHelpType('parent_fanout_items_total', 'Items fanned out from parent to child', 'counter');
   for (const e of metrics.parent_fanout_items_total.entries()) out.push(`parent_fanout_items_total{parent="${e.labels.parent}",child="${e.labels.child}"} ${e.value}`);
