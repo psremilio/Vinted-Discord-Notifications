@@ -650,7 +650,19 @@ async function sendWebhook(url, payload, channelId) {
       }
       // Ensure EmbedBuilders are serialized to raw objects
       if (Array.isArray(payload.embeds)) {
-        payload.embeds = payload.embeds.map(e => (e && typeof e.toJSON === 'function') ? e.toJSON() : e);
+        payload.embeds = payload.embeds.map(e => {
+          try {
+            if (e && typeof e.toJSON === 'function') return e.toJSON();
+            if (e && typeof e === 'object' && e.data) return e.data; // discord.js builder internal
+          } catch {}
+          return e;
+        });
+      }
+      // Ensure components (ActionRowBuilder/ButtonBuilder) are serialized
+      if (Array.isArray(payload.components)) {
+        payload.components = payload.components.map(c => {
+          try { return (c && typeof c.toJSON === 'function') ? c.toJSON() : c; } catch { return c; }
+        });
       }
       // Safety: avoid mentions by default
       if (!payload.allowed_mentions) payload.allowed_mentions = { parse: [] };
