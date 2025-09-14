@@ -7,6 +7,12 @@ import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksMan
 import { remove as removeWebhookFromStore } from './webhooksStore.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
+// QPS compatibility: used only to compute 'slots' in the scheduler loop.
+// Actual rate control uses per-Discord-bucket token buckets.
+const QPS_MIN = Math.max(1, Number(process.env.DISCORD_QPS_MIN || 10));
+const QPS_MAX = Math.max(QPS_MIN, Number(process.env.DISCORD_QPS_MAX || 80));
+let currentQps = Math.min(Math.max(Math.floor(Number(process.env.DISCORD_QPS || QPS_MIN)), QPS_MIN), QPS_MAX);
+function setQps(n) { currentQps = Math.min(Math.max(Math.floor(Number(n)), QPS_MIN), QPS_MAX); }
 const DIAG_ALL = String(process.env.DIAG_ALL || '0') === '1';
 const DIAG_SAMPLE_N = Math.max(1, Number(process.env.DIAG_SAMPLE_N || 1));
 let __diag_i = 0;
@@ -339,7 +345,8 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
 
 // WFQ-like scheduler: per second serve up to currentQps, 1 msg per bucket per tick
 setInterval(() => {
-  let slots = currentQps;
+  try {
+  let slots = Number.isFinite(currentQps) ? currentQps : QPS_MIN;
   const now = Date.now();
   let keys = Array.from(routeBuckets.keys());
   // Build channel -> bucket list index for potential migration
@@ -468,6 +475,10 @@ setInterval(() => {
     }
     for (const [cid, depth] of sums.entries()) metrics.route_queue_depth.set({ channel: cid }, depth);
   } catch {}
+  } catch (e) {
+    try { console.error('[post.tick.fatal]', e?.stack || e?.message || e); } catch {}
+    try { setQps(QPS_MIN); } catch {}
+  }
 }, 1000);
 
 // Purge all queued posts for a given channel (route + reorder buffer)
