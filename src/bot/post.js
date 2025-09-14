@@ -1,6 +1,7 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildListingEmbed } from '../embeds.js';
 import { sanitizeEmbed } from '../discord/ensureValidEmbed.js';
+import { sanitizeEmbed } from '../discord/ensureValidEmbed.js';
 import { stats } from '../utils/stats.js';
 import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
@@ -8,29 +9,45 @@ import { metrics } from '../infra/metrics.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === 'function';
 
+// Simple TTL cache for recently built/sanitized embeds per itemId
+const EMBED_CACHE_TTL_MS = Math.max(10_000, Number(process.env.EMBED_CACHE_TTL_MS || 60_000));
+const embedCache = new Map(); // itemId -> { embedJson, expireAt }
+function getCachedEmbed(itemId) {
+  if (!itemId) return null;
+  const e = embedCache.get(String(itemId));
+  if (!e) return null;
+  if (e.expireAt && e.expireAt <= Date.now()) { embedCache.delete(String(itemId)); return null; }
+  return e.embedJson || null;
+}
+function setCachedEmbed(itemId, embedJson) {
+  if (!itemId || !embedJson) return;
+  embedCache.set(String(itemId), { embedJson, expireAt: Date.now() + EMBED_CACHE_TTL_MS });
+}
+
 async function sendToTargetsSafely(targets, payload, meta = {}) {
   const list = Array.isArray(targets) ? targets : [targets];
-  const results = [];
+  const promises = [];
   for (const ch of (list || [])) {
-    if (!isTextChannelLike(ch)) {
-      console.warn('[post] skip invalid channel', ch?.id ?? '(undefined)');
-      results.push({ ok: false, reason: 'invalid_channel' });
-      continue;
-    }
-    try {
-      const res = await sendQueued(ch, payload, meta);
-      results.push(res || { ok: true });
-    } catch (e) {
-      const code = Number(e?.code || 0);
-      if (code === 10003) {
-        console.error(`[post] send failed: Unknown Channel (id=${ch?.id ?? 'unknown'}) — wurde der Kanal gelöscht oder fehlt die Berechtigung?`);
-      } else {
-        console.error('[post] send failed', ch?.id ?? '(unknown)', e);
+    promises.push((async () => {
+      if (!isTextChannelLike(ch)) {
+        console.warn('[post] skip invalid channel', ch?.id ?? '(undefined)');
+        return { ok: false, reason: 'invalid_channel' };
       }
-      results.push({ ok: false, reason: 'exception' });
-    }
+      try {
+        const res = await sendQueued(ch, payload, meta);
+        return res || { ok: true };
+      } catch (e) {
+        const code = Number(e?.code || 0);
+        if (code === 10003) {
+          console.error(`[post] send failed: Unknown Channel (id=${ch?.id ?? 'unknown'}) — wurde der Kanal gelöscht oder fehlt die Berechtigung?`);
+        } else {
+          console.error('[post] send failed', ch?.id ?? '(unknown)', e);
+        }
+        return { ok: false, reason: 'exception' };
+      }
+    })());
   }
-  return results;
+  return Promise.all(promises);
 }
 
 export async function postArticles(newArticles, channelToSend, ruleName) {
@@ -79,8 +96,13 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
     };
 
     // Build and sanitize embed; fallback to content-only when empty
-    const rawEmbed = buildListingEmbed(listing);
-    const embedJson = sanitizeEmbed(rawEmbed);
+    // Build embed once per item and cache shortly to speed up fanout
+    let embedJson = getCachedEmbed(listing.id);
+    if (!embedJson) {
+      const rawEmbed = buildListingEmbed(listing);
+      embedJson = sanitizeEmbed(rawEmbed);
+      if (embedJson) setCachedEmbed(listing.id, embedJson);
+    }
     let payload;
     if (!embedJson || (typeof embedJson === 'object' && Object.keys(embedJson).length === 0)) {
       const title = String(listing.title || 'Item');

@@ -17,8 +17,10 @@ if (scope !== 'global' && scope !== 'channel' && scope !== 'family' && scope !==
 }
 // Export final scope
 export const DEDUPE_SCOPE = scope;
+// TTL: prefer seconds env if provided, else minutes fallback
+const DEDUPE_TTL_SEC = parseInt(process.env.DEDUPE_TTL_SEC ?? process.env.PROCESSED_TTL_SEC ?? '0', 10);
 export const PROCESSED_TTL_MIN = parseInt(process.env.PROCESSED_TTL_MIN ?? '60', 10);
-export const ttlMs = PROCESSED_TTL_MIN * 60 * 1000;
+export const ttlMs = (DEDUPE_TTL_SEC > 0 ? DEDUPE_TTL_SEC * 1000 : PROCESSED_TTL_MIN * 60 * 1000);
 
 const slug = (s) => String(s || '').toLowerCase().trim().replace(/\s+/g, '-');
 

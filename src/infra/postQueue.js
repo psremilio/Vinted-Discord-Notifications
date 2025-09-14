@@ -387,10 +387,17 @@ setInterval(() => {
   if (cooldown) perBucketSends = Math.max(1, Math.floor(perBucketSends / 2));
   // do up to perBucketSends passes for fairness
   // prioritize buckets with freshest head createdAt when backlog is high
-  // Prioritize buckets with freshest heads sooner to reduce tail latencies
+  // Prioritize buckets with freshest heads sooner to reduce tail latencies (hot-lane first)
   if (totalQ > 20) {
+    const HOT_AGE_MS = Math.max(0, Number(process.env.HOT_AGE_MS || 20_000));
+    const nowMs = Date.now();
     const headCreated = (k)=>{ const b=routeBuckets.get(k); const q=b?.q||[]; if(!q.length) return 0; let m=0; for (const it of q) { const v=Number(it?.createdAt||0); if (v>m) m=v; } return m; };
-    keys = keys.slice().sort((a,b)=> headCreated(b)-headCreated(a));
+    const isHot = (k)=>{ const t=headCreated(k); return t>0 && (nowMs - t) <= HOT_AGE_MS; };
+    keys = keys.slice().sort((a,b)=> {
+      const ha = isHot(a), hb = isHot(b);
+      if (ha !== hb) return ha ? -1 : 1; // hot first
+      return headCreated(b) - headCreated(a);
+    });
   }
   // Do not migrate across webhooks while a bucket is cooling down. When webhooks
   // share a route bucket, migration causes repeated 429s. Default OFF.
