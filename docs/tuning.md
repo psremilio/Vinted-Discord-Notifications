@@ -19,6 +19,8 @@ Recommended ENV
   - `RECENT_MAX_MIN=5` (only post items <5min old)
   - `INGEST_MAX_AGE_MS=120000` (cap ingest to ≤2min when RECENT disabled)
   - `SEARCH_HEDGE=1`
+  - `SEARCH_CONCURRENCY=24`, `SEARCH_TARGET_RPM=600` (adaptive)
+  - `SEARCH_ADAPTIVE=1`, `SEARCH_MIN_RPM=120`, `SEARCH_MAX_RPM=2000`, `SEARCH_INC_FACTOR=1.1`, `SEARCH_DEC_FACTOR=0.8`, `SEARCH_429_RATE_THR=0.05`
 - Posting/Webhooks
   - `WEBHOOKS_PER_CHANNEL=6`
   - `DISCORD_POST_CONCURRENCY=8`
@@ -30,7 +32,8 @@ Recommended ENV
   - `POST_BATCHING=1`, `POST_BATCH_EMBEDS_MAX=5`, `POST_BATCH_WINDOW_MS=250`
   - `FRESH_FASTPATH_MS=120000`
 - Dedupe
-  - `DEDUPE_SCOPE=global` or `CROSS_RULE_DEDUP=1` to avoid cross-rule duplicates
+  - Prefer `DEDUPE_SCOPE=per_rule` (or `channel`) to allow fanout across overlapping rules
+  - Avoid global dedupe unless duplicates across channels must be prevented
 - Diagnostics (optional)
   - `DIAG_TIMING=1`
   - `LOG_LEVEL=debug`
