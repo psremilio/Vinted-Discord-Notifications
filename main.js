@@ -44,7 +44,6 @@ import { startLoopLagMonitor, getLagP95 } from './src/infra/loopLag.js';
 import { rateCtl } from './src/schedule/rateControl.js';
 import { ensureWebhooksForChannel } from './src/infra/webhooksManager.js';
 import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
-import { startPosterWorker } from './src/poster/worker.js';
 import { startLocalPoster } from './src/poster/localPoster.js';
 import { buildChannelsStore } from './src/bootstrap/channels.js';
 import { ChannelType } from 'discord.js';
@@ -238,6 +237,7 @@ async function onClientReady() {
         if (it?.channelName && it?.channelId) m.set(String(it.channelName), String(it.channelId));
       }
       globalThis.ruleChannelIdMap = m;
+      try { console.log('[families.map] rules=', m.size); } catch {}
     } catch {}
     const validSet = new Set(store.keys());
     // Filter searches to valid channels to avoid blind posts
@@ -265,9 +265,10 @@ async function onClientReady() {
     scheduleEnsureLoop(ids);
   } catch {}
 
-  // Start Redis Streams poster worker if enabled
+  // Start Redis Streams poster worker if enabled (dynamic import to avoid hard Redis dep)
   try {
     if (String(process.env.POST_VIA_STREAMS || '0') === '1') {
+      const { startPosterWorker } = await import('./src/poster/worker.js');
       await startPosterWorker();
     }
   } catch (e) {

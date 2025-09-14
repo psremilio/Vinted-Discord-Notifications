@@ -6,7 +6,7 @@ import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
 import { metrics } from '../infra/metrics.js';
 import { setIfAbsent as postedSetIfAbsent } from '../infra/postedStore.js';
-import { xaddPostTask } from '../queue/streams.js';
+// Redis Streams posting is optional; load only when enabled
 import { aggQueue } from '../queue/aggQueue.js';
 import { familyForRule, channelIdsForFamily } from '../core/families.js';
 
@@ -136,6 +136,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       const compJson = (payload.components || []).map(c => (typeof c.toJSON === 'function' ? c.toJSON() : c));
       for (const ch of targets) {
         const cid = String(ch?.id || ''); if (!cid) continue;
+        const { xaddPostTask } = await import('../queue/streams.js');
         await xaddPostTask(cid, {
           itemId: String(item.id),
           rule: String(ruleName || ''),
@@ -149,7 +150,16 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
     } else if (VIA_SPOOL) {
       // Local spool: enqueue once for all family channels; poster loop will send
       const fam = familyForRule(String(ruleName || ''));
-      const chIds = channelIdsForFamily(fam);
+      let chIds = channelIdsForFamily(fam);
+      // Fallback: if no mapping is found (rules misaligned), use the target channel ids we have
+      if (!Array.isArray(chIds) || chIds.length === 0) {
+        try {
+          chIds = (Array.isArray(targets) ? targets : [targets])
+            .map(ch => String(ch?.id || ''))
+            .filter(Boolean);
+          if (!chIds.length) console.warn('[spool.warn] no channel IDs for family', fam, 'rule=', ruleName);
+        } catch { chIds = []; }
+      }
       const job = { id: String(item.id), createdAtMs: listing.createdAt || Date.now(), embed: embedJson, components: null, content: null };
       aggQueue.putItemToChannels(job, chIds);
       continue;

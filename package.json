@@ -20,7 +20,6 @@
         "dotenv": "^16.4.5",
         "https-proxy-agent": "^7.0.4",
     "undici": "^6.18.1",
-    "redis": "^4.6.14",
         "valid-url": "^1.0.9"
     },
     "optionalDependencies": {

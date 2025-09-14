@@ -1,4 +1,7 @@
-import fam from '../../config/families.json' assert { type: 'json' };
+// Robust JSON loading that works across Node ESM/CJS runtimes
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const fam = require('../../config/families.json');
 
 function mapByName() {
   try { return globalThis.ruleChannelIdMap instanceof Map ? globalThis.ruleChannelIdMap : new Map(); } catch { return new Map(); }
@@ -34,4 +37,3 @@ export function channelIdsForFamily(familyKey) {
   }
   return ids;
 }
-
