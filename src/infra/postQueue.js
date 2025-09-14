@@ -26,6 +26,16 @@ const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER
 const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
 const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
 
+// Micro-batching controls
+const BATCH_WINDOW_MS = Math.max(0, Number(process.env.POST_BATCH_WINDOW_MS || 250));
+const BATCH_MAX = Math.max(1, Number(process.env.POST_BATCH_EMBEDS_MAX || 5));
+const ENABLE_BATCHING = String(process.env.POST_BATCHING || '1') === '1';
+
+// Per-route concurrency guard: Discord webhook buckets behave best with 1 in-flight
+// Default to 1 to avoid parallel sends on the same route. Can be raised via env
+// if you know your limits.
+const ROUTE_MAX_CONC = Math.max(1, Number(process.env.DISCORD_ROUTE_MAX_CONC || 1));
+
 // Shared HTTP connection pools per-origin for webhook posts (keep-alive)
 const dispatcherPools = new Map(); // origin -> Pool
 function originOf(url) {
@@ -161,6 +171,11 @@ export async function sendQueued(channel, payload, meta = {}) {
     return { ok: false, reason: 'too_old' };
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
+  // Optional: global cross-rule dedupe (process-wide)
+  if (itemId && POST_GLOBAL_DEDUPE && _isRecentlyPostedGlobal(itemId)) {
+    diag('enqueue', { cid: channel?.id || null, item: itemId, mode: 'drop', reason: 'dup_global' });
+    return { ok: true };
+  }
   // Use a per-route enqueue timestamp to measure queue latency fairly per channel
   const discoveredAtLocal = Date.now();
   // If channel cannot send and no webhooks configured, emit a clear warning once.
@@ -232,6 +247,26 @@ function _markRecentlyPosted(cid, id) {
   if (!cid || !id) return;
   let m = recentPosted.get(cid); if (!m) { m = new Map(); recentPosted.set(cid, m); }
   m.set(id, Date.now() + DUP_TTL_MS);
+}
+
+// Optional global cross-rule dedupe (across all channels)
+const POST_GLOBAL_DEDUPE = String(process.env.POST_GLOBAL_DEDUPE || '0') === '1';
+const GLOBAL_DUP_TTL_MS = Math.max(30_000, Number(process.env.POST_GLOBAL_DUP_TTL_MS || 10 * 60 * 1000));
+const recentGlobal = new Map(); // itemId -> expireAt
+function _gcGlobal() {
+  try {
+    const now = Date.now();
+    for (const [id, exp] of recentGlobal.entries()) if (!exp || exp <= now) recentGlobal.delete(id);
+  } catch {}
+}
+function _isRecentlyPostedGlobal(id) {
+  if (!id) return false;
+  _gcGlobal();
+  return recentGlobal.has(String(id));
+}
+function _markRecentlyPostedGlobal(id) {
+  if (!id) return;
+  recentGlobal.set(String(id), Date.now() + GLOBAL_DUP_TTL_MS);
 }
 function getBucketByKey(key, channelId) {
   let b = routeBuckets.get(key);
@@ -307,7 +342,9 @@ setInterval(() => {
     const headCreated = (k)=>{ const b=routeBuckets.get(k); const q=b?.q||[]; if(!q.length) return 0; let m=0; for (const it of q) { const v=Number(it?.createdAt||0); if (v>m) m=v; } return m; };
     keys = keys.slice().sort((a,b)=> headCreated(b)-headCreated(a));
   }
-  const MIGRATE_ON_COOLDOWN = String(process.env.MIGRATE_ON_COOLDOWN || '1') === '1';
+  // Do not migrate across webhooks while a bucket is cooling down. When webhooks
+  // share a route bucket, migration causes repeated 429s. Default OFF.
+  const MIGRATE_ON_COOLDOWN = String(process.env.MIGRATE_ON_COOLDOWN || '0') === '1';
   for (let pass = 0; pass < perBucketSends && slots > 0; pass++) {
     for (const key of keys) {
       if (slots <= 0) break;
@@ -333,15 +370,8 @@ setInterval(() => {
         }
         continue;
       }
-      // per-bucket dynamic concurrency: 1–4 depending on backlog and cooldown (more aggressive when backlog high)
-      // Slightly lower thresholds so small per-bucket queues can send 2-3 in flight
-      const CHAN_CONC = (!cooldown && b.q.length > 200) ? 12
-                      : (!cooldown && b.q.length > 120) ? 9
-                      : (!cooldown && b.q.length > 60)  ? 7
-                      : (!cooldown && b.q.length > 30)  ? 4
-                      : (!cooldown && b.q.length > 6)   ? 3
-                      : (!cooldown && b.q.length > 2)   ? 2
-                      : 1;
+      // Per-route concurrency: default 1. Discord webhook bucket is not safe to parallelize.
+      const CHAN_CONC = ROUTE_MAX_CONC;
       if ((b.inflight || 0) >= CHAN_CONC) continue;
       // priority: createdAt desc, then firstMatchedAt desc, then discoveredAt desc
       b.q.sort((a,bj)=> (Number(bj.createdAt||0) - Number(a.createdAt||0)) || (Number(bj.firstMatchedAt||0) - Number(a.firstMatchedAt||0)) || (bj.discoveredAt - a.discoveredAt));
@@ -406,33 +436,56 @@ async function doSend(job, bucket) {
   }
   try {
     let res;
-    // Bundling: if backlog high, bundle up to 10 embeds for same route
-    const BUNDLE = (bucket?.q?.length || 0) > 10 && Array.isArray(job?.payload?.embeds);
-    if (BUNDLE) {
-      const embeds = [...(job.payload.embeds || [])].slice(0, 10);
-      const cid = job?.channel?.id;
-      const sameWebhook = job.webhookUrl || null;
-      while (embeds.length < 10 && bucket.q.length) {
+    const isWebhook = !!job.webhookUrl;
+    const cid = job?.channel?.id;
+    const sameWebhook = job.webhookUrl || null;
+
+    // Micro-batching: coalesce up to BATCH_MAX embeds for the same route within a short window
+    const canBatch = ENABLE_BATCHING && Array.isArray(job?.payload?.embeds);
+    if (canBatch) {
+      const embeds = [...(job.payload.embeds || [])].slice(0, BATCH_MAX);
+      const coalescedIds = [];
+      // optional short wait to let near-simultaneous finds coalesce
+      if (BATCH_WINDOW_MS > 0) {
+        await new Promise(r => setTimeout(r, BATCH_WINDOW_MS));
+      }
+      // drain compatible items from head of the same bucket (same channel + same webhook)
+      while (embeds.length < BATCH_MAX && bucket.q.length) {
         const next = bucket.q[0];
         if (!next) break;
         if ((sameWebhook && next.webhookUrl !== sameWebhook) || next.channel?.id !== cid) break;
         const take = bucket.q.shift();
         if (take?.itemId) try { bucket.ids.delete(take.itemId); } catch {}
+        if (take?.itemId) coalescedIds.push(String(take.itemId));
         const e2 = (take?.payload?.embeds || []);
-        for (const e of e2) { if (embeds.length < 10) embeds.push(e); else break; }
+        for (const e of e2) { if (embeds.length < BATCH_MAX) embeds.push(e); else break; }
       }
       const bundlePayload = { embeds };
-      if (job.webhookUrl) res = await sendWebhook(job.webhookUrl, bundlePayload, job.channel?.id);
-      else res = await job.channel.send(bundlePayload);
+      if (isWebhook) res = await sendWebhook(job.webhookUrl, bundlePayload, cid);
+      else {
+        res = await job.channel.send(bundlePayload);
+        try { metrics.discord_channel_send_ok_total.inc({ channel: String(cid || '') }); } catch {}
+        if (String(process.env.LOG_ROUTE || '0') === '1') {
+          try { console.log('[post.send]', 'via=channel', 'channel=', String(cid||''), 'item=', String(job?.itemId||'')); } catch {}
+        }
+      }
+      // After successful send, mark coalesced items as posted in channel/global dedupe
+      try {
+        for (const id of coalescedIds) {
+          if (cid) _unmarkQueued(cid, id);
+          _markRecentlyPosted(cid, id);
+          if (POST_GLOBAL_DEDUPE) _markRecentlyPostedGlobal(id);
+        }
+      } catch {}
     } else {
-      if (job.webhookUrl) {
+      if (isWebhook) {
         // Send via webhook (route-fanout)
-        res = await sendWebhook(job.webhookUrl, job.payload, job.channel?.id);
+        res = await sendWebhook(job.webhookUrl, job.payload, cid);
       } else {
         res = await job.channel.send(job.payload);
-        try { metrics.discord_channel_send_ok_total.inc({ channel: String(job?.channel?.id || '') }); } catch {}
+        try { metrics.discord_channel_send_ok_total.inc({ channel: String(cid || '') }); } catch {}
         if (String(process.env.LOG_ROUTE || '0') === '1') {
-          try { console.log('[post.send]', 'via=channel', 'channel=', String(job?.channel?.id||''), 'item=', String(job?.itemId||'')); } catch {}
+          try { console.log('[post.send]', 'via=channel', 'channel=', String(cid||''), 'item=', String(job?.itemId||'')); } catch {}
         }
       }
     }
@@ -441,6 +494,18 @@ async function doSend(job, bucket) {
     try { recordQueueAge(job?.channel?.id, latency); } catch {}
     try { metrics.post_age_ms_histogram.set({ channel: String(job?.channel?.id || '') }, Math.max(0, now - Number(job.createdAt || now))); } catch {}
     try { metrics.discord_cooldown_active.set(0); } catch {}
+    // Honor x-ratelimit-remaining/reset-after on success to pause precisely per route
+    try {
+      if (isWebhook && res && typeof res.headers?.get === 'function') {
+        const rem = Number(res.headers.get('x-ratelimit-remaining') || '1');
+        const resetAfterMs = Math.floor(Number(res.headers.get('x-ratelimit-reset-after') || '0') * 1000);
+        if (Number.isFinite(rem) && rem <= 0 && resetAfterMs > 0) {
+          bucket.cooldownUntil = Date.now() + resetAfterMs;
+          discordCooldownUntil = Math.max(discordCooldownUntil, bucket.cooldownUntil);
+          try { metrics.discord_cooldown_active.set(1); } catch {}
+        }
+      }
+    } catch {}
     try {
       if (String(process.env.DIAG_TIMING || '0') === '1') {
         const createdAge = Math.max(0, now - Number(job.createdAt || now));
@@ -450,6 +515,8 @@ async function doSend(job, bucket) {
     diag('send.ok', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), via: job.webhookUrl ? 'webhook' : 'channel', latency_ms: latency, created_age_ms: Math.max(0, now - Number(job.createdAt || now)) });
     // mark channel-level as done and recent to avoid rapid duplicates across overlapping rules
     try { if (job?.itemId && job?.channel?.id) { _unmarkQueued(job.channel.id, job.itemId); _markRecentlyPosted(job.channel.id, job.itemId); } } catch {}
+    // optional: mark global recent to avoid cross-rule duplicates across channels
+    try { if (POST_GLOBAL_DEDUPE && job?.itemId) _markRecentlyPostedGlobal(job.itemId); } catch {}
     return res;
   } catch (e) {
     if (is429(e)) metrics.discord_rate_limit_hits.inc();

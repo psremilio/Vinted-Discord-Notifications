@@ -21,11 +21,16 @@ Recommended ENV
   - `SEARCH_HEDGE=1`
 - Posting/Webhooks
   - `WEBHOOKS_PER_CHANNEL=6`
-  - `DISCORD_POST_CONCURRENCY=12`
-  - `DISCORD_POST_CONCURRENCY_MAX=24`
-  - `DISCORD_QPS_MIN=30`
-  - `DISCORD_QPS_MAX=200`
+  - `DISCORD_POST_CONCURRENCY=8`
+  - `DISCORD_POST_CONCURRENCY_MAX=16`
+  - `DISCORD_QPS_MIN=10`
+  - `DISCORD_QPS_MAX=80`
+  - `DISCORD_ROUTE_MAX_CONC=1` (per-webhook)
+  - `MIGRATE_ON_COOLDOWN=0` (avoid 429 cascades)
+  - `POST_BATCHING=1`, `POST_BATCH_EMBEDS_MAX=5`, `POST_BATCH_WINDOW_MS=250`
   - `FRESH_FASTPATH_MS=120000`
+- Dedupe
+  - `DEDUPE_SCOPE=global` or `CROSS_RULE_DEDUP=1` to avoid cross-rule duplicates
 - Diagnostics (optional)
   - `DIAG_TIMING=1`
   - `LOG_LEVEL=debug`
@@ -34,5 +39,5 @@ Recommended ENV
 Notes
 - Hot defaults: Without ENV, rules matching `*-all` and `*-all-*€` are treated as T0 (6s target).
 - Use `/reschedule all` after changing ENV or rules to refresh the scheduler.
-- Watch `diag.post`: `age_listed_ms` (freshness) and `queued_ms` (queue delay). Aim for median ≤30s age and ≤1s queue; brief peaks are normal during 429 waves.
+- Watch `diag.post`: `age_listed_ms` (freshness) and `queued_ms` (queue delay). Aim for median ≤30s age and ≤1s queue. If 429s appear, ensure `DISCORD_ROUTE_MAX_CONC=1`, `MIGRATE_ON_COOLDOWN=0`, and batching is enabled.
 
