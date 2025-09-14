@@ -70,9 +70,10 @@ function addHealthy(proxy, { status } = {}) {
 }
 
 async function twoPhaseCheck(proxy, base) {
-  const [host, portStr] = proxy.split(':');
-  const port = Number(portStr);
-  const agent = new HttpsProxyAgent(`http://${host}:${port}`);
+  // Accept both full URL and host:port strings
+  let url = String(proxy || '').trim();
+  if (url && !/^[a-z]+:\/\//i.test(url)) url = `http://${url}`;
+  const agent = new HttpsProxyAgent(url);
   const t = CHECK_TIMEOUT_SEC * 1000;
   // Phase A: httpbin reachability
   const a = await axios.get('http://httpbin.org/ip', {
