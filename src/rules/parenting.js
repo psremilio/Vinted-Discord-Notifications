@@ -1,4 +1,4 @@
-import { buildParentKey, buildFamilyKey, parseRuleFilters, canonicalizeSearchURL, familyDimensionFromCanon, buildFamilyKeyFromURL, getParentURLFromChild, canonicalizeForFamily } from './urlNormalizer.js';
+import { buildParentKey, buildFamilyKey, parseRuleFilters, canonicalizeSearchURL, familyDimensionFromCanon, buildFamilyKeyFromURL, getParentURLFromChild, canonicalizeForFamily, canonicalizeUrlExcept } from './urlNormalizer.js';
 import { loadPriceFamilyPolicy } from './policy.js';
 const FANOUT_DEBUG = String(process.env.FANOUT_DEBUG || process.env.LOG_FANOUT || '0') === '1';
 const FANOUT_LOG = String(process.env.FANOUT_LOG || '1') === '1';
@@ -76,8 +76,10 @@ export function buildParentGroups(rules) {
     const parent = arr[parentIdx];
     // Strict: children must only differ in the parent's family dimension (size/status)
     const mode = familyMode(parent.filters);
+    const pivotStrict = canonicalizeUrlExcept(parent.rule.url || '', ['price_from','price_to','size_ids[]','status_ids[]','size_ids','status_ids']);
     const children = arr.filter((_, i) => i !== parentIdx)
-      .filter(c => (mode === 'size' || mode === 'status') && onlyDiffersByDimension(c.filters, parent.filters, mode));
+      .filter(c => (mode === 'size' || mode === 'status') && onlyDiffersByDimension(c.filters, parent.filters, mode))
+      .filter(c => canonicalizeUrlExcept(c.rule.url || '', ['price_from','price_to','size_ids[]','status_ids[]','size_ids','status_ids']) === pivotStrict);
     families.push({ parent: parent.rule, parentFilters: parent.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
     ll('[fanout.pick]', 'parent=', parent.rule.channelName, 'children=', (children.map(c=>c.rule.channelName).join(',')) || '');
   }
@@ -224,6 +226,9 @@ export function buildAutoPriceFamilies(rules) {
     }
     // Children are strictly the price members
     let children = arr.filter(m => (m.rule !== leader.rule));
+    // Enforce strict same-intent ignoring only price/size/status differences
+    const pivot = canonicalizeUrlExcept(leader.rule.url || '', ['price_from','price_to','size_ids[]','status_ids[]','size_ids','status_ids']);
+    children = children.filter(c => canonicalizeUrlExcept(c.rule.url || '', ['price_from','price_to','size_ids[]','status_ids[]','size_ids','status_ids']) === pivot);
     // Optional: enforce allowed price buckets per brand (skip when URL-only mode)
     if (!POLICY_DISABLED) {
       try {

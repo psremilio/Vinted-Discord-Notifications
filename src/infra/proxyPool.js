@@ -9,11 +9,21 @@ const FILE = DEFAULT_FILE;
 
 function normalize(txt) {
   if (!txt) return [];
-  return String(txt)
+  const out = [];
+  const lines = String(txt)
     .split(/\r?\n/)
     .map(s => s.trim())
-    .filter(s => s && !s.startsWith('#'))
-    .filter(s => /^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(s));
+    .filter(s => s && !s.startsWith('#'));
+  for (const s of lines) {
+    if (/^https?:\/\//i.test(s)) { out.push(s); continue; }
+    if (/^\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}$/.test(s)) { out.push(`http://${s}`); continue; }
+    if (/^[a-z0-9.-]+:\d{2,5}$/i.test(s)) { out.push(`http://${s}`); continue; }
+  }
+  // de-dup while preserving order
+  const seen = new Set();
+  const uniq = [];
+  for (const p of out) { if (!seen.has(p)) { seen.add(p); uniq.push(p); } }
+  return uniq;
 }
 
 function parseInline(s) {
@@ -126,4 +136,3 @@ export function scheduleProxyRefresh(logger = console) {
   if (!mins) return;
   setInterval(() => { refreshInBackground(logger).catch(()=>{}); }, Math.max(1, mins) * 60 * 1000).unref?.();
 }
-

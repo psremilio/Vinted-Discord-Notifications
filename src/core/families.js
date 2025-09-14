@@ -36,17 +36,27 @@ if (!fam) {
   throw new Error('Missing config/families.json');
 }
 
+function normName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[€]/g, 'eur')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
 function mapByName() {
   try { return globalThis.ruleChannelIdMap instanceof Map ? globalThis.ruleChannelIdMap : new Map(); } catch { return new Map(); }
 }
 
 export function familyForRule(ruleName) {
   const name = String(ruleName || '');
+  const n = normName(name);
   // Exact family key match or membership
   for (const key of Object.keys(fam || {})) {
-    if (key === name) return key;
+    if (normName(key) === n) return key;
     const arr = Array.isArray(fam[key]?.channels) ? fam[key].channels : [];
-    if (arr.includes(name)) return key;
+    if (arr.some(c => normName(c) === n)) return key;
   }
   // Heuristic: take prefix up to first '-' if ends with '-all' or contains '-all-'
   if (name.includes('-all')) return name.split('-all')[0] + '-all';
@@ -55,7 +65,12 @@ export function familyForRule(ruleName) {
 
 export function channelsForFamily(familyKey) {
   const key = String(familyKey || '');
-  const def = fam?.[key]?.channels;
+  let def = fam?.[key]?.channels;
+  if (!Array.isArray(def)) {
+    // try normalized key
+    const nk = Object.keys(fam || {}).find(k => normName(k) === normName(key));
+    if (nk) def = fam?.[nk]?.channels;
+  }
   const list = Array.isArray(def) && def.length ? def : [key];
   return list;
 }
@@ -64,8 +79,14 @@ export function channelIdsForFamily(familyKey) {
   const byName = mapByName();
   const names = channelsForFamily(familyKey);
   const ids = [];
-  for (const n of names) {
-    const id = byName.get(String(n));
+  // Build a normalized view of the map for resilient lookups
+  const normMap = (() => {
+    const m = new Map();
+    try { for (const [k, v] of byName.entries()) m.set(normName(k), String(v)); } catch {}
+    return m;
+  })();
+  for (const nm of names) {
+    const id = byName.get(String(nm)) || normMap.get(normName(nm));
     if (id) ids.push(String(id));
   }
   return ids;

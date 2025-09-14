@@ -77,17 +77,21 @@ function createClient(proxyStr) {
     return client;
   }
 
-  const [host] = parts;
-
-  // Create HTTPS proxy agent for proper tunneling
-  const proxyAgent = new HttpsProxyAgent({
-    protocol: 'http:',
-    host,
-    port,
-    keepAlive: true,
-    maxSockets: Number(process.env.HTTP_MAX_SOCKETS || 64),
-    maxFreeSockets: Number(process.env.HTTP_MAX_FREE_SOCKETS || 32),
-  });
+  let proxyAgent;
+  // Support full URL with optional auth, scheme, and host
+  if (/^https?:\/\//i.test(key)) {
+    proxyAgent = new HttpsProxyAgent(key);
+  } else {
+    const [host] = parts;
+    proxyAgent = new HttpsProxyAgent({
+      protocol: 'http:',
+      host,
+      port,
+      keepAlive: true,
+      maxSockets: Number(process.env.HTTP_MAX_SOCKETS || 64),
+      maxFreeSockets: Number(process.env.HTTP_MAX_FREE_SOCKETS || 32),
+    });
+  }
 
   const http = axios.create({
     withCredentials: true,
@@ -116,7 +120,7 @@ function createClient(proxyStr) {
     },
   });
 
-  const client = { http, warmedAt: 0, proxyAgent, proxyLabel: `${host}:${port}` };
+  const client = { http, warmedAt: 0, proxyAgent, proxyLabel: key };
   clientsByProxy.set(key, client);
   return client;
 }
