@@ -46,6 +46,18 @@ const ENABLE_BATCHING = String(process.env.POST_BATCHING || '0') === '1';
 // if you know your limits.
 const ROUTE_MAX_CONC = Math.max(1, Number(process.env.DISCORD_ROUTE_MAX_CONC || 1));
 
+// Simple global token bucket (per-second) as an extra guard layer.
+const TB_CAP = Math.max(1, Number(process.env.DISCORD_QPS_MAX || 60));
+const TB_REFILL = TB_CAP; // refill full capacity each second
+const tokenBucket = { capacity: TB_CAP, tokens: TB_CAP, refillPerSec: TB_REFILL };
+setInterval(() => {
+  tokenBucket.tokens = Math.min(tokenBucket.capacity, tokenBucket.tokens + tokenBucket.refillPerSec);
+}, 1000).unref?.();
+async function takeToken() {
+  while (tokenBucket.tokens < 1) { await new Promise(r => setTimeout(r, 20)); }
+  tokenBucket.tokens -= 1;
+}
+
 // Shared HTTP connection pools per-origin for webhook posts (keep-alive)
 const dispatcherPools = new Map(); // origin -> Pool
 function originOf(url) {
@@ -510,6 +522,8 @@ export function purgeChannelQueues(channelId) {
 }
 
 async function doSend(job, bucket) {
+  // Global per-second pacing guard; per-bucket pacing still applies below
+  try { await takeToken(); } catch {}
   const now = Date.now();
   if (discordCooldownUntil > now) {
     try { metrics.discord_cooldown_active.set(1); } catch {}

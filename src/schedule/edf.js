@@ -23,8 +23,10 @@ export class EdfScheduler {
     const tier = tierOf(name);
     // Prefer per-rule frequency when provided, else fall back to tier target
     const freqSec = Number(rule?.frequency || 0);
-    const MIN_PERIOD = Math.max(1000, Number(process.env.SEARCH_PERIOD_MIN_MS || 1200));
-    const targetMs = Math.max(MIN_PERIOD, Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000));
+    const MIN_PERIOD = Math.max(1000, Number(process.env.SEARCH_PERIOD_MIN_MS || 3000));
+    const MAX_PERIOD = Math.max(MIN_PERIOD, Number(process.env.SEARCH_PERIOD_MAX_MS || 8000));
+    const baseMs = Math.floor((freqSec > 0 ? freqSec : (TIER_TARGET_SEC[tier] || 12)) * 1000);
+    const targetMs = Math.max(MIN_PERIOD, Math.min(MAX_PERIOD, baseMs));
     // Phase anchor: fixed 10s grid with per-rule offset + jitter ±1s
     const PHASE_MS = 10_000;
     const h = [...String(name)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 0);

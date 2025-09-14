@@ -26,9 +26,9 @@ function getBool(name, defVal = false) {
   return defVal;
 }
 
-// Faster defaults for discovery; tuned via env
-const CONC = Math.max(1, getNum('SEARCH_CONCURRENCY', 24));
-const TARGET_RPM = Math.max(1, getNum('SEARCH_TARGET_RPM', 600));
+// Discovery limiter defaults (safer baseline)
+const CONC = Math.max(1, getNum('SEARCH_CONCURRENCY', 16));
+const TARGET_RPM = Math.max(1, getNum('SEARCH_TARGET_RPM', 300));
 const DISABLE_RES = getBool('SEARCH_DISABLE_RESERVOIR', false);
 
 export const limiter = DISABLE_RES
@@ -51,11 +51,12 @@ try {
 
 // Adaptive search RPM based on recent softfail/429 rate (via http_429_rate_60s gauge)
 const ADAPTIVE = getBool('SEARCH_ADAPTIVE', true);
+const MODE = String(unquote(process.env.SEARCH_ADAPTIVE_MODE || 'conservative')).toLowerCase();
 const MIN_RPM = Math.max(60, getNum('SEARCH_MIN_RPM', 120));
-const MAX_RPM = Math.max(MIN_RPM, getNum('SEARCH_MAX_RPM', 2000));
-const INC_FACTOR = Math.max(1.01, Number(getNum('SEARCH_INC_FACTOR', 1.1)));
-const DEC_FACTOR = Math.min(0.99, Number(getNum('SEARCH_DEC_FACTOR', 0.8)));
-const RATE_THR = Math.max(0, Math.min(1, Number(getNum('SEARCH_429_RATE_THR', 0.05)))); // 0..1
+const MAX_RPM = Math.max(MIN_RPM, getNum('SEARCH_MAX_RPM', 800));
+const INC_FACTOR = MODE === 'aggressive' ? Math.max(1.01, Number(getNum('SEARCH_INC_FACTOR', 1.2))) : Math.max(1.01, Number(getNum('SEARCH_INC_FACTOR', 1.05)));
+const DEC_FACTOR = MODE === 'aggressive' ? Math.min(0.99, Number(getNum('SEARCH_DEC_FACTOR', 0.85))) : Math.min(0.99, Number(getNum('SEARCH_DEC_FACTOR', 0.7)));
+const RATE_THR = MODE === 'aggressive' ? Math.max(0, Math.min(1, Number(getNum('SEARCH_429_RATE_THR', 0.08)))) : Math.max(0, Math.min(1, Number(getNum('SEARCH_429_RATE_THR', 0.01))));
 let currentRpm = TARGET_RPM;
 
 if (!DISABLE_RES && ADAPTIVE) {

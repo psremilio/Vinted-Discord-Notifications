@@ -64,7 +64,7 @@ function createClient(proxyStr) {
     const http = axios.create({
       withCredentials: true,
       maxRedirects: 5,
-      timeout: Number(process.env.FETCH_TIMEOUT_MS || 4000),
+      timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000),
       proxy: false,
       headers: {
         'User-Agent': 'Mozilla/5.0',
@@ -92,7 +92,7 @@ function createClient(proxyStr) {
   const http = axios.create({
     withCredentials: true,
     maxRedirects: 5,
-    timeout: Number(process.env.FETCH_TIMEOUT_MS || 4000),
+    timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000),
     proxy: false, // Disable axios proxy handling
     httpAgent: proxyAgent,
     httpsAgent: proxyAgent, // Use our custom agent
@@ -206,7 +206,7 @@ async function bootstrapSession(client, base = BASE) {
 
 export async function getHttp(base) {
   // Per-request: attempt to grab a proxy from the pool
-  const MAX_TRIES = 6;
+  const MAX_TRIES = Math.max(1, Number(process.env.PROXY_MAX_RETRIES || 2));
   for (let i = 0; i < MAX_TRIES; i++) {
     const p = getProxy();
   if (!p) {
@@ -330,7 +330,7 @@ export async function get(url, config = {}) {
 // Low-level fetch via a specific proxy, with latency measurement and EWMA tracking
 const ewmaByProxy = new Map(); // proxy -> { value, alpha }
 const latSamplesByProxy = new Map(); // proxy -> number[]
-export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 4000)) {
+export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 5000)) {
   const client = createClient(proxy);
   await bootstrapSession(client);
   const t0 = Date.now();
