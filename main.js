@@ -43,6 +43,7 @@ import { EdfGate } from './src/schedule/edf.js';
 import { startLoopLagMonitor, getLagP95 } from './src/infra/loopLag.js';
 import { rateCtl } from './src/schedule/rateControl.js';
 import { ensureWebhooksForChannel } from './src/infra/webhooksManager.js';
+import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
 import { ChannelType } from 'discord.js';
 
 dotenv.config();
@@ -238,24 +239,12 @@ async function onClientReady() {
     const GRACE = Math.max(0, Number(process.env.COMMANDS_BOOT_GRACE_MS || 3000));
     setTimeout(() => startMonitorsOnce('ready_grace'), GRACE);
   } catch { startMonitorsOnce('ready'); }
-  // Proactively ensure webhooks for all configured channels to avoid first posts via channel path
+  // Start periodic webhook ensure loop (boot + interval with jitter)
   try {
-    const WANT = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 6));
-    setTimeout(async () => {
-      try {
-        // Use already-loaded searches to avoid path mismatches
-        const ids = Array.from(new Set((Array.isArray(mySearches)?mySearches:[])
-          .map(x=>String(x?.channelId||''))
-          .filter(Boolean)));
-        for (const id of ids) {
-          try {
-            const ch = await client.channels.fetch(id).catch(()=>null) || client.channels.cache.get(id);
-            if (ch) await ensureWebhooksForChannel(ch, WANT).catch(()=>{});
-          } catch {}
-        }
-        console.log('[webhooks.prime]', 'channels=', ids.length, 'want=', WANT);
-      } catch {}
-    }, 1500);
+    const ids = Array.from(new Set((Array.isArray(mySearches) ? mySearches : [])
+      .map(x => String(x?.channelId || ''))
+      .filter(Boolean)));
+    scheduleEnsureLoop(ids);
   } catch {}
 }
 client.on('ready', onClientReady);

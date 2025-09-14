@@ -1,5 +1,6 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildListingEmbed } from '../embeds.js';
+import { sanitizeEmbed } from '../discord/ensureValidEmbed.js';
 import { stats } from '../utils/stats.js';
 import { markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
@@ -77,7 +78,19 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       description: item.description,
     };
 
-    const payload = { embeds: [buildListingEmbed(listing)], components: [row] };
+    // Build and sanitize embed; fallback to content-only when empty
+    const rawEmbed = buildListingEmbed(listing);
+    const embedJson = sanitizeEmbed(rawEmbed);
+    let payload;
+    if (!embedJson || (typeof embedJson === 'object' && Object.keys(embedJson).length === 0)) {
+      const title = String(listing.title || 'Item');
+      const price = (listing.price != null && listing.currency) ? `${listing.price} ${listing.currency}` : '';
+      const link = String(listing.url || '');
+      const pieces = [title, price, link].filter(Boolean);
+      payload = { content: pieces.join(' — '), components: [row] };
+    } else {
+      payload = { embeds: [embedJson], components: [row] };
+    }
     const meta = {
       discoveredAt: item.discoveredAt || Date.now(),
       createdAt: listing.createdAt || Date.now(),
@@ -105,4 +118,3 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
     }
   }
 }
-

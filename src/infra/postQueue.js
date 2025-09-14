@@ -4,6 +4,7 @@ import { sanitizeEmbeds } from '../discord/ensureValidEmbed.js';
 import { DiscordBucket } from '../post/DiscordBucket.js';
 import { metrics } from './metrics.js';
 import { getWebhooksForChannelId, ensureWebhooksForChannel } from './webhooksManager.js';
+import { ensureAfter404 } from '../discord/webhookEnsure.js';
 import { remove as removeWebhookFromStore } from './webhooksStore.js';
 
 const QPS = Math.max(1, Number(process.env.DISCORD_QPS || process.env.DISCORD_QPS_MAX || 50));
@@ -25,13 +26,13 @@ function diag(tag, obj) {
   } catch {}
 }
 // Higher defaults to improve send throughput while keeping QPS guardrails
-const CONC = Math.max(1, Number(process.env.DISCORD_POST_CONCURRENCY || 8));
+const CONC = Math.max(1, Number(process.env.DISCORD_POST_GLOBAL_CONC || process.env.DISCORD_POST_CONCURRENCY || 8));
 const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX || 24));
 // Optional fast-path: allow near-immediate posting per-channel (default ON)
 const FAST_POST = String(process.env.FAST_POST || '1') === '1';
 const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 1000));
 // Default: do NOT drop older items unless explicitly enabled via env
-const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
+const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || process.env.DROP_OLD_AFTER_MS || 0));
 const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
 
 // Micro-batching controls
@@ -325,7 +326,7 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
     }
     chosenWebhook = webhooks[idx];
     routeKey = `chan:${cid}:wh:${idx}`;
-  } else if (cid && String(process.env.AUTO_WEBHOOKS_ON_POST || '1') === '1') {
+  } else if (cid && String(process.env.AUTO_WEBHOOKS_ON_POST || '0') === '1') {
     // lazy auto-ensure (non-blocking)
     if (!ensureInFlight.has(cid)) {
       ensureInFlight.add(cid);
@@ -338,6 +339,11 @@ function enqueueRoute(channel, payload, discoveredAt, createdAt) {
   if (idKey && b.ids.has(idKey)) return;
   const job = { channel, payload, discoveredAt, createdAt, firstMatchedAt, itemId: idKey };
   if (chosenWebhook) job.webhookUrl = chosenWebhook;
+  else if (String(process.env.POST_VIA_WEBHOOK_ONLY || '0') === '1') {
+    // When posting strictly via webhooks, skip enqueue if none available
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.warn('[post.skip_no_webhook]', 'channel=', cid, 'item=', idKey);
+    return;
+  }
   b.q.push(job);
   if (idKey) { b.ids.add(idKey); _markQueued(cid, idKey); }
   diag('route.assign', { cid, item: idKey, wh_count: (webhooks||[]).length || 0, route: chosenWebhook ? 'webhook' : 'channel', routeKey });
@@ -376,7 +382,7 @@ setInterval(() => {
   }
   // Do not migrate across webhooks while a bucket is cooling down. When webhooks
   // share a route bucket, migration causes repeated 429s. Default OFF.
-  const MIGRATE_ON_COOLDOWN = String(process.env.MIGRATE_ON_COOLDOWN || '0') === '1';
+  const MIGRATE_ON_COOLDOWN = String(process.env.MIGRATE_ON_COOLDOWN || '1') === '1';
   const PROACTIVE_ROTATE = String(process.env.PROACTIVE_ROTATE || '1') === '1';
   for (let pass = 0; pass < perBucketSends && slots > 0; pass++) {
     for (const key of keys) {
@@ -559,10 +565,14 @@ async function doSend(job, bucket) {
         // Send via webhook (route-fanout)
         res = await sendWebhook(job.webhookUrl, job.payload, cid);
       } else {
-        res = await job.channel.send(job.payload);
-        try { metrics.discord_channel_send_ok_total.inc({ channel: String(cid || '') }); } catch {}
-        if (String(process.env.LOG_ROUTE || '0') === '1') {
-          try { console.log('[post.send]', 'via=channel', 'channel=', String(cid||''), 'item=', String(job?.itemId||'')); } catch {}
+        if (String(process.env.POST_VIA_WEBHOOK_ONLY || '0') !== '1') {
+          res = await job.channel.send(job.payload);
+          try { metrics.discord_channel_send_ok_total.inc({ channel: String(cid || '') }); } catch {}
+          if (String(process.env.LOG_ROUTE || '0') === '1') {
+            try { console.log('[post.send]', 'via=channel', 'channel=', String(cid||''), 'item=', String(job?.itemId||'')); } catch {}
+          }
+        } else {
+          throw new Error('webhook_required');
         }
       }
     }
@@ -645,16 +655,20 @@ async function doSend(job, bucket) {
     try {
       if (job?.webhookUrl) {
         try { removeWebhookFromStore(String(job?.channel?.id || ''), String(job.webhookUrl)); } catch {}
-        try {
-          const res2 = await job.channel.send(job.payload);
-          try { metrics.discord_channel_send_ok_total.inc({ channel: String(job?.channel?.id || '') }); } catch {}
-          try { if (job?.itemId && job?.channel?.id) _unmarkQueued(job.channel.id, job.itemId); } catch {}
-          if (String(process.env.LOG_ROUTE || '0') === '1') {
-            try { console.log('[post.send]', 'via=fallback-channel', 'channel=', String(job?.channel?.id||''), 'item=', String(job?.itemId||'')); } catch {}
-          }
-          diag('send.fallback', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), from: 'webhook', to: 'channel' });
-          return res2;
-        } catch {}
+        // Self-heal: re-ensure webhooks for this channel when webhook was unknown/removed
+        try { await ensureAfter404(String(job?.channel?.id || '')); } catch {}
+        if (String(process.env.POST_VIA_WEBHOOK_ONLY || '0') !== '1') {
+          try {
+            const res2 = await job.channel.send(job.payload);
+            try { metrics.discord_channel_send_ok_total.inc({ channel: String(job?.channel?.id || '') }); } catch {}
+            try { if (job?.itemId && job?.channel?.id) _unmarkQueued(job.channel.id, job.itemId); } catch {}
+            if (String(process.env.LOG_ROUTE || '0') === '1') {
+              try { console.log('[post.send]', 'via=fallback-channel', 'channel=', String(job?.channel?.id||''), 'item=', String(job?.itemId||'')); } catch {}
+            }
+            diag('send.fallback', { cid: String(job?.channel?.id || ''), item: String(job?.itemId || ''), from: 'webhook', to: 'channel' });
+            return res2;
+          } catch {}
+        }
       }
     } catch {}
     // Always log non-429 send errors to surface failures
