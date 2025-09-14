@@ -389,7 +389,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
   const proxy = stickyMap.assign(ruleId);
   if (!proxy) {
     metrics.fetch_skipped_total.inc();
-    try { metrics.no_token_skips_total?.inc({ rule: String(ruleId) }); } catch {}
+    // no bucket/proxy available for this slot
     try { stickyMap.record(ruleId, { skipped: true, proxy: null }); } catch {}
     if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} reason=no-proxy`);
     return { skipped: true };
@@ -398,10 +398,10 @@ export async function fetchRule(ruleId, url, opts = {}) {
   const DISABLE_RES = String(process.env.SEARCH_DISABLE_RESERVOIR || '0') === '1';
   if (!buckets || (!DISABLE_RES && !buckets.main.take(1))) {
     metrics.fetch_skipped_total.inc();
-    try { metrics.no_token_skips_total?.inc({ rule: String(ruleId) }); } catch {}
+    // no reservoir token for this proxy right now
     rateCtl.observe(proxy, { skipped: true });
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
-    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-token`);
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-bucket`);
     return { skipped: true };
   }
   try {

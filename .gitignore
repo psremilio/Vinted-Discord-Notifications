@@ -5,3 +5,4 @@ package-lock.json
 config/*
 !config/families.json
 .env
+data/tokens.json
