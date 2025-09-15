@@ -1,11 +1,58 @@
 [
-  {
-    "channelId": "1",
-    "channelName": "alpha",
-    "url": "https://www.vinted.de/catalog?search_text=a",
-    "titleBlacklist": [
-      "blue",
-      "red"
-    ]
-  }
+    {
+        "titleBlacklist":  [
+
+                           ],
+        "url":  "https://www.vinted.de/catalog?order=newest_first\u0026search_text=Nike",
+        "channelId":  "1410233752365432934",
+        "channelName":  "nike-all"
+    },
+    {
+        "titleBlacklist":  [
+
+                           ],
+        "url":  "https://www.vinted.de/catalog?order=newest_first\u0026price_to=10\u0026search_text=Nike",
+        "channelId":  "1411396238552858726",
+        "channelName":  "nike-all-10€"
+    },
+    {
+        "titleBlacklist":  [
+
+                           ],
+        "url":  "https://www.vinted.de/catalog?order=newest_first\u0026price_to=15\u0026search_text=Nike",
+        "channelId":  "1410236808645578782",
+        "channelName":  "nike-all-15€"
+    },
+    {
+        "titleBlacklist":  [
+
+                           ],
+        "url":  "https://www.vinted.de/catalog?order=newest_first\u0026price_to=20\u0026search_text=Nike",
+        "channelId":  "1410240145084383242",
+        "channelName":  "nike-all-20€"
+    },
+    {
+        "titleBlacklist":  [
+
+                           ],
+        "url":  "https://www.vinted.de/catalog?order=newest_first\u0026price_to=30\u0026search_text=Nike",
+        "channelId":  "1410240990471524382",
+        "channelName":  "nike-all-30€"
+    },
+    {
+        "titleBlacklist":  [
+
+                           ],
+        "url":  "https://www.vinted.de/catalog?order=newest_first\u0026search_text=Nike+trackpants",
+        "channelId":  "1410245352132710473",
+        "channelName":  "nike-trackpants"
+    },
+    {
+        "titleBlacklist":  [
+
+                           ],
+        "url":  "https://www.vinted.de/catalog?order=newest_first\u0026search_text=Nike+trackjacket",
+        "channelId":  "1412781961470152776",
+        "channelName":  "nike-trackjackets"
+    }
 ]
