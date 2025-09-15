@@ -252,13 +252,9 @@ export async function getHttp(base) {
     envFlag('ALLOW_DIRECT_ON_EMPTY', true) ||
     envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', true);
   if (DIRECT_OK) {
-    const http = axios.create({
-      withCredentials: true,
-      maxRedirects: 5,
-      timeout: 15000,
-      proxy: false,
-    });
-    return { http, proxy: 'DIRECT' };
+    const client = createClient('DIRECT');
+    try { await ensureProxySession(client); } catch {}
+    return { http: client.http, proxy: 'DIRECT', client };
   }
   console.warn('[proxy] No healthy proxies available; consider checking PROXY_* vars or set ALLOW_DIRECT=1 for debugging.');
   throw new Error('No healthy proxies available');
