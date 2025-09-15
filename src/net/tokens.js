@@ -38,15 +38,24 @@ export async function retryOnceOn401_403(fn, client) {
     const s = e?.response?.status;
     if (s !== 401 && s !== 403) throw e;
     client.csrf = null;
-    try { client.jar?.removeAllCookiesSync?.(); } catch {}
+    try {
+      if (client.jar?.removeAllCookiesSync) client.jar.removeAllCookiesSync();
+      else if (client.jar?.removeAllCookies) await new Promise(r => client.jar.removeAllCookies(() => r()));
+    } catch {}
     await ensureProxySession(client);
     return await fn();
   }
 }
 
+// Back-compat aliases to match callers expecting tokens.ensure / retryOnce401_403
+export const ensure = ensureProxySession;
+export const retryOnce401_403 = retryOnceOn401_403;
+
 export default {
   ensureProxySession,
   withCsrf,
   retryOnceOn401_403,
+  // aliases
+  ensure,
+  retryOnce401_403,
 };
-
