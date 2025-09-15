@@ -3,7 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { CookieJar } from 'tough-cookie';
 import { wrapper as cookieJarWrapper } from 'axios-cookiejar-support';
 import { ensureProxySession, withCsrf, retryOnceOn401_403 } from './tokens.js';
-import { getProxy, markBadInPool, recordProxySuccess, recordProxyOutcome } from './proxyHealth.js';
+import { getProxy, hasHealthy, releaseExploreToken, markBadInPool, recordProxySuccess, recordProxyOutcome } from './proxyHealth.js';
 import { stickyMap } from '../schedule/stickyMap.js';
 import { getBuckets, dropBuckets } from '../schedule/proxyBuckets.js';
 import { rateCtl } from '../schedule/rateControl.js';
@@ -155,14 +155,20 @@ export async function getHttp(base) {
   // Per-request: attempt to grab a proxy from the pool
   const MAX_TRIES = Math.max(1, Number(process.env.PROXY_MAX_RETRIES || 2));
   for (let i = 0; i < MAX_TRIES; i++) {
-    const p = getProxy();
-  if (!p) {
+    const pick = getProxy();
+    const proxyInfo = pick && pick.proxy ? pick : null;
+    if (!proxyInfo) {
       await new Promise(r => setTimeout(r, 150 + i * 100));
       continue;
     }
+    const { proxy: p, mode, budgetToken } = proxyInfo;
     const client = createClient(p);
-    await ensureProxySession(client);
-    return { http: client.http, proxy: p, client };
+    try {
+      await ensureProxySession(client);
+      return { http: client.http, proxy: p, client, route: mode || 'healthy', explorationBudget: !!budgetToken };
+    } catch {
+      if (budgetToken) releaseExploreToken();
+    }
   }
 
   // Optional direct fallback when no proxies are immediately available.
@@ -373,51 +379,94 @@ async function fetchDirectFallback(ruleId, url, opts = {}) {
 }
 
 export async function fetchRule(ruleId, url, opts = {}) {
-  const proxy = stickyMap.assign(ruleId);
-  if (!proxy) {
-    const fallback = await fetchDirectFallback(ruleId, url, opts);
-    if (fallback && (fallback.ok || fallback.softFail)) return fallback;
-    metrics.fetch_skipped_total.inc();
-    // no bucket/proxy available for this slot
-    try { stickyMap.record(ruleId, { skipped: true, proxy: null }); } catch {}
-    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} reason=no-proxy`);
-    return { skipped: true };
-  }
   const host = (() => {
     try { return new URL(url).host; }
     catch { return null; }
   })();
-  let hostTokenTaken = false;
-  if (host) {
-    try {
-      const bucket = ensureSearchBucket(host, {
-        targetRpm: Number(process.env.SEARCH_TARGET_RPM || 300),
-        minRpm: Number(process.env.SEARCH_MIN_RPM || 120),
-        maxRpm: Number(process.env.SEARCH_MAX_RPM || 2000),
-      });
-      hostTokenTaken = bucket?.take?.(1) ?? false;
-      if (!hostTokenTaken) {
-        try { metrics.fetch_skipped_total.inc(); } catch {}
-        try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
-        if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-host-budget`);
-        return { skipped: true };
-      }
-    } catch (err) {
-      // Failure to acquire host bucket should not hard-stop the fetch; fall back to proceeding.
-      hostTokenTaken = false;
-    }
+  const healthyAvailable = hasHealthy();
+  let candidate = null;
+  const stickyProxy = healthyAvailable ? stickyMap.assign(ruleId) : null;
+  if (stickyProxy) candidate = { proxy: stickyProxy, mode: 'sticky', budgetToken: false };
+  if (!candidate) {
+    const picked = getProxy({ allowExploratory: true, preferExploratory: !healthyAvailable });
+    if (picked) candidate = picked;
   }
-  const buckets = getBuckets(proxy, rateCtl);
-  const DISABLE_RES = String(process.env.SEARCH_DISABLE_RESERVOIR || '0') === '1';
-  if (!buckets || (!DISABLE_RES && !buckets.main.take(1))) {
+
+  const defaults = {
+    targetRpm: Number(process.env.SEARCH_TARGET_RPM || 300),
+    minRpm: Number(process.env.SEARCH_MIN_RPM || 120),
+    maxRpm: Number(process.env.SEARCH_MAX_RPM || 2000),
+  };
+
+  const releaseExploreBudget = () => {
+    if (candidate && candidate.budgetToken) {
+      releaseExploreToken();
+      candidate.budgetToken = false;
+    }
+  };
+
+  let proxy = candidate?.proxy || null;
+  let proxyMode = candidate?.mode || (healthyAvailable ? 'sticky' : null);
+  let usingTrial = proxyMode === 'trial';
+  let hostTokenTaken = false;
+  let buckets = null;
+
+  for (let attempt = 0; attempt < 2 && proxy; attempt++) {
+    proxyMode = candidate?.mode || (healthyAvailable ? 'sticky' : null);
+    usingTrial = proxyMode === 'trial';
+    hostTokenTaken = false;
+
+    if (!usingTrial && host) {
+      try {
+        const bucket = ensureSearchBucket(host, defaults);
+        hostTokenTaken = bucket?.take?.(1) ?? false;
+        if (!hostTokenTaken) {
+          releaseExploreBudget();
+          candidate = getProxy({ allowExploratory: true, preferExploratory: true });
+          proxy = candidate?.proxy || null;
+          continue;
+        }
+      } catch {
+        hostTokenTaken = false;
+        releaseExploreBudget();
+        candidate = getProxy({ allowExploratory: true, preferExploratory: true });
+        proxy = candidate?.proxy || null;
+        continue;
+      }
+    }
+
+    proxy = candidate?.proxy || proxy;
+    buckets = getBuckets(proxy, rateCtl);
+    const DISABLE_RES = String(process.env.SEARCH_DISABLE_RESERVOIR || '0') === '1';
+    if (!usingTrial && (!buckets || (!DISABLE_RES && !buckets.main.take(1)))) {
+      metrics.fetch_skipped_total.inc();
+      rateCtl.observe(proxy, { skipped: true });
+      if (hostTokenTaken && host) giveBackBucket(host, 1);
+      releaseExploreBudget();
+      if (attempt === 0) {
+        candidate = getProxy({ allowExploratory: true, preferExploratory: true });
+        proxy = candidate?.proxy || null;
+        continue;
+      }
+      try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+      if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-proxy-budget`);
+      return { skipped: true };
+    }
+
+    break;
+  }
+
+  proxy = candidate?.proxy || proxy;
+  if (!proxy) {
+    releaseExploreBudget();
+    const fallback = await fetchDirectFallback(ruleId, url, opts);
+    if (fallback && (fallback.ok || fallback.softFail)) return fallback;
     metrics.fetch_skipped_total.inc();
-    // no reservoir token for this proxy right now
-    rateCtl.observe(proxy, { skipped: true });
-    try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
-    if (hostTokenTaken && host) giveBackBucket(host, 1);
-    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-proxy-budget`);
+    try { stickyMap.record(ruleId, { skipped: true, proxy: null }); } catch {}
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} reason=no-proxy`);
     return { skipped: true };
   }
+  const bucketState = buckets || getBuckets(proxy, rateCtl);
   try {
     const { res, latency } = await doFetchWithProxy(proxy, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
     const code = Number(res?.status || 0);
@@ -444,8 +493,8 @@ export async function fetchRule(ruleId, url, opts = {}) {
       return { ok: true, res };
     }
     // failed or rate limited -> consider retry on neighbor if tokens allow
-    const retry = getBuckets(proxy, rateCtl).retry;
-    if (retry && retry.take(1)) {
+    const retryBucket = (bucketState || getBuckets(proxy, rateCtl))?.retry;
+    if (retryBucket && retryBucket.take(1)) {
       const alt = stickyMap.next(proxy);
       if (alt) {
         try {
@@ -479,9 +528,9 @@ export async function fetchRule(ruleId, url, opts = {}) {
     return { softFail: true };
   } catch (e) {
     // network error -> try one neighbor if retry tokens are available
-    const retry = getBuckets(proxy, rateCtl).retry;
+    const retryBucket = (bucketState || getBuckets(proxy, rateCtl))?.retry;
     if (String(e?.message || '').includes('timeout')) recordTimeout(proxy);
-    if (retry && retry.take(1)) {
+    if (retryBucket && retryBucket.take(1)) {
       const alt = stickyMap.next(proxy);
       try {
         const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));

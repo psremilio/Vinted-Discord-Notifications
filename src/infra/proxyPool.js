@@ -2,6 +2,50 @@ import fs from 'fs/promises';
 import path from 'path';
 import axios from 'axios';
 
+const DEFAULT_PROXY_USER =
+  process.env.PROXY_DEFAULT_USERNAME ||
+  process.env.PROXY_USERNAME ||
+  process.env.PS_PROXY_USERNAME ||
+  '';
+
+const DEFAULT_PROXY_PASS =
+  process.env.PROXY_DEFAULT_PASSWORD ||
+  process.env.PROXY_PASSWORD ||
+  process.env.PS_PROXY_PASSWORD ||
+  '';
+
+function normalizeProxyUrl(raw) {
+  try {
+    let s = String(raw || '').trim();
+    if (!s) return null;
+    if (!/^[a-z]+:\/\//i.test(s)) s = `http://${s}`;
+    const u = new URL(s);
+    if (!u.hostname || !u.port) return null;
+    let user = u.username;
+    let pass = u.password;
+    if (!user && DEFAULT_PROXY_USER) {
+      user = DEFAULT_PROXY_USER;
+      pass = DEFAULT_PROXY_PASS || '';
+    }
+    const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass || '')}@` : '';
+    return `${u.protocol}//${auth}${u.hostname}:${u.port}`;
+  } catch {
+    return null;
+  }
+}
+
+function maskProxySample(str) {
+  try {
+    const u = new URL(str);
+    if (u.username) {
+      return `${u.protocol}//***@${u.hostname}:${u.port}`;
+    }
+    return `${u.protocol}//${u.hostname}:${u.port}`;
+  } catch {
+    return str;
+  }
+}
+
 const DEFAULT_FILE =
   process.env.PROXIES_FILE ||
   (process.env.RAILWAY_ENVIRONMENT ? '/app/config/proxies.txt' : 'config/proxies.txt');
@@ -15,9 +59,8 @@ function normalize(txt) {
     .map(s => s.trim())
     .filter(s => s && !s.startsWith('#'));
   for (const s of lines) {
-    if (/^https?:\/\//i.test(s)) { out.push(s); continue; }
-    if (/^\d{1,3}(?:\.\d{1,3}){3}:\d{2,5}$/.test(s)) { out.push(`http://${s}`); continue; }
-    if (/^[a-z0-9.-]+:\d{2,5}$/i.test(s)) { out.push(`http://${s}`); continue; }
+    const normalized = normalizeProxyUrl(s);
+    if (normalized) out.push(normalized);
   }
   // de-dup while preserving order
   const seen = new Set();
@@ -36,7 +79,7 @@ async function writeList(list, logger = console) {
   try {
     await fs.mkdir(path.dirname(FILE), { recursive: true });
     await fs.writeFile(FILE, list.join('\n'), 'utf8');
-    const sample = list.slice(0, 3).join(', ');
+    const sample = list.slice(0, 3).map(maskProxySample).join(', ');
     logger.info?.(`[proxy] wrote list to ${FILE} (count=${list.length}) sample=[${sample}]`);
   } catch (e) {
     logger.warn?.('[proxy] failed to write list:', e?.message || e);
@@ -47,7 +90,7 @@ async function tryReadLocal(logger = console) {
   try {
     const txt = await fs.readFile(FILE, 'utf8');
     const list = normalize(txt);
-    const sample = list.slice(0, 3).join(', ');
+    const sample = list.slice(0, 3).map(maskProxySample).join(', ');
     logger.info?.(`[proxy] loaded cached list count=${list.length} from ${FILE} sample=[${sample}]`);
     return list;
   } catch { return null; }
@@ -93,7 +136,7 @@ export async function tryProvidersWithBackoff(logger = console) {
         if (typeof data === 'string' && data.trim()) {
           const list = normalize(data);
           if (list.length) {
-            const sample = list.slice(0, 3).join(', ');
+            const sample = list.slice(0, 3).map(maskProxySample).join(', ');
             logger.info?.(`[proxy] provider ${url} parsed count=${list.length} sample=[${sample}]`);
             return list;
           }

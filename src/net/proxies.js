@@ -1,5 +1,28 @@
 import fs from 'fs';
 
+const DEFAULT_PROXY_USER =
+  process.env.PROXY_DEFAULT_USERNAME ||
+  process.env.PROXY_USERNAME ||
+  process.env.PS_PROXY_USERNAME ||
+  '';
+
+const DEFAULT_PROXY_PASS =
+  process.env.PROXY_DEFAULT_PASSWORD ||
+  process.env.PROXY_PASSWORD ||
+  process.env.PS_PROXY_PASSWORD ||
+  '';
+
+function maskProxySample(str) {
+  try {
+    const u = new URL(str);
+    if (u.username) {
+      return `${u.protocol}//***@${u.hostname}:${u.port}`;
+    }
+    return `${u.protocol}//${u.hostname}:${u.port}`;
+  } catch {
+    return str;
+  }
+}
 export function loadProxies(
   filePath =
     process.env.PROXY_LIST_FILE ||
@@ -17,7 +40,13 @@ export function loadProxies(
     try {
       const u = new URL(s);
       if (!u.hostname || !u.port) return null;
-      const auth = u.username ? `${encodeURIComponent(u.username)}:${encodeURIComponent(u.password || '')}@` : '';
+      let user = u.username;
+      let pass = u.password;
+      if (!user && DEFAULT_PROXY_USER) {
+        user = DEFAULT_PROXY_USER;
+        pass = DEFAULT_PROXY_PASS || '';
+      }
+      const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass || '')}@` : '';
       return `${u.protocol}//${auth}${u.hostname}:${u.port}`;
     } catch {
       return null;
@@ -26,9 +55,11 @@ export function loadProxies(
   const list = raw.split(/\r?\n/).map(toUrl).filter(Boolean);
   const unique = [...new Set(list)];
   if (unique.length < 10) {
-    console.warn(`[proxy] WARN: nur ${unique.length} Proxys erkannt – prüf Datei & Whitelist`);
+    const sampleWarn = unique.slice(0, 3).map(maskProxySample).join(', ');
+    console.warn(`[proxy] WARN: nur ${unique.length} Proxys erkannt – prüf Datei & Whitelist sample=[${sampleWarn}]`);
   } else {
-    console.log(`[proxy] Pool bereit: ${unique.length} Proxys`);
+    const sampleInfo = unique.slice(0, 3).map(maskProxySample).join(', ');
+    console.log(`[proxy] Pool bereit: ${unique.length} Proxys sample=[${sampleInfo}]`);
   }
   return unique;
 }

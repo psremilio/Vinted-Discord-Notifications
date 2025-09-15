@@ -23,6 +23,42 @@ function boolEnv(name, def = false) {
   return !!def;
 }
 
+class MinuteBucket {
+  constructor(rpm = 1) {
+    this.setRate(rpm);
+    this.tokens = this.rate;
+    this._last = Date.now();
+  }
+  setRate(rpm = 1) {
+    const next = Math.max(1, Number(rpm || 1));
+    this.rate = next;
+    this.tokens = Math.min(this.tokens ?? next, next);
+  }
+  _refill(now = Date.now()) {
+    const dt = Math.max(0, now - this._last);
+    if (!dt) return;
+    this._last = now;
+    const perMs = this.rate / 60_000;
+    this.tokens = Math.min(this.rate, this.tokens + perMs * dt);
+  }
+  take(n = 1) {
+    if (n <= 0) return true;
+    this._refill();
+    if (this.tokens >= n) { this.tokens -= n; return true; }
+    return false;
+  }
+  giveBack(n = 1) {
+    if (n <= 0) return;
+    this.tokens = Math.min(this.rate, this.tokens + n);
+  }
+}
+
+const EXPLORE_RPM = Math.max(1, Number(process.env.EXPLORE_RPM || 60));
+const exploreBucket = new MinuteBucket(EXPLORE_RPM);
+
+const PERMA_FAILS = Math.max(1, Number(process.env.PROXY_PERMA_FAILS || (FAIL_MAX * 3)));
+const permanentlyBad = new Set();
+
 // Data structures
 // proxy -> { lastOkAt, okCount, score, bucketTokens, bucketRefillAt, cooldownUntil }
 const healthyMap = new Map();
@@ -35,9 +71,11 @@ let allProxies = [];
 let scanOffset = 0;
 
 function classifyStatus(code) {
-  if ([200, 301, 302].includes(code)) return 'ok';
-  if ([401, 403, 429].includes(code)) return 'rate_limited';
-  if (code >= 500) return 'failed';
+  const n = Number(code || 0);
+  if (n >= 200 && n < 400) return 'ok';
+  if ([401, 403, 429].includes(n)) return 'reachable_blocked';
+  if (n >= 400 && n < 500) return 'blocked';
+  if (n >= 500 || n === 0) return 'failed';
   return 'blocked';
 }
 
@@ -74,6 +112,7 @@ function addHealthy(proxy, { status } = {}) {
     const oldest = healthyMap.keys().next().value;
     healthyMap.delete(oldest);
   }
+  permanentlyBad.delete(proxy);
   if (status) console.log(`[proxy] Healthy proxy added: ${proxy} (status: ${status})`);
   try { healthEvents.emit('count', healthyMap.size); } catch {}
   try { healthEvents.emit('add', proxy); } catch {}
@@ -142,8 +181,17 @@ async function testOne(proxy, base, stats) {
       stats.successful++;
     } else {
       const [cls] = String(res.reason || '').split(':');
-      if (cls === 'rate_limited') {
-        stats.rateLimited++;
+      if (cls === 'reachable_blocked') {
+        addHealthy(proxy, { status: res.status });
+        const st = healthyMap.get(proxy);
+        if (st) {
+          st.score = Math.min(st.score ?? 0, -2);
+          healthyMap.set(proxy, st);
+        }
+        stats.reachable++;
+      } else if (cls === 'blocked') {
+        stats.blocked++;
+      } else {
         const f = (failCounts.get(proxy) || 0) + 1;
         failCounts.set(proxy, f);
         if (healthyMap.has(proxy)) healthyMap.delete(proxy);
@@ -151,9 +199,6 @@ async function testOne(proxy, base, stats) {
         const jitter = 5 + Math.floor(Math.random() * 10);
         const mins = f >= FAIL_MAX ? baseMin + jitter : Math.floor(baseMin / 2) + Math.floor(Math.random() * 5);
         cooldown.set(proxy, Date.now() + mins * 60 * 1000);
-      } else if (cls === 'blocked') {
-        stats.blocked++;
-      } else {
         stats.failed++;
       }
     }
@@ -179,7 +224,7 @@ export async function initProxyPool() {
   const base = (process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/').replace(/\/$/, '/');
   console.log(`[proxy] Testing proxies against: ${base}`);
 
-  const stats = { tested: 0, successful: 0, blocked: 0, failed: 0, rateLimited: 0 };
+  const stats = { tested: 0, successful: 0, blocked: 0, failed: 0, reachable: 0 };
   const started = Date.now();
   const DEADLINE_MS = Number(process.env.PROXY_INIT_DEADLINE_MS || 30000);
   const FAST_MIN = Math.max(1, Number(process.env.PROXY_FAST_START_MIN || 20));
@@ -207,7 +252,7 @@ export async function initProxyPool() {
       }
     }
   }
-  console.log(`[proxy] Proxy test results: ${stats.tested} tested, ${stats.successful} healthy, ${stats.blocked} blocked, ${stats.rateLimited} rate limited (401/403/429), ${stats.failed} failed`);
+  console.log(`[proxy] Proxy test results: ${stats.tested} tested, ${stats.successful} healthy, ${stats.reachable} reachable_blocked, ${stats.blocked} blocked, ${stats.failed} failed`);
   console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
   try { healthEvents.emit('count', healthyMap.size); } catch {}
 
@@ -256,28 +301,74 @@ export function startAutoTopUp() {
   setInterval(() => { refillIfBelowCap().catch(() => {}); }, mins * 60 * 1000);
 }
 
-export function getProxy() {
+function pickExplorationCandidate() {
+  if (!allProxies.length) return null;
   const now = Date.now();
-  const weighted = [];
-  for (const [p, st] of healthyMap.entries()) {
-    const cool = st.cooldownUntil || (cooldown.get(p) || 0);
+  const primary = [];
+  const fallback = [];
+  for (const proxy of allProxies) {
+    if (!proxy) continue;
+    if (permanentlyBad.has(proxy)) continue;
+    const cool = cooldown.get(proxy) || 0;
     if (cool > now) continue;
-    _refillTokens(st);
-    if (st.bucketTokens <= 0) continue;
-    const w = Math.max(1, Math.min(20, (st.score ?? 0) + 10));
-    weighted.push([p, w]);
+    if (healthyMap.has(proxy)) {
+      fallback.push(proxy);
+      continue;
+    }
+    primary.push(proxy);
   }
-  if (!weighted.length) return null;
-  // weighted random choice
-  const total = weighted.reduce((a, [, w]) => a + w, 0);
-  let r = Math.random() * total;
-  for (const [p, w] of weighted) {
-    if ((r -= w) <= 0) {
-      if (tryAcquireToken(p)) return p;
+  const pool = primary.length ? primary : fallback;
+  if (!pool.length) return null;
+  const idx = Math.floor(Math.random() * pool.length);
+  return pool[idx];
+}
+
+export function hasHealthy() {
+  return healthyMap.size > 0;
+}
+
+export function releaseExploreToken() {
+  exploreBucket.giveBack(1);
+}
+
+export function pickExploratory() {
+  const candidate = pickExplorationCandidate();
+  if (!candidate) return null;
+  if (!exploreBucket.take(1)) return null;
+  return { proxy: candidate, mode: 'trial', budgetToken: true };
+}
+
+export function getProxy(options = {}) {
+  const { allowExploratory = true, preferExploratory = false } = options || {};
+  const now = Date.now();
+
+  if (!preferExploratory) {
+    const weighted = [];
+    for (const [p, st] of healthyMap.entries()) {
+      const cool = st.cooldownUntil || (cooldown.get(p) || 0);
+      if (cool > now) continue;
+      _refillTokens(st);
+      if (st.bucketTokens <= 0) continue;
+      const w = Math.max(1, Math.min(20, (st.score ?? 0) + 10));
+      weighted.push([p, w]);
+    }
+    if (weighted.length) {
+      const total = weighted.reduce((a, [, w]) => a + w, 0);
+      let r = Math.random() * total;
+      for (const [p, w] of weighted) {
+        if ((r -= w) <= 0) {
+          if (tryAcquireToken(p)) return { proxy: p, mode: 'healthy', budgetToken: false };
+        }
+      }
+      for (const [p] of weighted) {
+        if (tryAcquireToken(p)) return { proxy: p, mode: 'healthy', budgetToken: false };
+      }
     }
   }
-  // fallback linear scan with acquire
-  for (const [p] of weighted) if (tryAcquireToken(p)) return p;
+
+  if (!allowExploratory) return null;
+  const exploratory = pickExploratory();
+  if (exploratory) return exploratory;
   return null;
 }
 
@@ -297,6 +388,7 @@ export function markBadInPool(p) {
   const until = Date.now() + mins * 60 * 1000;
   cooldown.set(p, until);
   if (st) { st.cooldownUntil = until; healthyMap.set(p, st); }
+  if (f >= PERMA_FAILS) permanentlyBad.add(p);
   try { healthEvents.emit('cooldown', p); } catch {}
 }
 
@@ -351,15 +443,17 @@ export function recordProxySuccess(p) {
   st.score = Math.min(10, (st.score || 0) + 1);
   st.lastOkAt = Date.now();
   healthyMap.set(p, st);
+  permanentlyBad.delete(p);
 }
 
 export function recordProxyOutcome(p, code) {
   const st = healthyMap.get(p) || {};
-  if ([401, 403, 429].includes(Number(code))) {
-    st.score = Math.max(-10, (st.score || 0) - 3);
+  const n = Number(code || 0);
+  if ([401, 403, 429].includes(n)) {
+    st.score = Math.max(-5, (st.score || 0) - 1);
     healthyMap.set(p, st);
-    markBadInPool(p);
-  } else if (Number(code) >= 500) {
+    permanentlyBad.delete(p);
+  } else if (n >= 500) {
     st.score = Math.max(-10, (st.score || 0) - 1);
     healthyMap.set(p, st);
   }
