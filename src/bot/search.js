@@ -1,5 +1,4 @@
 import { fetchRule, hedgedGet } from "../net/http.js";
-import * as tokens from "../net/tokens.js";
 import { buildHeaders } from "../net/headers.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKeyForChannel } from "../utils/dedupe.js";
@@ -90,35 +89,24 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             markFetchAttempt();
             // Enable hedged requests by default to cut tail latency across proxies
             const USE_HEDGE = String(process.env.SEARCH_HEDGE || '1') === '1';
+            // Build headers lazily so each request reuses the proxied session (no legacy tokens.ensure())
+            const requestConfig = () => ({ headers: buildHeaders(undefined, channel.url, `https://${url.host}`) });
             let result;
             if (USE_HEDGE) {
               try {
                 // Hedged fetch across proxies for lower tail latency
-                let t = null;
-                if (String(process.env.TOKEN_AUTO_BOOTSTRAP || '1') === '1') {
-                  try { t = await tokens.ensure(url.host, { allowDirect: String(process.env.TOKEN_BOOTSTRAP_ALLOW_DIRECT || '1') === '1' }); }
-                  catch (e) { try { console.warn('[token.ensure.fail]', url.host, e?.message || e); } catch {} }
-                }
                 const res = await hedgedGet(
                   apiUrl.href,
-                  { headers: buildHeaders(t, channel.url, `https://${url.host}`) },
+                  requestConfig(),
                   `https://${url.host}`
                 );
                 result = { ok: res && res.status >= 200 && res.status < 300, res };
               } catch (e) {
                 // Fallback to sticky fetchRule rather than failing the page
-                let t = null;
-                if (String(process.env.TOKEN_AUTO_BOOTSTRAP || '1') === '1') {
-                  try { t = await tokens.ensure(url.host, { allowDirect: String(process.env.TOKEN_BOOTSTRAP_ALLOW_DIRECT || '1') === '1' }); } catch {}
-                }
-                result = await fetchRule(channel.channelName, apiUrl.href, { headers: buildHeaders(t, channel.url, `https://${url.host}`) });
+                result = await fetchRule(channel.channelName, apiUrl.href, requestConfig());
               }
             } else {
-              let t = null;
-              if (String(process.env.TOKEN_AUTO_BOOTSTRAP || '1') === '1') {
-                try { t = await tokens.ensure(url.host, { allowDirect: String(process.env.TOKEN_BOOTSTRAP_ALLOW_DIRECT || '1') === '1' }); } catch {}
-              }
-              result = await fetchRule(channel.channelName, apiUrl.href, { headers: buildHeaders(t, channel.url, `https://${url.host}`) });
+              result = await fetchRule(channel.channelName, apiUrl.href, requestConfig());
             }
             if (result?.skipped) return [];
             if (result?.softFail) {
