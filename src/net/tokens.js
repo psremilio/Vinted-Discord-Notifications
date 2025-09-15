@@ -1,83 +1,52 @@
-import fs from 'fs/promises';
-import path from 'path';
+const BASE = (process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de').replace(/\/$/, '');
 
-// Simple token manager that leverages the existing proxy-aware bootstrap in http.js
-// Persists tokens per host in a JSON file so sessions can survive restarts.
-
-const DEFAULT_STORE = process.env.TOKEN_PERSIST_PATH || path.resolve('./data/tokens.json');
-const BOOT_TTL_MS = Math.max(5 * 60_000, Number(process.env.TOKEN_BOOTSTRAP_TTL_MS || 45 * 60_000)); // default 45min
-
-async function readStore() {
+export async function ensureProxySession(client) {
+  if (client?.csrf) return;
+  const res = await client.http.get(BASE + '/', { timeout: 8000, validateStatus: () => true });
+  let csrf = null;
   try {
-    const raw = await fs.readFile(DEFAULT_STORE, 'utf-8');
-    return JSON.parse(raw) || {};
-  } catch { return {}; }
-}
-
-async function writeStore(obj) {
+    if (typeof res.data === 'string') {
+      const m = res.data.match(/name=["']csrf-token["']\s+content=["']([^"']+)["']/i);
+      csrf = m && m[1];
+    }
+  } catch {}
+  if (!csrf) {
+    try { csrf = res?.headers?.['x-csrf-token'] || null; } catch {}
+  }
+  client.csrf = csrf || null;
+  // Set sane defaults
   try {
-    await fs.mkdir(path.dirname(DEFAULT_STORE), { recursive: true });
-    await fs.writeFile(DEFAULT_STORE, JSON.stringify(obj, null, 2));
+    client.http.defaults.headers.Referer = BASE + '/';
+    client.http.defaults.headers.Origin = BASE;
+    if (client.csrf) client.http.defaults.headers['X-CSRF-Token'] = client.csrf;
   } catch {}
 }
 
-export async function ensure(host, opts = {}) {
-  const allowDirect = opts.allowDirect ?? (String(process.env.TOKEN_BOOTSTRAP_ALLOW_DIRECT || '0') === '1');
-  const key = String(host || '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
-  if (!key) throw new Error('tokens.ensure: host required');
-  const store = await readStore();
-  const now = Date.now();
-  const ent = store[key];
-  if (ent && (!ent.expiresAt || Number(ent.expiresAt) > now)) return ent;
+export function withCsrf(cfg = {}, client) {
+  const out = { ...(cfg || {}) };
+  out.headers = { ...(cfg?.headers || {}) };
+  if (client?.csrf) out.headers['X-CSRF-Token'] = client.csrf;
+  out.headers['Referer'] = out.headers['Referer'] || (BASE + '/');
+  out.headers['X-Requested-With'] = out.headers['X-Requested-With'] || 'XMLHttpRequest';
+  return out;
+}
 
-  // Bootstrap via existing proxy-aware client and reuse its cookies/csrf
-  const base = `https://${key}`;
+export async function retryOnceOn401_403(fn, client) {
   try {
-    const { getHttp } = await import('./http.js');
-    const { http } = await getHttp(base);
-    // bootstrapSession() inside getHttp already primed defaults with cookies/csrf
-    const cookie = http?.defaults?.headers?.Cookie || http?.defaults?.headers?.cookie || '';
-    const csrf = http?.defaults?.headers?.['X-CSRF-Token'] || http?.defaults?.headers?.['x-csrf-token'] || '';
-    const info = { cookie, csrf: csrf || undefined, fetchedAt: now, expiresAt: now + BOOT_TTL_MS };
-    store[key] = info;
-    await writeStore(store);
-    try { console.log('[token.bootstrap.ok]', key); } catch {}
-    return info;
+    return await fn();
   } catch (e) {
-    if (!allowDirect) throw e;
-    // Fallback: direct bootstrap without proxy
-    try {
-      const { default: axios } = await import('axios');
-      const res = await axios.get(base, { proxy: false, timeout: 10000, validateStatus: () => true, headers: { 'User-Agent': 'Mozilla/5.0' } });
-      const setCookie = res.headers?.['set-cookie'] || [];
-      const cookie = setCookie.map(c => c.split(';')[0]).join('; ');
-      const m = (typeof res.data === 'string') ? res.data.match(/name="csrf-token"\s+content="([^"]+)"/i) : null;
-      const csrf = m && m[1];
-      const info = { cookie, csrf: csrf || undefined, fetchedAt: now, expiresAt: now + BOOT_TTL_MS };
-      store[key] = info;
-      await writeStore(store);
-      try { console.log('[token.bootstrap.direct.ok]', key); } catch {}
-      return info;
-    } catch (e2) {
-      try { console.warn('[token.bootstrap.fail]', key, e2?.message || e2); } catch {}
-      throw e2;
-    }
+    const s = e?.response?.status;
+    if (s !== 401 && s !== 403) throw e;
+    client.csrf = null;
+    try { client.jar?.removeAllCookiesSync?.(); } catch {}
+    await ensureProxySession(client);
+    return await fn();
   }
 }
 
-export async function expire(host) {
-  const key = String(host || '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
-  if (!key) return;
-  const store = await readStore();
-  if (store[key]) {
-    delete store[key];
-    await writeStore(store);
-    try { console.log('[token.expire]', key); } catch {}
-  }
-}
+export default {
+  ensureProxySession,
+  withCsrf,
+  retryOnceOn401_403,
+};
 
-export async function get(host) {
-  const key = String(host || '').replace(/^https?:\/\//i, '').replace(/\/$/, '');
-  const store = await readStore();
-  return store[key] || null;
-}

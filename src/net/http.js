@@ -1,5 +1,8 @@
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { CookieJar } from 'tough-cookie';
+import { wrapper as cookieJarWrapper } from 'axios-cookiejar-support';
+import { ensureProxySession, withCsrf, retryOnceOn401_403 } from './tokens.js';
 import { getProxy, markBadInPool, recordProxySuccess, recordProxyOutcome } from './proxyHealth.js';
 import { stickyMap } from '../schedule/stickyMap.js';
 import { getBuckets, dropBuckets } from '../schedule/proxyBuckets.js';
@@ -51,7 +54,7 @@ function getHedgeBudget() {
   return Math.min(maxN, baseN + bonus);
 }
 
-function createClient(proxyStr) {
+export function createClient(proxyStr) {
   const key = String(proxyStr || '').trim();
   const existing = clientsByProxy.get(key);
   if (existing) return existing;
@@ -61,7 +64,8 @@ function createClient(proxyStr) {
   const port = Number(parts[1]);
   const isDirect = !key || key.toUpperCase() === 'DIRECT' || parts.length < 2 || !Number.isFinite(port);
   if (isDirect) {
-    const http = axios.create({
+    const jar = new CookieJar();
+    const http = cookieJarWrapper(axios.create({
       withCredentials: true,
       maxRedirects: 5,
       timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000),
@@ -71,8 +75,9 @@ function createClient(proxyStr) {
         Accept: 'application/json, text/plain, */*',
         'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-    });
-    const client = { http, warmedAt: Date.now(), proxyAgent: null, proxyLabel: 'DIRECT' };
+      jar,
+    }));
+    const client = { http, warmedAt: Date.now(), proxyAgent: null, proxyLabel: 'DIRECT', jar, csrf: null };
     clientsByProxy.set('DIRECT', client);
     return client;
   }
@@ -93,7 +98,8 @@ function createClient(proxyStr) {
     });
   }
 
-  const http = axios.create({
+  const jar = new CookieJar();
+  const http = cookieJarWrapper(axios.create({
     withCredentials: true,
     maxRedirects: 5,
     timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000),
@@ -118,9 +124,10 @@ function createClient(proxyStr) {
       'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': '"Windows"',
     },
-  });
+    jar,
+  }));
 
-  const client = { http, warmedAt: 0, proxyAgent, proxyLabel: key };
+  const client = { http, warmedAt: 0, proxyAgent, proxyLabel: key, jar, csrf: null };
   clientsByProxy.set(key, client);
   return client;
 }
@@ -218,8 +225,8 @@ export async function getHttp(base) {
       continue;
     }
     const client = createClient(p);
-    await bootstrapSession(client, base || BASE);
-    return { http: client.http, proxy: p };
+    await ensureProxySession(client);
+    return { http: client.http, proxy: p, client };
   }
 
   // Optional direct fallback when no proxies are immediately available.
@@ -256,11 +263,15 @@ export async function hedgedGet(url, config = {}, base = BASE) {
         if (resolved) return resolve(null);
         let proxy;
         try {
-          const { http, proxy: p } = await getHttp(base);
+          const { http, proxy: p, client } = await getHttp(base);
           proxy = p;
           const controller = new AbortController();
           controllers.push(controller);
-          const res = await http.get(url, { ...config, signal: controller.signal, validateStatus: () => true });
+          await ensureProxySession(client);
+          let res = await retryOnceOn401_403(
+            () => client.http.get(url, withCsrf({ ...config, signal: controller.signal, validateStatus: () => true }, client)),
+            client
+          );
           const code = Number(res.status || 0);
           if (!resolved && code >= 200 && code < 300) {
             recordProxySuccess(proxy);
@@ -268,9 +279,17 @@ export async function hedgedGet(url, config = {}, base = BASE) {
             resolved = true;
             resolve({ res, proxy });
           } else {
-            recordProxyOutcome(proxy, code);
-            recordOutcome({ softfail: true });
-            resolve(null);
+            const code2 = Number(res?.status || 0);
+            if (!resolved && code2 >= 200 && code2 < 300) {
+              recordProxySuccess(proxy);
+              recordOutcome({ ok: true });
+              resolved = true;
+              resolve({ res, proxy });
+            } else {
+              recordProxyOutcome(proxy, code2 || code);
+              recordOutcome({ softfail: true });
+              resolve(null);
+            }
           }
         } catch (e) {
           // timeouts or network errors
@@ -320,9 +339,10 @@ export async function initProxyPool() {
 
 // Convenience helper for simple GET requests that handles session bootstrap
 export async function get(url, config = {}) {
-  const { http, proxy } = await getHttp();
+  const { http, proxy, client } = await getHttp();
   try {
-    const res = await http.get(url, config);
+    await ensureProxySession(client);
+    const res = await client.http.get(url, withCsrf(config, client));
     const dateHeader = res?.headers?.['date'];
     if (dateHeader) res._serverNow = new Date(dateHeader);
     return res;
@@ -339,11 +359,14 @@ const ewmaByProxy = new Map(); // proxy -> { value, alpha }
 const latSamplesByProxy = new Map(); // proxy -> number[]
 export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 5000)) {
   const client = createClient(proxy);
-  await bootstrapSession(client);
+  await ensureProxySession(client);
   const t0 = Date.now();
   let res;
   try {
-    res = await client.http.get(url, { ...config, timeout, validateStatus: () => true });
+    res = await retryOnceOn401_403(
+      () => client.http.get(url, withCsrf({ ...config, timeout, validateStatus: () => true }, client)),
+      client
+    );
   } catch (e) {
     // timeout or network error
     const err = e;

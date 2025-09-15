@@ -2,6 +2,7 @@ import axios from 'axios';
 import { EventEmitter } from 'events';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { loadProxies } from './proxies.js';
+import { ensureProxySession, withCsrf } from './tokens.js';
 
 // Configuration with sensible defaults and backwards compatibility
 const CAPACITY = Number(process.env.PROXY_CAPACITY || process.env.PROXY_HEALTHY_CAP || 800);
@@ -70,12 +71,11 @@ function addHealthy(proxy, { status } = {}) {
 }
 
 async function twoPhaseCheck(proxy, base) {
-  // Accept both full URL and host:port strings
+  // Phase A: httpbin reachability with plain agent
   let url = String(proxy || '').trim();
   if (url && !/^[a-z]+:\/\//i.test(url)) url = `http://${url}`;
   const agent = new HttpsProxyAgent(url);
   const t = CHECK_TIMEOUT_SEC * 1000;
-  // Phase A: httpbin reachability
   const a = await axios.get('http://httpbin.org/ip', {
     proxy: false,
     httpAgent: agent,
@@ -83,32 +83,43 @@ async function twoPhaseCheck(proxy, base) {
     timeout: t,
     validateStatus: () => true,
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      'User-Agent': 'Mozilla/5.0',
       'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Connection': 'keep-alive',
     }
   });
   if (a.status !== 200) return { ok: false, reason: `httpbin:${a.status}` };
 
-  // Phase B: Vinted reachability (lightweight GET with Range)
-  const b = await axios.get(base, {
-    proxy: false,
-    httpAgent: agent,
-    httpsAgent: agent,
-    timeout: t,
-    maxRedirects: 0,
-    validateStatus: () => true,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Connection': 'keep-alive',
-      'Range': 'bytes=0-0',
-    }
-  });
-  const cls = classifyStatus(b.status);
-  return { ok: cls === 'ok', reason: `${cls}:${b.status}`, status: b.status };
+  // Phase B: real API probe with session + CSRF
+  // lightweight per-check client to avoid circular deps
+  function createHealthClient(pxy) {
+    let s = String(pxy || '').trim();
+    if (s && !/^https?:\/\//i.test(s)) s = `http://${s}`;
+    const agent = new HttpsProxyAgent(s);
+    // lazy import to avoid ESM issues if not installed; tokens.js requires axios-cookiejar-support usage within http.js
+    const { CookieJar } = await import('tough-cookie');
+    const { wrapper } = await import('axios-cookiejar-support');
+    const jar = new CookieJar();
+    const http = wrapper(axios.create({
+      withCredentials: true,
+      proxy: false,
+      httpAgent: agent,
+      httpsAgent: agent,
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        Accept: 'application/json, text/plain, */*',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      jar,
+    }));
+    return { http, jar, csrf: null };
+  }
+  const client = await createHealthClient(proxy);
+  await ensureProxySession(client);
+  const API = (base || (process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de')).replace(/\/$/, '') + '/api/v2/catalog/items?search_text=nike&per_page=1';
+  const b = await client.http.get(API, withCsrf({ timeout: t, validateStatus: () => true }, client));
+  const code = Number(b?.status || 0);
+  const cls = classifyStatus(code);
+  return { ok: cls === 'ok', reason: `${cls}:${code}`, status: code };
 }
 
 async function testOne(proxy, base, stats) {
