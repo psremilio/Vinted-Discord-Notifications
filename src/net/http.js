@@ -12,6 +12,21 @@ import { metrics } from '../infra/metrics.js';
 const clientsByProxy = new Map();
 const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
 
+function envFlag(name, def = false) {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === '') return !!def;
+  const s = String(raw).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(s)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(s)) return false;
+  return !!def;
+}
+
+const DIRECT_FALLBACK_ENABLED =
+  envFlag('ALLOW_DIRECT', false) ||
+  envFlag('ALLOW_DIRECT_ON_EMPTY', true) ||
+  envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', true);
+let directFallbackNotified = false;
+
 // Sliding-window trackers (60s) to drive gentle hedging adjustments and vinted 429 gauge
 const softFails = [];
 const totalReqs = [];
@@ -233,9 +248,9 @@ export async function getHttp(base) {
   // Optional direct fallback when no proxies are immediately available.
   // Enabled by ALLOW_DIRECT=1 or (by default) ALLOW_DIRECT_ON_EMPTY=1.
   const DIRECT_OK =
-    String(process.env.ALLOW_DIRECT || '0') === '1' ||
-    String(process.env.ALLOW_DIRECT_ON_EMPTY || '0') === '1' ||
-    String(process.env.PROXY_ALLOW_DIRECT_WHEN_EMPTY || '0') === '1';
+    envFlag('ALLOW_DIRECT', false) ||
+    envFlag('ALLOW_DIRECT_ON_EMPTY', true) ||
+    envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', true);
   if (DIRECT_OK) {
     const http = axios.create({
       withCredentials: true,
@@ -412,9 +427,40 @@ function recordTimeout(proxy) {
   } catch {}
 }
 
+async function fetchDirectFallback(ruleId, url, opts = {}) {
+  if (!DIRECT_FALLBACK_ENABLED) return { skipped: true };
+  if (!directFallbackNotified) {
+    directFallbackNotified = true;
+    try { console.warn('[fetch] no healthy proxies available; falling back to direct HTTP'); } catch {}
+  }
+  const timeout = Number(process.env.FETCH_TIMEOUT_MS || 4000);
+  try {
+    const { res, latency } = await doFetchWithProxy('DIRECT', url, opts, timeout);
+    const code = Number(res?.status || 0);
+    try { recordVinted429Sample({ is429: code === 429 }); } catch {}
+    if (code >= 200 && code < 300) {
+      try { metrics.fetch_ok_total.inc(); } catch {}
+      try { rateCtl.observe('DIRECT', { ok: true, latency, code }); } catch {}
+      try { stickyMap.record(ruleId, { skipped: false, proxy: 'DIRECT' }); } catch {}
+      return { ok: true, res };
+    }
+    try { rateCtl.observe('DIRECT', { ok: false, code, latency }); } catch {}
+    try { stickyMap.record(ruleId, { skipped: true, proxy: 'DIRECT' }); } catch {}
+    try { recordOutcome({ softfail: true }); } catch {}
+    return { softFail: true };
+  } catch (err) {
+    try { rateCtl.observe('DIRECT', { fail: true }); } catch {}
+    try { stickyMap.record(ruleId, { skipped: true, proxy: 'DIRECT' }); } catch {}
+    try { recordOutcome({ softfail: true }); } catch {}
+    return { softFail: true };
+  }
+}
+
 export async function fetchRule(ruleId, url, opts = {}) {
   const proxy = stickyMap.assign(ruleId);
   if (!proxy) {
+    const fallback = await fetchDirectFallback(ruleId, url, opts);
+    if (fallback && (fallback.ok || fallback.softFail)) return fallback;
     metrics.fetch_skipped_total.inc();
     // no bucket/proxy available for this slot
     try { stickyMap.record(ruleId, { skipped: true, proxy: null }); } catch {}
