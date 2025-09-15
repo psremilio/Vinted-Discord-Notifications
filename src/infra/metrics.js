@@ -30,6 +30,7 @@ class LabeledCounter {
 export const metrics = {
   // split 429 rate gauges by domain
   vinted_http_429_rate_60s: new Gauge('vinted_http_429_rate_60s'),
+  vinted_req_60s_count: new Gauge('vinted_req_60s_count'),
   discord_http_429_rate_60s: new Gauge('discord_http_429_rate_60s'),
   // per-proxy gauges
   proxy_rpm_current: new LabeledGauge('proxy_rpm_current', ['proxy']),
@@ -215,6 +216,8 @@ export function serializeMetrics() {
   lineHelpType('scheduler_rules_total', 'Scheduler rules total', 'gauge'); out.push(`scheduler_rules_total ${metrics.scheduler_rules_total.get()}`);
   lineHelpType('rules_removed_total', 'Rules removed from scheduler', 'counter'); out.push(`rules_removed_total ${metrics.rules_removed_total.get()}`);
   lineHelpType('families_count', 'Number of active families', 'gauge'); out.push(`families_count ${metrics.families_count.get()}`);
+  lineHelpType('vinted_http_429_rate_60s', 'Vinted 429 rate over last 60s (percent)', 'gauge'); out.push(`vinted_http_429_rate_60s ${metrics.vinted_http_429_rate_60s.get()}`);
+  lineHelpType('vinted_req_60s_count', 'Vinted request samples over last 60s (count)', 'gauge'); out.push(`vinted_req_60s_count ${metrics.vinted_req_60s_count.get()}`);
   lineHelpType('rules_invalid_target_total', 'Rules with invalid targets (no channel or unsupported)', 'gauge'); out.push(`rules_invalid_target_total ${metrics.rules_invalid_target_total.get()}`);
   // E2E latency alias
   lineHelpType('e2e_latency_ms_p95', 'End-to-end latency p95 (found->sent) per channel', 'gauge');

@@ -1,7 +1,7 @@
 import { vintedSearch } from "./bot/search.js";
 import { postArticles } from "./bot/post.js";
 import { initProxyPool } from "./net/http.js";
-import { ensureProxyList, startProxyRefreshLoop } from "./net/ensureProxyList.js";
+import { ensureProxyList, startProxyRefreshLoop, buildProviderConfigFromEnv } from "./net/ensureProxyList.js";
 import { startAutoTopUp } from "./net/proxyHealth.js";
 import { createProcessedStore, dedupeKeyForChannel, ttlMs, DEDUPE_SCOPE } from "./utils/dedupe.js";
 import { limiter } from "./utils/limiter.js";
@@ -916,8 +916,9 @@ export async function incrementalRebuildFromDisk(client) {
 export const run = async (client, mySearches) => {
     processedStore = createProcessedStore();
     // Ensure proxy list is present and start refresh loop before pool init
-    try { await ensureProxyList(); } catch (e) { console.warn('[proxy] ensure list failed:', e?.message || e); }
-    try { startProxyRefreshLoop(); } catch {}
+    const providerCfg = (()=>{ try { return buildProviderConfigFromEnv(); } catch { return null; } })();
+    try { await ensureProxyList(providerCfg); } catch (e) { console.warn('[proxy] ensure list failed:', e?.message || e); }
+    try { startProxyRefreshLoop(providerCfg); } catch {}
     // Initialize pool, then enable background top-up
     try { await initProxyPool(); } catch (e) { console.warn('[proxy] init pool failed:', e?.message || e); }
     startAutoTopUp();

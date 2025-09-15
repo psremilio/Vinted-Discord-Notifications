@@ -109,8 +109,8 @@ async function twoPhaseCheck(proxy, base) {
         Accept: 'application/json, text/plain, */*',
         'X-Requested-With': 'XMLHttpRequest',
       },
-      jar,
     }));
+    try { http.defaults.jar = jar; } catch {}
     return { http, jar, csrf: null };
   }
   const client = await createHealthClient(proxy);

@@ -102,44 +102,60 @@ async function fetchWithBackoff(url, { headers = {}, params = {}, responseType =
   throw new Error('download failed');
 }
 
-export async function ensureProxyList() {
+export function buildProviderConfigFromEnv() {
+  const cfg = { mode: null };
   const url = String(process.env.PROXY_LIST_URL || '').trim();
   const psKey = String(process.env.PS_API_KEY || '').trim();
-  const psEndpoint = String(process.env.PS_ENDPOINT || '').trim();
+  let psEndpoint = String(process.env.PS_ENDPOINT || '').trim();
   const serviceId = String(process.env.PS_SERVICE_ID || process.env.SERVICE_ID || '').trim();
-  const format = String(process.env.PS_FORMAT || 'txt').trim().toLowerCase(); // 'txt' | 'json'
-
-  await fs.promises.mkdir(path.dirname(DEST), { recursive: true });
-
-  let raw = null;
+  const format = String(process.env.PS_FORMAT || 'txt').trim().toLowerCase();
   if (url) {
-    console.log(`[proxy] provider=url loading: ${url}`);
-    raw = await fetchWithBackoff(url, { responseType: 'text' });
-  } else if (psKey && psEndpoint) {
+    cfg.mode = 'url'; cfg.url = url; return cfg;
+  }
+  if (psKey) {
+    cfg.mode = 'ps';
+    // Default PS endpoint if not provided
+    if (!psEndpoint) psEndpoint = 'https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list';
     const headerName = String(process.env.PS_AUTH_HEADER || 'Authorization').trim();
     const scheme = String(process.env.PS_AUTH_SCHEME || 'Bearer').trim();
-    const headers = {};
-    headers[headerName] = scheme ? `${scheme} ${psKey}` : psKey;
-    // Params from env (optional)
+    const headers = {}; headers[headerName] = scheme ? `${scheme} ${psKey}` : psKey;
     const params = {};
-    if (serviceId) params.service_id = serviceId;
-    if (process.env.PS_PROTOCOLS) params.protocols = process.env.PS_PROTOCOLS;
-    if (process.env.PS_COUNTRIES) params.countries = process.env.PS_COUNTRIES;
+    // Include auth as query as well for default endpoint compatibility (masked in logs)
+    params.auth = psKey;
+    params.type = 'getproxies';
+    if (process.env.PS_PROTOCOLS) params.protocols = process.env.PS_PROTOCOLS; else params.protocol = 'http';
+    params.format = format || 'txt';
+    params.status = process.env.PS_STATUS || 'all';
+    params.country = process.env.PS_COUNTRY || process.env.PS_COUNTRIES || 'all';
+    if (serviceId) params.service = serviceId;
     if (process.env.PS_LIMIT) params.limit = process.env.PS_LIMIT;
     if (process.env.PS_TIMEOUT_MS) params.timeout = process.env.PS_TIMEOUT_MS;
     if (process.env.PS_EXTRA_QUERY) {
       const extra = String(process.env.PS_EXTRA_QUERY || '');
-      for (const kv of extra.split('&')) {
-        if (!kv) continue;
-        const [k, v] = kv.split('=');
-        if (k) params[k] = v ?? '';
-      }
+      for (const kv of extra.split('&')) { if (!kv) continue; const [k, v] = kv.split('='); if (k) params[k] = v ?? ''; }
     }
+    cfg.ps = { endpoint: psEndpoint, headers, params, format };
+    cfg.psKey = psKey; cfg.serviceId = serviceId;
+    return cfg;
+  }
+  return { mode: null };
+}
+
+export async function ensureProxyList(providerCfg = null) {
+  const cfg = providerCfg && providerCfg.mode ? providerCfg : buildProviderConfigFromEnv();
+
+  await fs.promises.mkdir(path.dirname(DEST), { recursive: true });
+
+  let raw = null;
+  if (cfg.mode === 'url' && cfg.url) {
+    console.log(`[proxy] provider=url loading: ${cfg.url}`);
+    raw = await fetchWithBackoff(cfg.url, { responseType: 'text' });
+  } else if (cfg.mode === 'ps' && cfg.ps) {
     try {
-      console.log(`[proxy] provider=proxyscrape endpoint=${psEndpoint} key=${mask(psKey)} svc=${serviceId || '-'} fmt=${format}`);
+      console.log(`[proxy] provider=proxyscrape endpoint=${cfg.ps.endpoint} key=${mask(cfg.psKey || '')} svc=${cfg.serviceId || '-'} fmt=${cfg.ps.format}`);
     } catch {}
-    const responseType = format === 'json' ? 'json' : 'text';
-    raw = await fetchWithBackoff(psEndpoint, { headers, params, responseType });
+    const responseType = cfg.ps.format === 'json' ? 'json' : 'text';
+    raw = await fetchWithBackoff(cfg.ps.endpoint, { headers: cfg.ps.headers || {}, params: cfg.ps.params || {}, responseType });
   } else {
     // Neither URL nor PS key configured
     if (fs.existsSync(DEST)) {
@@ -158,14 +174,14 @@ export async function ensureProxyList() {
 }
 
 let refreshTimer = null;
-export function startProxyRefreshLoop() {
+export function startProxyRefreshLoop(providerCfg = null) {
   const min = Number(process.env.LIST_REFRESH_MIN || 60);
   if (!min || min <= 0) return;
   if (refreshTimer) return;
   console.log(`[proxy] auto-refresh every ${min} min`);
   const tick = async () => {
     try {
-      await ensureProxyList();
+      await ensureProxyList(providerCfg);
     } catch (e) {
       console.warn('[proxy] refresh failed:', e?.message || e);
     }

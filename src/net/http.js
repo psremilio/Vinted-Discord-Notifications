@@ -43,6 +43,7 @@ function recordVinted429Sample({ is429 = false } = {}) {
     const t = vintedReqs.length || 1;
     const rate = Math.min(1, Math.max(0, vinted429s.length / t));
     metrics.vinted_http_429_rate_60s?.set(Math.round(rate * 100));
+    metrics.vinted_req_60s_count?.set(vintedReqs.length);
   } catch {}
 }
 function getHedgeBudget() {
@@ -75,8 +76,8 @@ export function createClient(proxyStr) {
         Accept: 'application/json, text/plain, */*',
         'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-      jar,
     }));
+    try { http.defaults.jar = jar; } catch {}
     const client = { http, warmedAt: Date.now(), proxyAgent: null, proxyLabel: 'DIRECT', jar, csrf: null };
     clientsByProxy.set('DIRECT', client);
     return client;
@@ -124,8 +125,8 @@ export function createClient(proxyStr) {
       'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': '"Windows"',
     },
-    jar,
   }));
+  try { http.defaults.jar = jar; } catch {}
 
   const client = { http, warmedAt: 0, proxyAgent, proxyLabel: key, jar, csrf: null };
   clientsByProxy.set(key, client);
