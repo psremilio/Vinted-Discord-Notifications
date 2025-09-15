@@ -32,19 +32,25 @@ export function withCsrf(cfg = {}, client) {
 }
 
 export async function retryOnceOn401_403(fn, client) {
+  let res;
   try {
-    return await fn();
+    res = await fn();
+    const s = Number(res?.status || 0);
+    if (s !== 401 && s !== 403) return res;
   } catch (e) {
     const s = e?.response?.status;
     if (s !== 401 && s !== 403) throw e;
-    client.csrf = null;
-    try {
-      if (client.jar?.removeAllCookiesSync) client.jar.removeAllCookiesSync();
-      else if (client.jar?.removeAllCookies) await new Promise(r => client.jar.removeAllCookies(() => r()));
-    } catch {}
-    await ensureProxySession(client);
-    return await fn();
   }
+  // First attempt hit 401/403 – reset session once and retry
+  client.csrf = null;
+  try {
+    if (client.jar?.removeAllCookiesSync) client.jar.removeAllCookiesSync();
+    else if (client.jar?.removeAllCookies) await new Promise(r => client.jar.removeAllCookies(() => r()));
+  } catch {}
+  try {
+    await ensureProxySession(client);
+  } catch {}
+  return await fn();
 }
 
 // Back-compat aliases to match callers expecting tokens.ensure / retryOnce401_403

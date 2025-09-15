@@ -14,6 +14,15 @@ const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 40);
 const REQUESTS_PER_PROXY_PER_MIN = Number(process.env.REQUESTS_PER_PROXY_PER_MIN || 8);
 const SCORE_DECAY_SEC = Number(process.env.PROXY_SCORE_DECAY_SEC || 900);
 
+function boolEnv(name, def = false) {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === '') return !!def;
+  const s = String(raw).trim().toLowerCase();
+  if ([ '1','true','yes','y','on' ].includes(s)) return true;
+  if ([ '0','false','no','n','off' ].includes(s)) return false;
+  return !!def;
+}
+
 // Data structures
 // proxy -> { lastOkAt, okCount, score, bucketTokens, bucketRefillAt, cooldownUntil }
 const healthyMap = new Map();
@@ -201,6 +210,14 @@ export async function initProxyPool() {
   console.log(`[proxy] Proxy test results: ${stats.tested} tested, ${stats.successful} healthy, ${stats.blocked} blocked, ${stats.rateLimited} rate limited (401/403/429), ${stats.failed} failed`);
   console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
   try { healthEvents.emit('count', healthyMap.size); } catch {}
+
+  const minAtBoot = Math.max(0, Number(process.env.MIN_PROXIES_AT_BOOT || 10));
+  const allowDirect = boolEnv('PROXY_ALLOW_DIRECT_WHEN_EMPTY', false) || boolEnv('ALLOW_DIRECT_ON_EMPTY', false) || boolEnv('ALLOW_DIRECT', false);
+  if (minAtBoot > 0 && healthyMap.size < minAtBoot && !allowDirect) {
+    const msg = `[proxy] insufficient proxies at boot: healthy=${healthyMap.size} < ${minAtBoot}`;
+    console.error(msg);
+    throw new Error(msg);
+  }
 }
 
 async function refillIfBelowCap() {

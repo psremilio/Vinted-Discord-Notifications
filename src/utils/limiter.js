@@ -80,3 +80,123 @@ if (!DISABLE_RES && ADAPTIVE) {
     } catch {}
   }, 60 * 1000).unref?.();
 }
+
+// --- Search bucket bootstrap (per-host) -----------------------------------
+
+const hostBuckets = new Map(); // host -> SearchBucket
+
+function normHost(host) {
+  if (!host) return null;
+  const str = String(host).trim().toLowerCase();
+  return str || null;
+}
+
+function clamp(val, min, max) {
+  const value = Number(val);
+  if (!Number.isFinite(value)) return Math.min(max, Math.max(min, min));
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
+}
+
+class SearchBucket {
+  constructor({ targetRpm, minRpm, maxRpm }) {
+    this.minRpm = Math.max(1, Number(minRpm || 1));
+    this.maxRpm = Math.max(this.minRpm, Number(maxRpm || this.minRpm));
+    this.targetRpm = clamp(targetRpm, this.minRpm, this.maxRpm);
+    this.tokens = Math.max(1, this.targetRpm);
+    this._last = Date.now();
+  }
+
+  get capacity() {
+    return Math.max(1, this.targetRpm);
+  }
+
+  update({ targetRpm, minRpm, maxRpm } = {}) {
+    if (typeof minRpm === 'number' && Number.isFinite(minRpm)) {
+      this.minRpm = Math.max(1, minRpm);
+    }
+    if (typeof maxRpm === 'number' && Number.isFinite(maxRpm)) {
+      this.maxRpm = Math.max(this.minRpm, maxRpm);
+    }
+    if (typeof targetRpm === 'number' && Number.isFinite(targetRpm)) {
+      this.targetRpm = clamp(targetRpm, this.minRpm, this.maxRpm);
+    } else {
+      // ensure target stays within updated bounds
+      this.targetRpm = clamp(this.targetRpm, this.minRpm, this.maxRpm);
+    }
+    this.tokens = Math.min(this.tokens ?? 0, this.capacity);
+    if (!Number.isFinite(this.tokens) || this.tokens <= 0) {
+      this.tokens = this.capacity;
+    }
+  }
+
+  refill(now = Date.now()) {
+    const dt = Math.max(0, now - this._last);
+    if (dt === 0) return;
+    this._last = now;
+    const perMs = this.targetRpm / 60_000;
+    this.tokens = Math.min(this.capacity, this.tokens + perMs * dt);
+  }
+
+  take(n = 1) {
+    if (n <= 0) return true;
+    this.refill();
+    if (this.tokens >= n) {
+      this.tokens -= n;
+      return true;
+    }
+    return false;
+  }
+
+  giveBack(n = 1) {
+    if (n <= 0) return;
+    this.tokens = Math.min(this.capacity, this.tokens + n);
+  }
+
+  fillToCapacity() {
+    this.tokens = this.capacity;
+    this._last = Date.now();
+  }
+}
+
+export function hasBucket(host) {
+  return hostBuckets.has(normHost(host));
+}
+
+export function ensureBucket(host, opts = {}) {
+  const key = normHost(host);
+  if (!key) return null;
+  const min = Number(opts.minRpm ?? getNum('SEARCH_MIN_RPM', 120));
+  const max = Number(opts.maxRpm ?? getNum('SEARCH_MAX_RPM', 2000));
+  const target = Number(opts.targetRpm ?? getNum('SEARCH_TARGET_RPM', TARGET_RPM));
+  const bucketOpts = {
+    minRpm: Math.max(1, min),
+    maxRpm: Math.max(Math.max(1, min), max),
+    targetRpm: clamp(target, Math.max(1, min), Math.max(Math.max(1, min), max)),
+  };
+  let bucket = hostBuckets.get(key);
+  if (!bucket) {
+    bucket = new SearchBucket(bucketOpts);
+    hostBuckets.set(key, bucket);
+  } else {
+    bucket.update(bucketOpts);
+    if (opts.prefill || opts.warmup) bucket.fillToCapacity();
+  }
+  if (opts.prefill || opts.warmup || !Number.isFinite(bucket.tokens)) {
+    bucket.fillToCapacity();
+  }
+  return bucket;
+}
+
+export function takeBucket(host, tokens = 1, opts = {}) {
+  const bucket = ensureBucket(host, opts);
+  if (!bucket) return false;
+  return bucket.take(tokens);
+}
+
+export function giveBackBucket(host, tokens = 1) {
+  const bucket = hostBuckets.get(normHost(host));
+  if (!bucket) return;
+  bucket.giveBack(tokens);
+}

@@ -8,6 +8,7 @@ import { stickyMap } from '../schedule/stickyMap.js';
 import { getBuckets, dropBuckets } from '../schedule/proxyBuckets.js';
 import { rateCtl } from '../schedule/rateControl.js';
 import { metrics } from '../infra/metrics.js';
+import { ensureBucket as ensureSearchBucket, giveBackBucket } from '../utils/limiter.js';
 
 const clientsByProxy = new Map();
 const BASE = process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de';
@@ -23,8 +24,8 @@ function envFlag(name, def = false) {
 
 const DIRECT_FALLBACK_ENABLED =
   envFlag('ALLOW_DIRECT', false) ||
-  envFlag('ALLOW_DIRECT_ON_EMPTY', true) ||
-  envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', true);
+  envFlag('ALLOW_DIRECT_ON_EMPTY', false) ||
+  envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', false);
 let directFallbackNotified = false;
 
 // Sliding-window trackers (60s) to drive gentle hedging adjustments and vinted 429 gauge
@@ -148,88 +149,7 @@ export function createClient(proxyStr) {
   return client;
 }
 
-const PROXY_DEBUG = String(process.env.DEBUG_PROXY || '0') === '1';
-const bootstrapFailCounts = new Map(); // proxyLabel -> count
-
-async function bootstrapSession(client, base = BASE) {
-  const TTL = 45 * 60 * 1000; // 45 minutes
-  if (client.warmedAt && Date.now() - client.warmedAt < TTL) return;
-  // Do not bootstrap for direct clients (no proxy agent)
-  if (!client.proxyAgent) { client.warmedAt = Date.now(); return; }
-  try {
-    const res = await axios.get(base, {
-      proxy: false,
-      httpAgent: client.proxyAgent,
-      httpsAgent: client.proxyAgent,
-      timeout: 10000,
-      validateStatus: () => true,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Cache-Control': 'no-cache',
-        Pragma: 'no-cache',
-        Connection: 'keep-alive',
-      }
-    });
-    const setCookie = res.headers['set-cookie'] || [];
-    const cookieHeader = setCookie.map(c => c.split(';')[0]).join('; ');
-    let csrf;
-    if (typeof res.data === 'string') {
-      const m = res.data.match(/name="csrf-token"\s+content="([^"]+)"/i);
-      csrf = m && m[1];
-    }
-    if (cookieHeader) client.http.defaults.headers.Cookie = cookieHeader;
-    client.http.defaults.headers.Referer = base.endsWith('/') ? base : base + '/';
-    client.http.defaults.headers.Origin = base.replace(/\/$/, '');
-    if (csrf) client.http.defaults.headers['X-CSRF-Token'] = csrf;
-    client.warmedAt = Date.now();
-    if (PROXY_DEBUG) {
-      console.log(`[proxy] session bootstrapped for ${client.proxyLabel}${csrf ? ' +csrf' : ''}`);
-    }
-  } catch (e) {
-    console.warn('[proxy] bootstrap failed:', e.code || e.message);
-    // Non-blocking single retry after a short delay
-    const retryDelay = Math.max(200, Number(process.env.PROXY_BOOTSTRAP_RETRY_DELAY_MS || 500));
-    try { console.log(`[proxy] scheduling non-blocking bootstrap retry in ${retryDelay}ms for ${client.proxyLabel}`); } catch {}
-    setTimeout(async () => {
-      try {
-        const res2 = await axios.get(base, {
-          proxy: false,
-          httpAgent: client.proxyAgent,
-          httpsAgent: client.proxyAgent,
-          timeout: 8000,
-          validateStatus: () => true,
-          headers: {
-            'User-Agent': 'Mozilla/5.0',
-            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-          }
-        });
-        const setCookie2 = res2.headers['set-cookie'] || [];
-        const cookieHeader2 = setCookie2.map(c => c.split(';')[0]).join('; ');
-        if (cookieHeader2) client.http.defaults.headers.Cookie = cookieHeader2;
-        client.http.defaults.headers.Referer = base.endsWith('/') ? base : base + '/';
-        client.http.defaults.headers.Origin = base.replace(/\/$/, '');
-        client.warmedAt = Date.now();
-        if (PROXY_DEBUG) console.log(`[proxy] session bootstrapped (retry) for ${client.proxyLabel}`);
-      } catch {}
-    }, retryDelay);
-    // Circuit-breaker on repeated bootstrap failures
-    try {
-      const key = String(client.proxyLabel || '');
-      if (key) {
-        const c = (bootstrapFailCounts.get(key) || 0) + 1;
-        bootstrapFailCounts.set(key, c);
-        const MAX = Math.max(2, Number(process.env.PROXY_BOOTSTRAP_FAIL_MAX || 3));
-        if (c >= MAX) {
-          console.warn(`[proxy] bootstrap circuit-breaker: marking proxy bad after ${c} fails → ${key}`);
-          try { markBadInPool(key); } catch {}
-          bootstrapFailCounts.set(key, 0);
-        }
-      }
-    } catch {}
-  }
-}
+// Legacy bootstrap logic removed – ensureProxySession handles warmup per client now.
 
 export async function getHttp(base) {
   // Per-request: attempt to grab a proxy from the pool
@@ -246,11 +166,11 @@ export async function getHttp(base) {
   }
 
   // Optional direct fallback when no proxies are immediately available.
-  // Enabled by ALLOW_DIRECT=1 or (by default) ALLOW_DIRECT_ON_EMPTY=1.
+  // Enabled only when ALLOW_DIRECT(us) flags explicitly permit it.
   const DIRECT_OK =
     envFlag('ALLOW_DIRECT', false) ||
-    envFlag('ALLOW_DIRECT_ON_EMPTY', true) ||
-    envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', true);
+    envFlag('ALLOW_DIRECT_ON_EMPTY', false) ||
+    envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', false);
   if (DIRECT_OK) {
     const client = createClient('DIRECT');
     try { await ensureProxySession(client); } catch {}
@@ -463,6 +383,30 @@ export async function fetchRule(ruleId, url, opts = {}) {
     if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} reason=no-proxy`);
     return { skipped: true };
   }
+  const host = (() => {
+    try { return new URL(url).host; }
+    catch { return null; }
+  })();
+  let hostTokenTaken = false;
+  if (host) {
+    try {
+      const bucket = ensureSearchBucket(host, {
+        targetRpm: Number(process.env.SEARCH_TARGET_RPM || 300),
+        minRpm: Number(process.env.SEARCH_MIN_RPM || 120),
+        maxRpm: Number(process.env.SEARCH_MAX_RPM || 2000),
+      });
+      hostTokenTaken = bucket?.take?.(1) ?? false;
+      if (!hostTokenTaken) {
+        try { metrics.fetch_skipped_total.inc(); } catch {}
+        try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
+        if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-host-budget`);
+        return { skipped: true };
+      }
+    } catch (err) {
+      // Failure to acquire host bucket should not hard-stop the fetch; fall back to proceeding.
+      hostTokenTaken = false;
+    }
+  }
   const buckets = getBuckets(proxy, rateCtl);
   const DISABLE_RES = String(process.env.SEARCH_DISABLE_RESERVOIR || '0') === '1';
   if (!buckets || (!DISABLE_RES && !buckets.main.take(1))) {
@@ -470,7 +414,8 @@ export async function fetchRule(ruleId, url, opts = {}) {
     // no reservoir token for this proxy right now
     rateCtl.observe(proxy, { skipped: true });
     try { stickyMap.record(ruleId, { skipped: true, proxy }); } catch {}
-    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-bucket`);
+    if (hostTokenTaken && host) giveBackBucket(host, 1);
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] skip rule=${ruleId} proxy=${proxy} reason=no-proxy-budget`);
     return { skipped: true };
   }
   try {
@@ -497,24 +442,6 @@ export async function fetchRule(ruleId, url, opts = {}) {
       if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] ok rule=${ruleId} proxy=${proxy} code=${code} ms=${latency}`);
       try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
       return { ok: true, res };
-    }
-    // Token refresh + single retry on same proxy for 401/403 if enabled
-    const RETRY_ON_401 = String(process.env.TOKEN_RETRY_ON_401 || '1') === '1';
-    if (RETRY_ON_401 && (code === 401 || code === 403)) {
-      const delay = Math.max(0, Number(process.env.TOKEN_RETRY_DELAY_MS || 300));
-      await new Promise(r => setTimeout(r, delay));
-      try { await bootstrapSession(createClient(proxy)); } catch {}
-      try {
-        const { res: res3, latency: lat3 } = await doFetchWithProxy(proxy, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
-        const code3 = Number(res3?.status || 0);
-        if (code3 >= 200 && code3 < 300) {
-          metrics.fetch_ok_total.inc();
-          recordProxySuccess(proxy);
-          rateCtl.observe(proxy, { ok: true, latency: lat3, code: code3 });
-          try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
-          return { ok: true, res: res3 };
-        }
-      } catch {}
     }
     // failed or rate limited -> consider retry on neighbor if tokens allow
     const retry = getBuckets(proxy, rateCtl).retry;

@@ -47,6 +47,7 @@ import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
 import { startLocalPoster } from './src/poster/localPoster.js';
 import { buildChannelsStore } from './src/bootstrap/channels.js';
 import { ChannelType } from 'discord.js';
+import { ensureBucket as ensureSearchBucket } from './src/utils/limiter.js';
 
 dotenv.config();
 
@@ -171,6 +172,36 @@ try {
 } catch (e) {
   console.warn('[config] channels.json not found or invalid, starting with 0 searches:', e?.message || e);
   mySearches = [];
+}
+
+// Pre-create per-host search buckets so the first scheduler tick never sees "no bucket"
+try {
+  const hosts = new Set();
+  for (const rule of mySearches) {
+    const url = (() => {
+      try { return rule?.url || rule?.channel?.url || null; }
+      catch { return null; }
+    })();
+    if (!url) continue;
+    try {
+      const h = new URL(url).host;
+      if (h) hosts.add(h);
+    } catch {}
+  }
+  if (hosts.size) {
+    const defaults = {
+      targetRpm: Number(process.env.SEARCH_TARGET_RPM || 300),
+      minRpm: Number(process.env.SEARCH_MIN_RPM || 120),
+      maxRpm: Number(process.env.SEARCH_MAX_RPM || 2000),
+    };
+    for (const host of hosts) {
+      try { ensureSearchBucket(host, { ...defaults, warmup: true }); }
+      catch {}
+    }
+    try { console.log(`[bootstrap] search buckets prewarmed hosts=${hosts.size}`); } catch {}
+  }
+} catch (err) {
+  try { console.warn('[bootstrap] failed to prewarm search buckets:', err?.message || err); } catch {}
 }
 
 // Pre-ack all slash commands as early as possible to avoid 3s timeouts
@@ -311,7 +342,10 @@ client.on('interactionCreate',interaction=>{
     }
   } catch (e) { console.error('[proxy.boot] failed:', e?.message || e); process.exit(1); }
   try { scheduleProxyRefresh(console); } catch {}
-  const poolInit = initProxyPool().catch(()=>{});
+  const poolInit = initProxyPool().catch(err => {
+    console.error('[proxy.init] failed:', err?.message || err);
+    process.exit(1);
+  });
   const DEADLINE_SEC = Number(process.env.STARTUP_DEADLINE_SEC || 60);
   const t0 = Date.now();
 
