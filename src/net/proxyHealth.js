@@ -91,7 +91,7 @@ async function twoPhaseCheck(proxy, base) {
 
   // Phase B: real API probe with session + CSRF
   // lightweight per-check client to avoid circular deps
-  function createHealthClient(pxy) {
+  async function createHealthClient(pxy) {
     let s = String(pxy || '').trim();
     if (s && !/^https?:\/\//i.test(s)) s = `http://${s}`;
     const agent = new HttpsProxyAgent(s);
