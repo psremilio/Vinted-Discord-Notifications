@@ -7,8 +7,8 @@ import { ensureProxySession, withCsrf } from './tokens.js';
 // Configuration with sensible defaults and backwards compatibility
 const CAPACITY = Number(process.env.PROXY_CAPACITY || process.env.PROXY_HEALTHY_CAP || 800);
 const CHECK_CONCURRENCY = Number(process.env.PROXY_CHECK_CONCURRENCY || process.env.PROXY_TEST_CONCURRENCY || 8);
-const CHECK_TIMEOUT_SEC = Number(process.env.PROXY_CHECK_TIMEOUT_SEC || 8);
-const COOLDOWN_MIN = Number(process.env.PROXY_COOLDOWN_MIN || 30);
+const CHECK_TIMEOUT_SEC = Number(process.env.PROXY_CHECK_TIMEOUT_SEC || process.env.CHECK_TIMEOUT_SEC || 8);
+const COOLDOWN_MIN = Number(process.env.PROXY_COOLDOWN_MIN || process.env.COOLDOWN_MIN || 30);
 const FAIL_MAX = Number(process.env.PROXY_FAIL_MAX || 3);
 const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 40);
 const REQUESTS_PER_PROXY_PER_MIN = Number(process.env.REQUESTS_PER_PROXY_PER_MIN || 8);
@@ -69,11 +69,13 @@ const failCounts = new Map(); // proxy -> fails since last ok
 
 let allProxies = [];
 let scanOffset = 0;
+let rrCursor = 0;
 
 function classifyStatus(code) {
   const n = Number(code || 0);
   if (n >= 200 && n < 400) return 'ok';
-  if ([401, 403, 429].includes(n)) return 'reachable_blocked';
+  if (n === 429) return 'rate_limited';
+  if (n === 401 || n === 403) return 'auth_blocked';
   if (n >= 400 && n < 500) return 'blocked';
   if (n >= 500 || n === 0) return 'failed';
   return 'blocked';
@@ -119,12 +121,13 @@ function addHealthy(proxy, { status } = {}) {
 }
 
 async function twoPhaseCheck(proxy, base) {
-  // Phase A: httpbin reachability with plain agent
+  // Phase A: HTTPS reachability probe with proxy agent
   let url = String(proxy || '').trim();
   if (url && !/^[a-z]+:\/\//i.test(url)) url = `http://${url}`;
   const agent = new HttpsProxyAgent(url);
   const t = CHECK_TIMEOUT_SEC * 1000;
-  const a = await axios.get('http://httpbin.org/ip', {
+  const probeUrl = process.env.PROXY_PROBE_URL || 'https://api.ipify.org?format=json';
+  const a = await axios.get(probeUrl, {
     proxy: false,
     httpAgent: agent,
     httpsAgent: agent,
@@ -135,8 +138,8 @@ async function twoPhaseCheck(proxy, base) {
       'Accept': 'application/json, text/plain, */*',
     }
   });
-  if (a.status !== 200) return { ok: false, reason: `httpbin:${a.status}` };
-
+  if (a?.status === 407) return { ok: false, status: 407, reason: 'auth_required' };
+  if (a?.status !== 200) return { ok: false, reason: `probe:${a?.status || 0}` };
   // Phase B: real API probe with session + CSRF
   // lightweight per-check client to avoid circular deps
   async function createHealthClient(pxy) {
@@ -181,15 +184,21 @@ async function testOne(proxy, base, stats) {
       stats.successful++;
     } else {
       const [cls] = String(res.reason || '').split(':');
-      if (cls === 'reachable_blocked') {
+      if (['reachable_blocked', 'auth_blocked', 'rate_limited'].includes(cls)) {
         addHealthy(proxy, { status: res.status });
         const st = healthyMap.get(proxy);
         if (st) {
-          st.score = Math.min(st.score ?? 0, -2);
+          if (cls === 'rate_limited') {
+            st.score = Math.max(-1, Math.min(st.score ?? 0, 0));
+          } else {
+            st.score = Math.min(st.score ?? 0, -2);
+          }
           healthyMap.set(proxy, st);
         }
-        stats.reachable++;
-      } else if (cls === 'blocked') {
+        if (cls === 'reachable_blocked') stats.reachable++;
+        else if (cls === 'auth_blocked') stats.authBlocked++;
+        else stats.rateLimited++;
+      } else if (cls === 'blocked' || cls === 'auth_required') {
         stats.blocked++;
       } else {
         const f = (failCounts.get(proxy) || 0) + 1;
@@ -224,7 +233,7 @@ export async function initProxyPool() {
   const base = (process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://www.vinted.de/').replace(/\/$/, '/');
   console.log(`[proxy] Testing proxies against: ${base}`);
 
-  const stats = { tested: 0, successful: 0, blocked: 0, failed: 0, reachable: 0 };
+  const stats = { tested: 0, successful: 0, blocked: 0, failed: 0, reachable: 0, authBlocked: 0, rateLimited: 0 };
   const started = Date.now();
   const DEADLINE_MS = Number(process.env.PROXY_INIT_DEADLINE_MS || 30000);
   const FAST_MIN = Math.max(1, Number(process.env.PROXY_FAST_START_MIN || 20));
@@ -237,7 +246,7 @@ export async function initProxyPool() {
       const slice = batch.slice(i, i + CHECK_CONCURRENCY);
       await Promise.allSettled(slice.map(p => testOne(p, base, stats)));
       if (FAST_ENABLED && healthyMap.size >= Math.min(FAST_MIN, CAPACITY)) {
-        console.log(`[proxy] fast-start with ${healthyMap.size} healthy → continue filling in background`);
+        console.log(`[proxy] fast-start with ${healthyMap.size} healthy â†’ continue filling in background`);
         setTimeout(() => { refillIfBelowCap().catch(() => {}); }, 0);
         console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
         try { healthEvents.emit('count', healthyMap.size); } catch {}
@@ -252,7 +261,7 @@ export async function initProxyPool() {
       }
     }
   }
-  console.log(`[proxy] Proxy test results: ${stats.tested} tested, ${stats.successful} healthy, ${stats.reachable} reachable_blocked, ${stats.blocked} blocked, ${stats.failed} failed`);
+  console.log(`[proxy] Proxy test results: ${stats.tested} tested, ${stats.successful} healthy, ${stats.reachable} reachable_blocked, ${stats.authBlocked} auth_blocked, ${stats.rateLimited} rate_limited, ${stats.blocked} blocked, ${stats.failed} failed`);
   console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
   try { healthEvents.emit('count', healthyMap.size); } catch {}
 
@@ -290,7 +299,7 @@ async function refillIfBelowCap() {
   }
   const delta = healthyMap.size - start;
   if (delta > 0) {
-    console.log(`[proxy] Top-up added ${delta} → now ${healthyMap.size}/${CAPACITY}`);
+    console.log(`[proxy] Top-up added ${delta} â†’ now ${healthyMap.size}/${CAPACITY}`);
     try { healthEvents.emit('count', healthyMap.size); } catch {}
   }
 }
@@ -353,11 +362,12 @@ export function getProxy(options = {}) {
       weighted.push([p, w]);
     }
     if (weighted.length) {
-      const total = weighted.reduce((a, [, w]) => a + w, 0);
-      let r = Math.random() * total;
-      for (const [p, w] of weighted) {
-        if ((r -= w) <= 0) {
-          if (tryAcquireToken(p)) return { proxy: p, mode: 'healthy', budgetToken: false };
+      const size = weighted.length;
+      for (let i = 0; i < size; i++) {
+        const [candidate] = weighted[(rrCursor + i) % size];
+        if (tryAcquireToken(candidate)) {
+          rrCursor = (rrCursor + i + 1) % size;
+          return { proxy: candidate, mode: 'healthy', budgetToken: false };
         }
       }
       for (const [p] of weighted) {
@@ -365,7 +375,6 @@ export function getProxy(options = {}) {
       }
     }
   }
-
   if (!allowExploratory) return null;
   const exploratory = pickExploratory();
   if (exploratory) return exploratory;
@@ -449,7 +458,11 @@ export function recordProxySuccess(p) {
 export function recordProxyOutcome(p, code) {
   const st = healthyMap.get(p) || {};
   const n = Number(code || 0);
-  if ([401, 403, 429].includes(n)) {
+  if (n === 429) {
+    st.score = Math.max(-2, (st.score || 0) - 1);
+    healthyMap.set(p, st);
+    permanentlyBad.delete(p);
+  } else if (n === 401 || n === 403) {
     st.score = Math.max(-5, (st.score || 0) - 1);
     healthyMap.set(p, st);
     permanentlyBad.delete(p);

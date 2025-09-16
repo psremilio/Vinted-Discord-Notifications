@@ -12,6 +12,8 @@ const DEFAULT_PROXY_PASS =
   process.env.PS_PROXY_PASSWORD ||
   '';
 
+const AUTH_MODE = (process.env.PS_AUTH_MODE || process.env.PROXY_AUTH_MODE || '').trim().toLowerCase();
+
 function maskProxySample(str) {
   try {
     const u = new URL(str);
@@ -42,7 +44,9 @@ export function loadProxies(
       if (!u.hostname || !u.port) return null;
       let user = u.username;
       let pass = u.password;
-      if (!user && DEFAULT_PROXY_USER) {
+      const mode = AUTH_MODE;
+      const useDefaultCreds = !user && DEFAULT_PROXY_USER && mode !== 'ip';
+      if (useDefaultCreds) {
         user = DEFAULT_PROXY_USER;
         pass = DEFAULT_PROXY_PASS || '';
       }
@@ -63,3 +67,5 @@ export function loadProxies(
   }
   return unique;
 }
+
+

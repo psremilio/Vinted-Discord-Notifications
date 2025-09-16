@@ -22,10 +22,10 @@ function envFlag(name, def = false) {
   return !!def;
 }
 
-const DIRECT_FALLBACK_ENABLED =
-  envFlag('ALLOW_DIRECT', false) ||
-  envFlag('ALLOW_DIRECT_ON_EMPTY', false) ||
-  envFlag('PROXY_ALLOW_DIRECT_WHEN_EMPTY', false);
+function directFallbackEnabled() {
+  const keys = ['ALLOW_DIRECT', 'ALLOW_DIRECT_ON_EMPTY', 'PROXY_ALLOW_DIRECT_WHEN_EMPTY'];
+  return keys.some((key) => envFlag(key, false));
+}
 let directFallbackNotified = false;
 
 // Sliding-window trackers (60s) to drive gentle hedging adjustments and vinted 429 gauge
@@ -85,7 +85,7 @@ export function createClient(proxyStr) {
     const http = cookieJarWrapper(axios.create({
       withCredentials: true,
       maxRedirects: 5,
-      timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000),
+      timeout: Number(process.env.FETCH_TIMEOUT_MS || 6000),
       proxy: false,
       headers: {
         'User-Agent': 'Mozilla/5.0',
@@ -119,7 +119,7 @@ export function createClient(proxyStr) {
   const http = cookieJarWrapper(axios.create({
     withCredentials: true,
     maxRedirects: 5,
-    timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000),
+    timeout: Number(process.env.FETCH_TIMEOUT_MS || 6000),
     proxy: false, // Disable axios proxy handling
     httpAgent: proxyAgent,
     httpsAgent: proxyAgent, // Use our custom agent
@@ -249,7 +249,7 @@ export async function hedgedGet(url, config = {}, base = BASE) {
   try {
     const ALLOW = String(process.env.ALLOW_DIRECT_ON_HEDGE_FAIL || process.env.ALLOW_DIRECT || '0') === '1';
     if (ALLOW) {
-      const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 5000), validateStatus: () => true });
+      const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 6000), validateStatus: () => true });
       const code = Number(res?.status || 0);
       if (code >= 200 && code < 300) {
         try { recordOutcome({ ok: true }); } catch {}
@@ -295,7 +295,7 @@ export async function get(url, config = {}) {
 // Low-level fetch via a specific proxy, with latency measurement and EWMA tracking
 const ewmaByProxy = new Map(); // proxy -> { value, alpha }
 const latSamplesByProxy = new Map(); // proxy -> number[]
-export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 5000)) {
+export async function doFetchWithProxy(proxy, url, config = {}, timeout = Number(process.env.FETCH_TIMEOUT_MS || 6000)) {
   const client = createClient(proxy);
   await ensureProxySession(client);
   const t0 = Date.now();
@@ -350,12 +350,12 @@ function recordTimeout(proxy) {
 }
 
 async function fetchDirectFallback(ruleId, url, opts = {}) {
-  if (!DIRECT_FALLBACK_ENABLED) return { skipped: true };
+  if (!directFallbackEnabled()) return { skipped: true };
   if (!directFallbackNotified) {
     directFallbackNotified = true;
     try { console.warn('[fetch] no healthy proxies available; falling back to direct HTTP'); } catch {}
   }
-  const timeout = Number(process.env.FETCH_TIMEOUT_MS || 4000);
+  const timeout = Number(process.env.FETCH_TIMEOUT_MS || 6000);
   try {
     const { res, latency } = await doFetchWithProxy('DIRECT', url, opts, timeout);
     const code = Number(res?.status || 0);
@@ -468,7 +468,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
   }
   const bucketState = buckets || getBuckets(proxy, rateCtl);
   try {
-    const { res, latency } = await doFetchWithProxy(proxy, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
+    const { res, latency } = await doFetchWithProxy(proxy, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 6000));
     const code = Number(res?.status || 0);
     // Slow-proxy quarantine
     try {
@@ -492,13 +492,14 @@ export async function fetchRule(ruleId, url, opts = {}) {
       try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
       return { ok: true, res };
     }
+    recordProxyOutcome(proxy, code);
     // failed or rate limited -> consider retry on neighbor if tokens allow
     const retryBucket = (bucketState || getBuckets(proxy, rateCtl))?.retry;
     if (retryBucket && retryBucket.take(1)) {
       const alt = stickyMap.next(proxy);
       if (alt) {
         try {
-          const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
+          const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 6000));
           const code2 = Number(res2?.status || 0);
           if (code2 >= 200 && code2 < 300) {
             metrics.fetch_ok_total.inc();
@@ -533,7 +534,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     if (retryBucket && retryBucket.take(1)) {
       const alt = stickyMap.next(proxy);
       try {
-        const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 4000));
+        const { res: res2, latency: lat2 } = await doFetchWithProxy(alt, url, opts, Number(process.env.FETCH_TIMEOUT_MS || 6000));
         const code2 = Number(res2?.status || 0);
         if (code2 >= 200 && code2 < 300) {
           metrics.fetch_ok_total.inc();
@@ -555,3 +556,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     return { softFail: true };
   }
 }
+
+
+
+
