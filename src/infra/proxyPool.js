@@ -105,8 +105,10 @@ function buildProviders() {
   urls.push(...fromList);
   const single = process.env.PROXY_LIST_URL && !process.env.PROXY_LIST_URL.includes('${') ? process.env.PROXY_LIST_URL : null;
   if (single) urls.push(single);
-  if ((process.env.PS_API_KEY && process.env.SERVICE_ID)) {
-    urls.push(`https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${process.env.PS_API_KEY}&type=getproxies&protocol=http&format=txt&status=all&country=all&service=${process.env.SERVICE_ID}`);
+    if (process.env.PS_API_KEY && process.env.SERVICE_ID) {
+      const base = `https://api.proxyscrape.com/v2/account/datacenter_shared/proxy-list?auth=${process.env.PS_API_KEY}&type=getproxies&protocol=http&format=txt&country=all&service=${process.env.SERVICE_ID}`;
+      urls.push(`${base}&status=online`);
+      urls.push(`${base}&status=all`);
   }
   return Array.from(new Set(urls));
 }

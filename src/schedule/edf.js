@@ -2,6 +2,7 @@
 import { tierOf, TIER_TARGET_SEC } from './tiers.js';
 import { getRuleSkipRatio } from './stickyMap.js';
 import { metrics } from '../infra/metrics.js';
+import { healthyCount } from '../net/proxyHealth.js';
 
 function jitter(ms, spread = 0.2) {
   const k = 1 - spread + Math.random() * (2 * spread);
@@ -122,8 +123,16 @@ export class EdfScheduler {
       const want = Math.max(cfg, Math.min(maxC, Math.ceil(readyCount / 2)));
       budget = Math.min(maxC, Math.max(cfg, want));
     }
+    const concurrencyCap = (() => {
+      try {
+        const n = healthyCount();
+        return Math.max(1, Number.isFinite(n) ? n : 0);
+      } catch {
+        return 1;
+      }
+    })();
     let dispatched = 0;
-    while (dispatched < budget) {
+    while (dispatched < budget && (this.inflight + dispatched) < concurrencyCap) {
       const st = this._pickReady();
       if (!st) break;
       st.running = true;

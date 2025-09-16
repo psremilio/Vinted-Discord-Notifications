@@ -3,7 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { CookieJar } from 'tough-cookie';
 import { wrapper as cookieJarWrapper } from 'axios-cookiejar-support';
 import { ensureProxySession, withCsrf, retryOnceOn401_403 } from './tokens.js';
-import { getProxy, hasHealthy, releaseExploreToken, markBadInPool, recordProxySuccess, recordProxyOutcome } from './proxyHealth.js';
+import { getProxy, hasHealthy, releaseExploreToken, markBadInPool, quarantineProxy, recordProxySuccess, recordProxyOutcome } from './proxyHealth.js';
 import { stickyMap } from '../schedule/stickyMap.js';
 import { getBuckets, dropBuckets } from '../schedule/proxyBuckets.js';
 import { rateCtl } from '../schedule/rateControl.js';
@@ -63,12 +63,42 @@ function recordVinted429Sample({ is429 = false } = {}) {
   } catch {}
 }
 function getHedgeBudget() {
-  const baseN = Math.max(1, Number(process.env.HEDGE_REQUESTS || 3));
-  const maxN = Math.max(baseN, Number(process.env.HEDGE_REQUESTS_MAX || 6));
-  const thr = Math.min(1, Math.max(0, Number(process.env.SOFTFAIL_RATE_BOOST_THR || 0.15)));
+  const baseN = Math.max(1, Number(process.env.HEDGE_REQUESTS || 2));
+  const maxN = Math.max(baseN, Number(process.env.HEDGE_REQUESTS_MAX || 4));
+  const cut = Math.min(1, Math.max(0, Number(process.env.HEDGE_CUT_THR || 0.03)));
   const rate = getSoftfailRate60s();
-  const bonus = rate > thr ? 1 : 0;
-  return Math.min(maxN, baseN + bonus);
+  if (rate > cut) return 1;
+  return Math.min(maxN, baseN);
+}
+
+const proxy429BackoffMs = new Map();
+function resetProxy429Backoff(proxy) {
+  if (!proxy) return;
+  proxy429BackoffMs.delete(proxy);
+}
+function nextProxy429Backoff(proxy) {
+  const base = Math.max(15_000, Number(process.env.PROXY_429_BACKOFF_MS || 60_000));
+  const max = Math.max(base, Number(process.env.PROXY_429_BACKOFF_MAX_MS || 300_000));
+  const current = proxy429BackoffMs.get(proxy) ?? base;
+  const jitter = Math.floor(Math.random() * 500);
+  const wait = Math.min(current, max) + jitter;
+  const next = Math.min(Math.max(current, base) * 2, max);
+  proxy429BackoffMs.set(proxy, next);
+  return wait;
+}
+function scheduleProxy429Cooldown(proxy, headers) {
+  if (!proxy) return;
+  const header = headers?.['retry-after'] ?? headers?.['Retry-After'];
+  const retryAfter = Number(header);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    const wait = Math.max(1000, retryAfter * 1000);
+    quarantineProxy(proxy, wait);
+    const prev = proxy429BackoffMs.get(proxy) ?? wait;
+    proxy429BackoffMs.set(proxy, Math.max(wait, prev));
+    return;
+  }
+  const wait = nextProxy429Backoff(proxy);
+  quarantineProxy(proxy, wait);
 }
 
 export function createClient(proxyStr) {
@@ -116,6 +146,26 @@ export function createClient(proxyStr) {
   }
 
   const jar = new CookieJar();
+  const baseHeaders = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+    Accept: 'application/json, text/plain, */*',
+    'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'DNT': '1',
+    'Connection': 'keep-alive',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'X-Requested-With': 'XMLHttpRequest',
+  };
+  if (String(process.env.HEADERS_CH_UA ?? '1') !== '0') {
+    baseHeaders['sec-ch-ua'] = '"Chromium";v="126", "Not.A/Brand";v="24", "Google Chrome";v="126"';
+    baseHeaders['sec-ch-ua-mobile'] = '?0';
+    baseHeaders['sec-ch-ua-platform'] = '"Windows"';
+  }
   const http = cookieJarWrapper(axios.create({
     withCredentials: true,
     maxRedirects: 5,
@@ -123,24 +173,7 @@ export function createClient(proxyStr) {
     proxy: false, // Disable axios proxy handling
     httpAgent: proxyAgent,
     httpsAgent: proxyAgent, // Use our custom agent
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      Accept: 'application/json, text/plain, */*',
-      'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'DNT': '1',
-      'Connection': 'keep-alive',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      'X-Requested-With': 'XMLHttpRequest',
-      'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"Windows"',
-    },
+    headers: baseHeaders,
   }));
   try { http.defaults.jar = jar; } catch {}
 
@@ -188,53 +221,102 @@ export async function getHttp(base) {
 
 // Hedged GET: fire up to HEDGE_REQUESTS with small delay and return the first useful response
 export async function hedgedGet(url, config = {}, base = BASE) {
-  const HEDGE_N = getHedgeBudget();
+  const HEDGE_N = Math.max(1, getHedgeBudget());
   const HEDGE_DELAY = Math.max(0, Number(process.env.HEDGE_DELAY_MS || 200));
+  const RETRY_DELAY = Math.max(0, Number(process.env.RETRY_DELAY_MS || 500));
 
   const attempts = [];
   const controllers = [];
   let resolved = false;
 
+  const host = (() => {
+    try { return new URL(url).host; }
+    catch { return null; }
+  })();
+
+  let hostTokenTaken = false;
+  if (host) {
+    try {
+      const bucket = ensureSearchBucket(host, {
+        targetRpm: Number(process.env.SEARCH_TARGET_RPM || 300),
+        minRpm: Number(process.env.SEARCH_MIN_RPM || 120),
+        maxRpm: Number(process.env.SEARCH_MAX_RPM || 2000),
+      });
+      hostTokenTaken = bucket?.take?.(1) ?? false;
+    } catch {
+      hostTokenTaken = false;
+    }
+    if (!hostTokenTaken) {
+      try { metrics.fetch_skipped_total?.inc(); } catch {}
+      const err = new Error('hedge-no-host-budget');
+      err.skipped = true;
+      throw err;
+    }
+  }
+
   function runAttempt(delayMs) {
     return new Promise((resolve) => {
       setTimeout(async () => {
         if (resolved) return resolve(null);
-        let proxy;
+        let proxy = null;
+        let controller = null;
+        const started = Date.now();
         try {
-          const { http, proxy: p, client } = await getHttp(base);
-          proxy = p;
-          const controller = new AbortController();
+          const ctx = await getHttp(base);
+          if (!ctx) return resolve(null);
+          proxy = ctx.proxy;
+          const client = ctx.client;
+          controller = new AbortController();
           controllers.push(controller);
-          await ensureProxySession(client);
-          let res = await retryOnceOn401_403(
-            () => client.http.get(url, withCsrf({ ...config, signal: controller.signal, validateStatus: () => true }, client)),
+          const axiosCfg = withCsrf({
+            ...config,
+            signal: controller.signal,
+            timeout: Number(process.env.FETCH_TIMEOUT_MS || 8000),
+            validateStatus: () => true,
+          }, client);
+          const res = await retryOnceOn401_403(
+            () => client.http.get(url, axiosCfg),
             client
           );
-          const code = Number(res.status || 0);
-          if (!resolved && code >= 200 && code < 300) {
+          const code = Number(res?.status || 0);
+          const latency = Date.now() - started;
+          const ok = code >= 200 && code < 300;
+          if (ok) {
             recordProxySuccess(proxy);
-            recordOutcome({ ok: true });
-            resolved = true;
-            resolve({ res, proxy });
-          } else {
-            const code2 = Number(res?.status || 0);
-            if (!resolved && code2 >= 200 && code2 < 300) {
-              recordProxySuccess(proxy);
-              recordOutcome({ ok: true });
+            resetProxy429Backoff(proxy);
+            try { rateCtl.observe(proxy, { ok: true, latency, code }); } catch {}
+            try { recordOutcome({ ok: true }); } catch {}
+            if (!resolved) {
               resolved = true;
-              resolve({ res, proxy });
-            } else {
-              recordProxyOutcome(proxy, code2 || code);
-              recordOutcome({ softfail: true });
-              resolve(null);
+              for (const c of controllers) {
+                if (c !== controller) { try { c.abort(); } catch {} }
+              }
+              return resolve({ res, proxy });
+            }
+          } else {
+            recordProxyOutcome(proxy, code);
+            try { rateCtl.observe(proxy, { ok: false, code, latency }); } catch {}
+            try { recordOutcome({ softfail: true }); } catch {}
+            if (code === 429) {
+              scheduleProxy429Cooldown(proxy, res?.headers);
+              if (RETRY_DELAY) await new Promise(r => setTimeout(r, RETRY_DELAY));
+            } else if (code === 403 && RETRY_DELAY) {
+              await new Promise(r => setTimeout(r, RETRY_DELAY));
             }
           }
-        } catch (e) {
-          // timeouts or network errors
-          recordProxyOutcome(proxy, e?.response?.status || 0);
-          recordOutcome({ softfail: true });
-          resolve(null);
+        } catch (err) {
+          const status = Number(err?.response?.status || 0);
+          if (proxy) {
+            recordProxyOutcome(proxy, status);
+            if (status === 429) scheduleProxy429Cooldown(proxy, err?.response?.headers);
+          }
+          try { recordOutcome({ softfail: true }); } catch {}
+          try {
+            if (proxy) rateCtl.observe(proxy, { fail: true });
+            else rateCtl.observe('UNKNOWN', { fail: true });
+          } catch {}
         }
+        resolve(null);
       }, delayMs);
     });
   }
@@ -242,14 +324,15 @@ export async function hedgedGet(url, config = {}, base = BASE) {
   for (let i = 0; i < HEDGE_N; i++) {
     attempts.push(runAttempt(i === 0 ? 0 : i * HEDGE_DELAY));
   }
+
   const results = await Promise.all(attempts);
   const winner = results.find(x => x && x.res);
   if (winner) return winner.res;
-  // Optional direct fallback when all hedged proxy requests fail
+
   try {
     const ALLOW = String(process.env.ALLOW_DIRECT_ON_HEDGE_FAIL || process.env.ALLOW_DIRECT || '0') === '1';
     if (ALLOW) {
-      const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 6000), validateStatus: () => true });
+      const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 8000), validateStatus: () => true });
       const code = Number(res?.status || 0);
       if (code >= 200 && code < 300) {
         try { recordOutcome({ ok: true }); } catch {}
@@ -259,6 +342,7 @@ export async function hedgedGet(url, config = {}, base = BASE) {
   } catch {}
   throw new Error('Hedged requests failed');
 }
+
 
 export function rotateProxy(badProxy) {
   if (badProxy && clientsByProxy.has(badProxy)) {
@@ -482,11 +566,13 @@ export async function fetchRule(ruleId, url, opts = {}) {
     // record vinted 429 sample for adaptive search limiter
     try { recordVinted429Sample({ is429: code === 429 }); } catch {}
     if (code === 429 || code === 403) {
+      if (code === 429) scheduleProxy429Cooldown(proxy, res?.headers);
       // treat as fail for controller, but return softFail path below
       rateCtl.observe(proxy, { ok: false, code, latency });
     } else if (code >= 200 && code < 300) {
       metrics.fetch_ok_total.inc();
       recordProxySuccess(proxy);
+      resetProxy429Backoff(proxy);
       rateCtl.observe(proxy, { ok: true, latency, code });
       if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] ok rule=${ruleId} proxy=${proxy} code=${code} ms=${latency}`);
       try { stickyMap.record(ruleId, { skipped: false, proxy }); } catch {}
@@ -503,6 +589,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
           const code2 = Number(res2?.status || 0);
           if (code2 >= 200 && code2 < 300) {
             metrics.fetch_ok_total.inc();
+            resetProxy429Backoff(alt);
             // slight penalty to original proxy
             rateCtl.observe(proxy, { softFail: true });
             rateCtl.observe(alt, { ok: true, latency: lat2, code: code2 });
@@ -512,6 +599,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
             return { ok: true, res: res2 };
           } else {
             recordProxyOutcome(alt, code2);
+            if (code2 === 429) scheduleProxy429Cooldown(alt, res2?.headers);
             rateCtl.observe(alt, { ok: false, code: code2, latency: lat2 });
             if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(`[fetch] fail-retry rule=${ruleId} alt=${alt} code=${code2} ms=${lat2}`);
           }
@@ -530,6 +618,8 @@ export async function fetchRule(ruleId, url, opts = {}) {
   } catch (e) {
     // network error -> try one neighbor if retry tokens are available
     const retryBucket = (bucketState || getBuckets(proxy, rateCtl))?.retry;
+    const status = Number(e?.response?.status || 0);
+    if (status === 429) scheduleProxy429Cooldown(proxy, e?.response?.headers);
     if (String(e?.message || '').includes('timeout')) recordTimeout(proxy);
     if (retryBucket && retryBucket.take(1)) {
       const alt = stickyMap.next(proxy);

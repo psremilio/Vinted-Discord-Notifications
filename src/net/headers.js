@@ -12,12 +12,15 @@ export function buildHeaders(t = null, referer = '', origin = '') {
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
     'X-Requested-With': 'XMLHttpRequest',
-    'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
   };
   if (referer) h.Referer = referer;
   if (origin) h.Origin = origin;
+  const includeChUa = String(process.env.HEADERS_CH_UA ?? '1') !== '0';
+  if (includeChUa) {
+    h['sec-ch-ua'] = '"Chromium";v="126", "Not.A/Brand";v="24", "Google Chrome";v="126"';
+    h['sec-ch-ua-mobile'] = '?0';
+    h['sec-ch-ua-platform'] = '"Windows"';
+  }
   if (t && t.cookie) h.Cookie = t.cookie;
   if (t && t.csrf) h['X-CSRF-Token'] = t.csrf;
   return h;

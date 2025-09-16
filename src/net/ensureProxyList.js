@@ -80,8 +80,8 @@ async function fetchWithBackoff(url, { headers = {}, params = {}, responseType =
       // Handle 429 backoff
       if (res.status === 429) {
         const ra = Number(res.headers?.['retry-after'] || 0);
-        const wait = (Number.isFinite(ra) ? ra * 1000 : 0) + Math.floor(Math.random() * 500);
-        if (wait > 0) await sleep(wait);
+        const wait = (Number.isFinite(ra) ? ra * 1000 : 500) + Math.floor(Math.random() * 700);
+        await sleep(wait);
         continue;
       }
       if (res.status >= 400) {

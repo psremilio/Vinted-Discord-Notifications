@@ -75,7 +75,7 @@ function classifyStatus(code) {
   const n = Number(code || 0);
   if (n >= 200 && n < 400) return 'ok';
   if (n === 429) return 'rate_limited';
-  if (n === 401 || n === 403) return 'auth_blocked';
+  if (n === 401 || n === 403 || n === 407) return 'auth_blocked';
   if (n >= 400 && n < 500) return 'blocked';
   if (n >= 500 || n === 0) return 'failed';
   return 'blocked';
@@ -138,7 +138,7 @@ async function twoPhaseCheck(proxy, base) {
       'Accept': 'application/json, text/plain, */*',
     }
   });
-  if (a?.status === 407) return { ok: false, status: 407, reason: 'auth_required' };
+  if (a?.status === 407) return { ok: false, status: 407, reason: 'auth_blocked:407' };
   if (a?.status !== 200) return { ok: false, reason: `probe:${a?.status || 0}` };
   // Phase B: real API probe with session + CSRF
   // lightweight per-check client to avoid circular deps
@@ -170,7 +170,7 @@ async function twoPhaseCheck(proxy, base) {
   const b = await client.http.get(API, withCsrf({ timeout: t, validateStatus: () => true }, client));
   const code = Number(b?.status || 0);
   const cls = classifyStatus(code);
-  return { ok: cls === 'ok', reason: `${cls}:${code}`, status: code };
+  return { ok: cls === 'ok', reason: `${cls}:${code}`, status: code, headers: b?.headers || {} };
 }
 
 async function testOne(proxy, base, stats) {
@@ -184,21 +184,33 @@ async function testOne(proxy, base, stats) {
       stats.successful++;
     } else {
       const [cls] = String(res.reason || '').split(':');
-      if (['reachable_blocked', 'auth_blocked', 'rate_limited'].includes(cls)) {
+      if (cls === 'rate_limited') {
         addHealthy(proxy, { status: res.status });
         const st = healthyMap.get(proxy);
         if (st) {
-          if (cls === 'rate_limited') {
-            st.score = Math.max(-1, Math.min(st.score ?? 0, 0));
-          } else {
-            st.score = Math.min(st.score ?? 0, -2);
-          }
+          st.score = Math.max(-1, Math.min(st.score ?? 0, 0));
           healthyMap.set(proxy, st);
         }
-        if (cls === 'reachable_blocked') stats.reachable++;
-        else if (cls === 'auth_blocked') stats.authBlocked++;
-        else stats.rateLimited++;
-      } else if (cls === 'blocked' || cls === 'auth_required') {
+        const headers = res && res.headers ? res.headers : {};
+        const retryAfterRaw = headers['retry-after'] ?? headers['Retry-After'];
+        const retryAfter = Number(retryAfterRaw);
+        const fallbackMs = Math.max(30_000, Number(process.env.PROXY_429_BACKOFF_MS || 60_000));
+        const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : fallbackMs;
+        quarantineProxy(proxy, waitMs);
+        stats.rateLimited++;
+      } else if (cls === 'reachable_blocked') {
+        addHealthy(proxy, { status: res.status });
+        const st = healthyMap.get(proxy);
+        if (st) {
+          st.score = Math.min(st.score ?? 0, -2);
+          healthyMap.set(proxy, st);
+        }
+        stats.reachable++;
+      } else if (cls === 'auth_blocked') {
+        const authTtl = Math.max(60_000, Number(process.env.PROXY_AUTH_TTL_MS || 12 * 60 * 60 * 1000));
+        markBadInPool(proxy, { ttlMs: authTtl, reason: 'auth_blocked' });
+        stats.authBlocked++;
+      } else if (cls === 'blocked') {
         stats.blocked++;
       } else {
         const f = (failCounts.get(proxy) || 0) + 1;
@@ -381,7 +393,7 @@ export function getProxy(options = {}) {
   return null;
 }
 
-export function markBadInPool(p) {
+export function markBadInPool(p, opts = {}) {
   if (!p) return;
   const st = healthyMap.get(p);
   if (st) {
@@ -391,10 +403,16 @@ export function markBadInPool(p) {
   if (healthyMap.has(p)) healthyMap.delete(p);
   const f = (failCounts.get(p) || 0) + 1;
   failCounts.set(p, f);
-  const baseMin = Math.max(5, COOLDOWN_MIN);
-  const jitter = 5 + Math.floor(Math.random() * 10);
-  const mins = f >= FAIL_MAX ? baseMin + jitter : Math.floor(baseMin / 2) + Math.floor(Math.random() * 5);
-  const until = Date.now() + mins * 60 * 1000;
+  const ttlMs = Number(opts?.ttlMs ?? 0);
+  let until = 0;
+  if (Number.isFinite(ttlMs) && ttlMs > 0) {
+    until = Date.now() + ttlMs;
+  } else {
+    const baseMin = Math.max(5, COOLDOWN_MIN);
+    const jitter = 5 + Math.floor(Math.random() * 10);
+    const mins = f >= FAIL_MAX ? baseMin + jitter : Math.floor(baseMin / 2) + Math.floor(Math.random() * 5);
+    until = Date.now() + mins * 60 * 1000;
+  }
   cooldown.set(p, until);
   if (st) { st.cooldownUntil = until; healthyMap.set(p, st); }
   if (f >= PERMA_FAILS) permanentlyBad.add(p);
@@ -462,7 +480,7 @@ export function recordProxyOutcome(p, code) {
     st.score = Math.max(-2, (st.score || 0) - 1);
     healthyMap.set(p, st);
     permanentlyBad.delete(p);
-  } else if (n === 401 || n === 403) {
+  } else if (n === 401 || n === 403 || n === 407) {
     st.score = Math.max(-5, (st.score || 0) - 1);
     healthyMap.set(p, st);
     permanentlyBad.delete(p);
