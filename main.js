@@ -5,7 +5,7 @@ process.on('uncaughtException',(err)=>{
 
 import dotenv from 'dotenv';
 import http from 'http';
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
 import fs from 'fs';
 import { channelsPath } from './src/infra/paths.js';
 // channelsStore is optional; fall back to legacy loader if module missing
@@ -108,6 +108,25 @@ try {
           });
           res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
           res.end(body); return;
+        }
+        if (req.url === '/discordz') {
+          const headers = { 'Content-Type': 'application/json' };
+          const token = process.env.BOT_TOKEN || '';
+          if (!token) {
+            res.writeHead(500, headers);
+            res.end(JSON.stringify({ ok: false, error: 'BOT_TOKEN missing' }));
+            return;
+          }
+          try {
+            const rest = new REST({ version: '10' }).setToken(token);
+            const me = await rest.get(Routes.user('@me'));
+            res.writeHead(200, headers);
+            res.end(JSON.stringify({ ok: true, user_id: me?.id ?? null }));
+          } catch (e) {
+            res.writeHead(500, headers);
+            res.end(JSON.stringify({ ok: false, error: e?.message || String(e) }));
+          }
+          return;
         }
         if (req.url === '/metrics') {
           try {

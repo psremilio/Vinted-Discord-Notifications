@@ -1,5 +1,5 @@
 import Bottleneck from 'bottleneck';
-import { Pool } from 'undici';
+import { Pool, ProxyAgent } from 'undici';
 import { sanitizeEmbeds } from '../discord/ensureValidEmbed.js';
 import { DiscordBucket } from '../post/DiscordBucket.js';
 import { metrics } from './metrics.js';
@@ -59,22 +59,26 @@ async function takeToken() {
 }
 
 // Shared HTTP connection pools per-origin for webhook posts (keep-alive)
-const dispatcherPools = new Map(); // origin -> Pool
+const dispatcherPools = new Map(); // key(origin|mode) -> dispatcher
+const DISCORD_PROXY = process.env.DISCORD_HTTP_PROXY || process.env.HTTPS_PROXY || '';
 function originOf(url) {
   try { const u = new URL(url); return `${u.protocol}//${u.host}`; } catch { return null; }
 }
 function getDispatcher(url) {
   const origin = originOf(url);
   if (!origin) return null;
-  let p = dispatcherPools.get(origin);
+  const key = DISCORD_PROXY ? 'proxy:' + DISCORD_PROXY : origin;
+  let p = dispatcherPools.get(key);
   if (!p) {
-    p = new Pool(origin, {
-      connections: Math.max(8, Number(process.env.WEBHOOK_POOL_CONNECTIONS || 32)),
-      pipelining: Math.max(1, Number(process.env.WEBHOOK_POOL_PIPELINING || 1)),
-      keepAliveTimeout: Math.max(1000, Number(process.env.WEBHOOK_KEEPALIVE_TIMEOUT_MS || 5000)),
-      keepAliveMaxTimeout: Math.max(2000, Number(process.env.WEBHOOK_KEEPALIVE_MAX_TIMEOUT_MS || 10000)),
-    });
-    dispatcherPools.set(origin, p);
+    p = DISCORD_PROXY
+      ? new ProxyAgent(DISCORD_PROXY)
+      : new Pool(origin, {
+          connections: Math.max(8, Number(process.env.WEBHOOK_POOL_CONNECTIONS || 32)),
+          pipelining: Math.max(1, Number(process.env.WEBHOOK_POOL_PIPELINING || 1)),
+          keepAliveTimeout: Math.max(1000, Number(process.env.WEBHOOK_KEEPALIVE_TIMEOUT_MS || 5000)),
+          keepAliveMaxTimeout: Math.max(2000, Number(process.env.WEBHOOK_KEEPALIVE_MAX_TIMEOUT_MS || 10000)),
+        });
+    dispatcherPools.set(key, p);
   }
   return p;
 }

@@ -8,6 +8,7 @@ const WANT = Math.max(1, Number(process.env.WEBHOOKS_PER_CHANNEL || 6));
 const NAME_PREFIX = String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook');
 
 const lastEnsure = new Map(); // channelId -> epoch ms
+const backoffUntil = new Map(); // channelId -> epoch ms
 
 async function listWebhooks(channelId) {
   try {
@@ -15,19 +16,34 @@ async function listWebhooks(channelId) {
     return Array.isArray(hooks) ? hooks : [];
   } catch (e) {
     try { console.warn('[webhooks.ensure.list] failed', channelId, e?.message || e); } catch {}
-    return [];
+    throw e;
   }
 }
 
 export async function ensureChannelWebhooks(channelId, namePrefix = NAME_PREFIX) {
   const now = Date.now();
+  const until = Number(backoffUntil.get(channelId) || 0);
+  if (until && now < until) return;
   const last = lastEnsure.get(channelId) || 0;
   // Debounce using interval minus a bit of jitter to spread load
   const threshold = ENSURE_MS - Math.floor(Math.random() * (JITTER_MS + 1));
   if (now - last < threshold) return;
   lastEnsure.set(channelId, now);
 
-  const hooks = await listWebhooks(channelId);
+  let hooks = [];
+  try {
+    hooks = await listWebhooks(channelId);
+    backoffUntil.delete(channelId);
+  } catch (e) {
+    const msg = String(e?.message || e || '');
+    if (/tls|socket disconnected|econnreset|timeout/i.test(msg)) {
+      const waitMs = Math.max(10 * 60_000, Number(process.env.WEBHOOK_ENSURE_ERR_BACKOFF_MS || 900_000));
+      backoffUntil.set(channelId, now + waitMs);
+      try { console.warn('[webhooks.ensure.backoff]', channelId, 'ms=', waitMs, 'reason=', msg); } catch {}
+    }
+    return;
+  }
+
   const mine = hooks.filter(h => String(h?.name || '').startsWith(namePrefix));
   const missing = Math.max(0, WANT - mine.length);
   if (missing <= 0) return;
@@ -61,6 +77,7 @@ export function scheduleEnsureLoop(channelIds = []) {
 // Immediate ensure after 404/Unknown Webhook; resets debounce timer
 export async function ensureAfter404(channelId) {
   try { lastEnsure.set(channelId, 0); } catch {}
+  try { backoffUntil.delete(channelId); } catch {}
   try { await ensureChannelWebhooks(channelId); } catch {}
 }
 
