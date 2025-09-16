@@ -38,6 +38,8 @@ export const metrics = {
   // counters
   http_429_total: new Counter('http_429_total'),
   http_403_total: new Counter('http_403_total'),
+  proxy_block_403_total: new Counter('proxy_block_403_total'),
+  proxy_block_tls_total: new Counter('proxy_block_tls_total'),
   fetch_ok_total: new Counter('fetch_ok_total'),
   fetch_skipped_total: new Counter('fetch_skipped_total'),
   fetch_softfail_total: new Counter('fetch_softfail_total'),
@@ -54,6 +56,7 @@ export const metrics = {
   rules_invalid_target_total: new Gauge('rules_invalid_target_total'),
   // aggregated, low-cardinality gauges
   http_429_rate_60s: new Gauge('http_429_rate_60s'),
+  fetch_403_rate_60s: new Gauge('fetch_403_rate_60s'),
   global_latency_p95_ms: new Gauge('global_latency_p95_ms'),
   backfill_pages_active: new Gauge('backfill_pages_active'),
   rules_reassigned_total: new Counter('rules_reassigned_total'),
@@ -128,6 +131,8 @@ export function serializeMetrics() {
   // Counters
   lineHelpType('http_429_total', 'Total HTTP 429s', 'counter'); out.push(`http_429_total ${metrics.http_429_total.get()}`);
   lineHelpType('http_403_total', 'Total HTTP 403s', 'counter'); out.push(`http_403_total ${metrics.http_403_total.get()}`);
+  lineHelpType('proxy_block_403_total', 'Proxies cooled due to auth blocks', 'counter'); out.push(`proxy_block_403_total ${metrics.proxy_block_403_total.get()}`);
+  lineHelpType('proxy_block_tls_total', 'Proxies cooled due to TLS/timeouts', 'counter'); out.push(`proxy_block_tls_total ${metrics.proxy_block_tls_total.get()}`);
   lineHelpType('fetch_ok_total', 'Total successful fetches', 'counter'); out.push(`fetch_ok_total ${metrics.fetch_ok_total.get()}`);
   lineHelpType('fetch_skipped_total', 'Total skipped fetch slots', 'counter'); out.push(`fetch_skipped_total ${metrics.fetch_skipped_total.get()}`);
   lineHelpType('fetch_softfail_total', 'Total soft fails', 'counter'); out.push(`fetch_softfail_total ${metrics.fetch_softfail_total.get()}`);
@@ -140,7 +145,8 @@ export function serializeMetrics() {
   lineHelpType('global_rpm_effective', 'Sum of per-proxy rpm', 'gauge'); out.push(`global_rpm_effective ${metrics.global_rpm_effective.get()}`);
   lineHelpType('vinted_http_429_rate_60s', 'Vinted 429 rate over 60s window (percent)', 'gauge'); out.push(`vinted_http_429_rate_60s ${metrics.vinted_http_429_rate_60s.get()}`);
   lineHelpType('discord_http_429_rate_60s', 'Discord 429 rate over 60s window (percent)', 'gauge'); out.push(`discord_http_429_rate_60s ${metrics.discord_http_429_rate_60s.get()}`);
-  lineHelpType('http_429_rate_60s', 'Global 429/403 rate over 60s window', 'gauge'); out.push(`http_429_rate_60s ${metrics.http_429_rate_60s.get()}`);
+  lineHelpType('http_429_rate_60s', 'Global 429 rate over 60s window (percent)', 'gauge'); out.push(`http_429_rate_60s ${metrics.http_429_rate_60s.get()}`);
+  lineHelpType('fetch_403_rate_60s', 'Global 403 rate over 60s window (percent)', 'gauge'); out.push(`fetch_403_rate_60s ${metrics.fetch_403_rate_60s.get()}`);
   lineHelpType('global_latency_p95_ms', 'Global p95 latency over window (ms)', 'gauge'); out.push(`global_latency_p95_ms ${metrics.global_latency_p95_ms.get()}`);
   lineHelpType('discord_queue_depth', 'Discord posting queue depth', 'gauge'); out.push(`discord_queue_depth ${metrics.discord_queue_depth.get()}`);
   lineHelpType('discord_dropped_total', 'Discord posts dropped due to full queue', 'counter'); out.push(`discord_dropped_total ${metrics.discord_dropped_total.get()}`);
@@ -218,6 +224,8 @@ export function serializeMetrics() {
   lineHelpType('families_count', 'Number of active families', 'gauge'); out.push(`families_count ${metrics.families_count.get()}`);
   lineHelpType('vinted_http_429_rate_60s', 'Vinted 429 rate over last 60s (percent)', 'gauge'); out.push(`vinted_http_429_rate_60s ${metrics.vinted_http_429_rate_60s.get()}`);
   lineHelpType('vinted_req_60s_count', 'Vinted request samples over last 60s (count)', 'gauge'); out.push(`vinted_req_60s_count ${metrics.vinted_req_60s_count.get()}`);
+  lineHelpType('http_429_rate_60s', 'Global 429 rate over last 60s (percent)', 'gauge'); out.push(`http_429_rate_60s ${metrics.http_429_rate_60s.get()}`);
+  lineHelpType('fetch_403_rate_60s', 'Global 403 rate over last 60s (percent)', 'gauge'); out.push(`fetch_403_rate_60s ${metrics.fetch_403_rate_60s.get()}`);
   lineHelpType('rules_invalid_target_total', 'Rules with invalid targets (no channel or unsupported)', 'gauge'); out.push(`rules_invalid_target_total ${metrics.rules_invalid_target_total.get()}`);
   // E2E latency alias
   lineHelpType('e2e_latency_ms_p95', 'End-to-end latency p95 (found->sent) per channel', 'gauge');

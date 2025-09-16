@@ -13,6 +13,9 @@ const FAIL_MAX = Number(process.env.PROXY_FAIL_MAX || 3);
 const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 40);
 const REQUESTS_PER_PROXY_PER_MIN = Number(process.env.REQUESTS_PER_PROXY_PER_MIN || 8);
 const SCORE_DECAY_SEC = Number(process.env.PROXY_SCORE_DECAY_SEC || 900);
+const FAIL_RATE_WINDOW_MS = Math.max(30_000, Number(process.env.PROXY_FAIL_WINDOW_MS || 60_000));
+const FAIL403_RATE_THR = Math.min(1, Math.max(0, Number(process.env.PROXY_FAIL403_RATE_THR || 0.2)));
+const FAILTLS_RATE_THR = Math.min(1, Math.max(0, Number(process.env.PROXY_FAILTLS_RATE_THR || 0.1)));
 
 function boolEnv(name, def = false) {
   const raw = process.env[name];
@@ -58,6 +61,49 @@ const exploreBucket = new MinuteBucket(EXPLORE_RPM);
 
 const PERMA_FAILS = Math.max(1, Number(process.env.PROXY_PERMA_FAILS || (FAIL_MAX * 3)));
 const permanentlyBad = new Set();
+
+const requestWindow = new Map(); // proxy -> timestamps (last window)
+const fail403Window = new Map(); // proxy -> timestamps (last window)
+const failTlsWindow = new Map(); // proxy -> timestamps (last window)
+
+function pruneWindow(arr, now = Date.now()) {
+  const cutoff = now - FAIL_RATE_WINDOW_MS;
+  while (arr.length && arr[0] < cutoff) arr.shift();
+}
+
+function pushWindow(map, proxy, now = Date.now()) {
+  if (!proxy) return;
+  let arr = map.get(proxy);
+  if (!arr) {
+    arr = [];
+    map.set(proxy, arr);
+  }
+  arr.push(now);
+  pruneWindow(arr, now);
+}
+
+function countWindow(map, proxy, now = Date.now()) {
+  const arr = map.get(proxy);
+  if (!arr) return 0;
+  pruneWindow(arr, now);
+  return arr.length;
+}
+
+function rateFor(map, proxy) {
+  const now = Date.now();
+  const total = countWindow(requestWindow, proxy, now);
+  if (!total) return 0;
+  return countWindow(map, proxy, now) / total;
+}
+
+function updateSlidingRates(proxy) {
+  const st = healthyMap.get(proxy);
+  if (!st) return;
+  st.fail403Rate = rateFor(fail403Window, proxy);
+  st.failTlsRate = rateFor(failTlsWindow, proxy);
+  st.sampleCount60 = countWindow(requestWindow, proxy);
+  healthyMap.set(proxy, st);
+}
 
 // Data structures
 // proxy -> { lastOkAt, okCount, score, bucketTokens, bucketRefillAt, cooldownUntil }
@@ -368,6 +414,9 @@ export function getProxy(options = {}) {
     for (const [p, st] of healthyMap.entries()) {
       const cool = st.cooldownUntil || (cooldown.get(p) || 0);
       if (cool > now) continue;
+      const fail403 = (st.fail403Rate ?? rateFor(fail403Window, p)) > FAIL403_RATE_THR;
+      const failTls = (st.failTlsRate ?? rateFor(failTlsWindow, p)) > FAILTLS_RATE_THR;
+      if (fail403 || failTls) continue;
       _refillTokens(st);
       if (st.bucketTokens <= 0) continue;
       const w = Math.max(1, Math.min(20, (st.score ?? 0) + 10));
@@ -471,11 +520,14 @@ export function recordProxySuccess(p) {
   st.lastOkAt = Date.now();
   healthyMap.set(p, st);
   permanentlyBad.delete(p);
+  pushWindow(requestWindow, p);
+  updateSlidingRates(p);
 }
 
 export function recordProxyOutcome(p, code) {
   const st = healthyMap.get(p) || {};
   const n = Number(code || 0);
+  pushWindow(requestWindow, p);
   if (n === 429) {
     st.score = Math.max(-2, (st.score || 0) - 1);
     healthyMap.set(p, st);
@@ -484,10 +536,19 @@ export function recordProxyOutcome(p, code) {
     st.score = Math.max(-5, (st.score || 0) - 1);
     healthyMap.set(p, st);
     permanentlyBad.delete(p);
+    pushWindow(fail403Window, p);
   } else if (n >= 500) {
     st.score = Math.max(-10, (st.score || 0) - 1);
     healthyMap.set(p, st);
   }
+  updateSlidingRates(p);
+}
+
+export function recordProxyTlsFailure(p) {
+  if (!p) return;
+  pushWindow(requestWindow, p);
+  pushWindow(failTlsWindow, p);
+  updateSlidingRates(p);
 }
 
 export function coolingCount() {

@@ -401,33 +401,48 @@ function isHealthy() {
   return !(tooOld || tooManyErrors);
 }
 
+const STALL_RELOAD_DEBOUNCE_MS = Math.max(60_000, Number(process.env.STALL_RELOAD_DEBOUNCE_MS || 180_000));
+let lastStallReloadAt = 0;
+
 function startStallDetector() {
   const chId = process.env.DISCORD_PING_CHANNEL_ID;
-  setInterval(async () => {
+  const timer = setInterval(async () => {
     const now = Date.now();
     const lastOk = state.lastFetchSuccessAt ? state.lastFetchSuccessAt.getTime() : 0;
     const tooOld = lastOk && (now - lastOk > 10 * 60 * 1000);
     const tooManyErrors = (state.consecutiveErrors || 0) >= 10;
-    if (tooOld || tooManyErrors) {
-      console.warn('[stall] detected — reloading searches from disk');
-      try { const mod = await import('./src/run.js'); await mod.rebuildFromDisk?.(client); } catch {}
-      if (chId) {
-        try {
-          const ch = await client.channels.fetch(chId).catch(()=>null) || client.channels.cache.get(chId);
-          if (ch && typeof ch.send === 'function') {
-            await ch.send({
-              embeds: [{
-                color: 0xf59e0b,
-                title: 'Watcher neu gestartet (Stall-Detector)',
-                description: tooOld ? 'No fetch success > 10min' : 'Consecutive errors >= 10',
-                timestamp: new Date().toISOString(),
-              }]
-            });
-          }
-        } catch {}
+    if (!tooOld && !tooManyErrors) return;
+    const since = now - lastStallReloadAt;
+    if (lastStallReloadAt && since < STALL_RELOAD_DEBOUNCE_MS) {
+      if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+        const remaining = Math.max(0, STALL_RELOAD_DEBOUNCE_MS - since);
+        console.log('[stall] debounce active - next reload in ' + remaining + 'ms');
       }
+      return;
+    }
+    lastStallReloadAt = now;
+    const rate403 = metrics.fetch_403_rate_60s?.get?.();
+    const details = ['tooOld=' + tooOld, 'errors=' + (state.consecutiveErrors || 0)];
+    if (rate403 != null) details.push('403_rate60=' + rate403);
+    console.warn('[stall] detected - reloading searches from disk (' + details.join(' ') + ')');
+    try { const mod = await import('./src/run.js'); await mod.rebuildFromDisk?.(client); } catch {}
+    if (chId) {
+      try {
+        const ch = await client.channels.fetch(chId).catch(()=>null) || client.channels.cache.get(chId);
+        if (ch && typeof ch.send === 'function') {
+          await ch.send({
+            embeds: [{
+              color: 0xf59e0b,
+              title: 'Watcher neu gestartet (Stall-Detector)',
+              description: tooOld ? 'No fetch success > 10min' : 'Consecutive errors >= 10',
+              timestamp: new Date().toISOString(),
+            }]
+          });
+        }
+      } catch {}
     }
   }, 60 * 1000);
+  timer.unref?.();
 }
 
 // Commands heartbeat (leader only)

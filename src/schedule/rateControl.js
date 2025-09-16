@@ -113,7 +113,9 @@ class ProxyCtl {
     try {
       const LAG_P95 = getLagP95();
       const THRESH = Number(process.env.EVENT_LOOP_LAG_MAX_MS || 150);
-      const err60 = this.errorRateSec(60);
+      const err429Rate = this.errorRateSec(60);
+      const err403Rate = this.error403RateSec(60);
+      const err60 = Math.min(1, err429Rate + err403Rate);
       const lowLag = LAG_P95 < Number(process.env.EVENT_LOOP_LAG_LOW_MS || 80);
       const lowErr = err60 < Number(process.env.ERROR_RATE_LOW || 0.02);
       const ceil = Number(process.env.PROXY_RPM_MAX_CEIL || Math.max(6, this.conf.MAX));
@@ -125,7 +127,10 @@ class ProxyCtl {
         this.maxDynamic = Math.min(ceil, this.maxDynamic + Number(process.env.MAX_RAMP_STEP || 0.2));
       }
       metrics.global_latency_p95_ms.set(this.latencyP95Sec(60));
-      metrics.http_429_rate_60s.set(this.errorRateSec(60));
+      const err429 = this.errorRateSec(60);
+      const err403 = this.error403RateSec(60);
+      metrics.http_429_rate_60s.set(Math.round(err429 * 100));
+      metrics.fetch_403_rate_60s?.set(Math.round(err403 * 100));
     } catch {}
 
     // global effective rpm estimation
@@ -144,7 +149,21 @@ class ProxyCtl {
       for (const sm of s.samples) {
         if (sm.t >= cutoff) {
           total++;
-          if (sm.code === 429 || sm.code === 403) err++;
+          if (sm.code === 429) err++;
+        }
+      }
+    }
+    return total ? err / total : 0;
+  }
+
+  error403RateSec(windowSec = 60) {
+    const cutoff = nowSec() - Math.max(1, windowSec);
+    let total = 0, err = 0;
+    for (const s of this.state.values()) {
+      for (const sm of s.samples) {
+        if (sm.t >= cutoff) {
+          total++;
+          if (sm.code === 403) err++;
         }
       }
     }
