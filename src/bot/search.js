@@ -55,6 +55,7 @@ const DISABLE_RECENT = String(process.env.DISABLE_RECENT_FILTER || '0') === '1';
 const RELAX_RECENT_FILTER = String(process.env.RELAX_RECENT_FILTER || '1') === '1';
 const RELAX_RECENT_AFTER_MS = Math.max(0, Number(process.env.RELAX_RECENT_AFTER_MS || 5 * 60 * 1000));
 const RELAX_DEDUPE_ON_IDLE = String(process.env.RELAX_DEDUPE_ON_IDLE || '1') === '1';
+const RELAX_INGEST_ON_IDLE = String(process.env.RELAX_INGEST_ON_IDLE || '1') === '1';
 const IGNORE_PROCESSED_BOOT = String(process.env.BOOTSTRAP_IGNORE_PROCESSED || '1') === '1';
 const firstAgeByRule = new Map(); // rule -> number[]
 function recordFirstAge(rule, ms) {
@@ -300,7 +301,13 @@ const selectNewArticles = (items, processedStore, channel) => {
         }
       }
       // Hard ingest age cap (created_at_ts preferred, else photo.timestamp)
-      const tooOldIngest = INGEST_MAX_AGE_MS > 0 && createdMs > 0 && (now - createdMs) > INGEST_MAX_AGE_MS;
+      let tooOldIngest = INGEST_MAX_AGE_MS > 0 && createdMs > 0 && (now - createdMs) > INGEST_MAX_AGE_MS;
+      if (tooOldIngest && relaxEligible && RELAX_INGEST_ON_IDLE) {
+        tooOldIngest = false;
+        if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+          try { console.log('[ingest.relaxed]', 'rule=', channel.channelName, 'item=', id, 'age_ms=', createdMs ? (now - createdMs) : null); } catch {}
+        }
+      }
       if (tooOldIngest) {
         try { processedStore?.set?.(key, Date.now(), { ttl: ttlMs }); } catch {}
         try { metrics.ingest_dropped_too_old_total?.inc({ rule: String(channel.channelName || '') }); } catch {}
