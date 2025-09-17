@@ -231,7 +231,8 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
 // chooses only articles not already seen & posted in the last 10min
 const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
-  const cutoff = Date.now() - computeRecentMs();
+  const recentWindowMs = computeRecentMs();
+  const cutoff = Date.now() - recentWindowMs;
   let familyKey = null; try { familyKey = buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch {}
   // Respect DISABLE_RECENT_FILTER for ingest default cap as well (bugfix)
   const defaultCap = (DISABLE_RECENT || String(process.env.DISABLE_RECENT || '0') === '1')
@@ -252,7 +253,7 @@ const selectNewArticles = (items, processedStore, channel) => {
       const lastPostAt = state.lastPostAt instanceof Date ? state.lastPostAt.getTime() : 0;
       const idleMs = lastPostAt > 0 ? Math.max(0, now - lastPostAt) : Number.POSITIVE_INFINITY;
       const relaxEligible = RELAX_RECENT_FILTER && idleMs >= RELAX_RECENT_AFTER_MS;
-      const relaxWindowMs = Math.max(cutoff, (RELAX_RECENT_MAX_MIN || 0) * 60_000) || cutoff;
+      const relaxWindowMs = Math.max(recentWindowMs, (RELAX_RECENT_MAX_MIN || 0) * 60_000);
       if (!recentOk && relaxEligible) {
         if (!createdMs || (now - createdMs) <= relaxWindowMs) {
           recentOk = true;

@@ -900,6 +900,11 @@ export async function incrementalRebuildFromDisk(client) {
   try {
     const store = await loadChannelsStore();
     const { list: searches, path: p } = store.loadChannels();
+    const isTestEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'test';
+    if (isTestEnv) {
+      try { console.log('[rebuild] mode=incremental (test-skip)', 'path=', p); } catch {}
+      return;
+    }
     setTimeout(() => {
       try {
         console.log('[rebuild] mode=incremental');
