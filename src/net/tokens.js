@@ -2,7 +2,7 @@ const BASE = (process.env.VINTED_BASE_URL || process.env.LOGIN_URL || 'https://w
 
 export async function ensureProxySession(client) {
   if (client?.csrf) return;
-  const res = await client.http.get(BASE + '/', { timeout: 8000, validateStatus: () => true });
+  const res = await client.http.get(BASE + '/', { timeout: 8000, validateStatus: () => true, httpAgent: client?.agent, httpsAgent: client?.agent });
   let csrf = null;
   try {
     if (typeof res.data === 'string') {
@@ -28,6 +28,8 @@ export function withCsrf(cfg = {}, client) {
   if (client?.csrf) out.headers['X-CSRF-Token'] = client.csrf;
   out.headers['Referer'] = out.headers['Referer'] || (BASE + '/');
   out.headers['X-Requested-With'] = out.headers['X-Requested-With'] || 'XMLHttpRequest';
+  if (client?.agent && !out.httpAgent) out.httpAgent = client.agent;
+  if (client?.agent && !out.httpsAgent) out.httpsAgent = client.agent;
   return out;
 }
 

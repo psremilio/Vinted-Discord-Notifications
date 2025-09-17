@@ -226,10 +226,8 @@ async function twoPhaseCheck(proxy, base) {
         'X-Requested-With': 'XMLHttpRequest',
       },
     }));
-    http.defaults.httpAgent = agent;
-    http.defaults.httpsAgent = agent;
     try { http.defaults.jar = jar; } catch {}
-    return { http, jar, csrf: null };
+    return { http, jar, csrf: null, agent };
   }
   const client = await createHealthClient(proxy);
   await ensureProxySession(client);
