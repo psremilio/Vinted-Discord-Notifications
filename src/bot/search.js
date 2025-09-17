@@ -317,7 +317,8 @@ const selectNewArticles = (items, processedStore, channel) => {
 
   // Load-adaptive fresh-first capping
   try {
-    const MAX_ITEM_AGE_MS = Math.max(0, Number(process.env.MAX_ITEM_AGE_MS || 60_000));
+    const defaultMaxItemAge = Math.max(0, RECENT_MAX_MIN) * 60_000 || 60_000;
+    const MAX_ITEM_AGE_MS = Math.max(0, Number(process.env.MAX_ITEM_AGE_MS || defaultMaxItemAge));
     const CAP_BASE = Math.max(1, Number(process.env.CAP_BASE || 999));
     const CAP_WHEN_Q_HIGH = Math.max(1, Number(process.env.CAP_WHEN_Q_HIGH || 15));
     const Q_HIGH_THRESHOLD = Math.max(0, Number(process.env.Q_HIGH_THRESHOLD || 800));

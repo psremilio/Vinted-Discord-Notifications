@@ -2,7 +2,7 @@ import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { buildListingEmbed } from '../embeds.js';
 import { sanitizeEmbed } from '../discord/ensureValidEmbed.js';
 import { stats } from '../utils/stats.js';
-import { markPosted } from '../state.js';
+import { state, markPosted } from '../state.js';
 import { sendQueued } from '../infra/postQueue.js';
 import { metrics } from '../infra/metrics.js';
 import { setIfAbsent as postedSetIfAbsent } from '../infra/postedStore.js';
@@ -62,11 +62,14 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
   for (const item of list) {
     try {
       const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || 0));
-      if (POST_MAX_AGE_MS > 0) {
+      const isBootstrap = !state.lastPostAt;
+      const BOOTSTRAP_POST_MAX_AGE_MS = Math.max(0, Number(process.env.BOOTSTRAP_POST_MAX_AGE_MS || process.env.BOOTSTRAP_MAX_AGE_MS || 86_400_000));
+      const limitMs = isBootstrap ? BOOTSTRAP_POST_MAX_AGE_MS : POST_MAX_AGE_MS;
+      if (limitMs > 0) {
         const createdMs0 = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
-        if (createdMs0 && (Date.now() - createdMs0) > POST_MAX_AGE_MS) {
+        if (createdMs0 && (Date.now() - createdMs0) > limitMs) {
           if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
-            try { console.log('[post.skip_old.pre]', 'item=', item.id, 'age_ms=', (Date.now() - createdMs0)); } catch {}
+            try { console.log('[post.skip_old.pre]', 'item=', item.id, 'age_ms=', (Date.now() - createdMs0), 'limit_ms=', limitMs, 'bootstrap=', isBootstrap); } catch {}
           }
           continue;
         }
@@ -121,6 +124,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       createdAt: listing.createdAt || Date.now(),
       firstMatchedAt: Number(item.__firstMatchedAt || 0) || undefined,
       itemId: String(item.id),
+      isBootstrap: !state.lastPostAt,
     };
     try {
       if (meta.firstMatchedAt) {

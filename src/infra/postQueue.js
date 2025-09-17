@@ -33,6 +33,7 @@ const FAST_POST = String(process.env.FAST_POST || '1') === '1';
 const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 1000));
 // Default: do NOT drop older items unless explicitly enabled via env
 const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || process.env.DROP_OLD_AFTER_MS || 0));
+const BOOTSTRAP_POST_MAX_AGE_MS = Math.max(0, Number(process.env.BOOTSTRAP_POST_MAX_AGE_MS || process.env.BOOTSTRAP_MAX_AGE_MS || 0));
 const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
 
 // Micro-batching controls
@@ -182,14 +183,15 @@ export async function sendQueued(channel, payload, meta = {}) {
   const createdAt = Number(meta?.createdAt || Date.now());
   const firstMatchedAt = meta?.firstMatchedAt ? Number(meta.firstMatchedAt) : undefined;
   // Drop if too old on enqueue to avoid late spam
-  if (POST_MAX_AGE_MS > 0 && createdAt && (Date.now() - createdAt) > POST_MAX_AGE_MS) {
+  const postLimit = (meta?.isBootstrap && BOOTSTRAP_POST_MAX_AGE_MS > 0) ? BOOTSTRAP_POST_MAX_AGE_MS : POST_MAX_AGE_MS;
+  if (postLimit > 0 && createdAt && (Date.now() - createdAt) > postLimit) {
     if (LOG_DROP_OLD) {
       try {
         const age = Date.now() - createdAt;
-        console.warn('[post.drop_old]', 'channel=', channel?.id || 'unknown', 'age_ms=', age);
+        console.warn('[post.drop_old]', 'channel=', channel?.id || 'unknown', 'age_ms=', age, 'limit_ms=', postLimit, 'bootstrap=', !!meta?.isBootstrap);
       } catch {}
     }
-    diag('enqueue', { cid: channel?.id || null, item: meta?.itemId || null, mode: 'drop', reason: 'too_old', post_max_age_ms: POST_MAX_AGE_MS });
+    diag('enqueue', { cid: channel?.id || null, item: meta?.itemId || null, mode: 'drop', reason: 'too_old', post_max_age_ms: postLimit, bootstrap: !!meta?.isBootstrap });
     return { ok: false, reason: 'too_old' };
   }
   const itemId = meta?.itemId ? String(meta.itemId) : null;
