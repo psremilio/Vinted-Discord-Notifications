@@ -1,0 +1,11 @@
+[
+  {
+    "channelId": "1",
+    "channelName": "alpha",
+    "url": "https://www.vinted.de/catalog?search_text=a",
+    "titleBlacklist": [
+      "blue",
+      "red"
+    ]
+  }
+]

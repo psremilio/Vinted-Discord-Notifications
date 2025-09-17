@@ -1,0 +1,8 @@
+[phases.setup]
+apt_pkgs = ["ca-certificates"]
+
+[phases.install]
+cmds = ["npm i --omit=optional"]
+
+[start]
+cmd = "npm start"

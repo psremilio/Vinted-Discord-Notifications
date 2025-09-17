@@ -1,16 +1,22 @@
-import { SlashCommandBuilder, EmbedBuilder } from '@discordjs/builders';
+import { SlashCommandBuilder, EmbedBuilder, ChannelType, PermissionsBitField } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { addSearch } from '../run.js';
+import { buildParentKey, canonicalizeUrl } from '../rules/urlNormalizer.js';
+import { ensureWebhooksForChannel } from '../infra/webhooksManager.js';
+import { metrics } from '../infra/metrics.js';
+import { enqueueMutation, pendingMutations } from '../infra/mutationQueue.js';
+import { channelsPath } from '../infra/paths.js';
+import { writeJsonAtomic, appendWal } from '../infra/atomicJson.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const filePath = path.resolve(__dirname, '../../config/channels.json');
+const filePath = channelsPath();
 
 export const data = new SlashCommandBuilder()
     .setName('new_search')
-    .setDescription('Start receiving notifications for this Vinted channel.')
+    .setDescription('Start receiving notifications for this Vinted channel. Duplicate names are ignored.')
     .addStringOption(option =>
         option.setName('name')
             .setDescription('The name of your new search.')
@@ -26,87 +32,187 @@ export const data = new SlashCommandBuilder()
     .addStringOption(option =>
         option.setName('frequency')
             .setDescription('The frequency of the search in seconds. (defaults to 10s)')
+            .setRequired(false))
+    .addBooleanOption(option =>
+        option.setName('auto_webhooks')
+            .setDescription('Create and use webhooks for this channel for faster posting (requires Manage Webhooks)')
             .setRequired(false));
 
-//validate that the URL is a Vinted catalog URL with at least one query parameter
+// validate that the URL is a Vinted catalog URL with at least one query parameter
 const validateUrl = (url) => {
     try {
-        let route = new URL(url).pathname.split('/').pop();
-
-        if (route !== "catalog") {
-            return "invalid-url-with-example";
-        }
-
-        const urlObj = new URL(url);
-        const searchParams = urlObj.searchParams;
-        // check if the URL has at least one query parameter
-        if (searchParams.toString().length === 0) {
-            return "must-have-query-params"
-        }
-
+        const u = new URL(url);
+        // Accept any vinted.* host and require at least one query parameter
+        const isVinted = /(^|\.)vinted\./i.test(u.host);
+        const hasParams = u.search && u.searchParams.toString().length > 0;
+        if (!isVinted) return 'invalid-url';
+        if (!hasParams) return 'must-have-query-params';
         return true;
     } catch (error) {
-        return "invalid-url";
+        return 'invalid-url';
     }
 }
 
 export const execute = async (interaction) => {
-    await interaction.deferReply({ ephemeral: true });
+    const t0 = Date.now();
+    // Ensure we have an ack to enable editReply/followUp safely
+    try {
+      if (!interaction?.deferred && !interaction?.replied) {
+        try { await interaction.deferReply({ ephemeral: true }); }
+        catch { try { await interaction.reply({ content: '⏳ …', ephemeral: true }); } catch {} }
+      }
+    } catch (e) {
+      try { console.warn('[cmd.warn] /new_search failed to defer:', e?.message || e); } catch {}
+    }
+    try { console.log('[cmd.latency] /new_search ack_ms=%d', 0); } catch {}
 
-    const url = interaction.options.getString('url');
-    const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim()) : [];
-    const frequency = interaction.options.getString('frequency') || 10;
-    const name = interaction.options.getString('name');
-    const channel_id = interaction.channel.id;
+    async function safeEdit(contentOrOptions) {
+        try {
+            if (interaction.deferred || interaction.replied) return await interaction.editReply(contentOrOptions);
+            return await interaction.reply(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true });
+          } catch (e) {
+            try { return await interaction.followUp(typeof contentOrOptions === 'string' ? { content: contentOrOptions, ephemeral: true } : { ...contentOrOptions, ephemeral: true }); } catch {}
+          }
+    }
+
+    if (!interaction) {
+      try { console.error('[cmd.error] /new_search interaction=undefined'); } catch {}
+      return;
+    }
+    const urlRaw = interaction.options?.getString?.('url');
+    const banned_keywords = interaction.options.getString('banned_keywords') ? interaction.options.getString('banned_keywords').split(',').map(keyword => keyword.trim().toLowerCase()) : [];
+    // Normalize and clamp frequency to avoid too aggressive polling
+    const freqRaw = interaction.options.getString('frequency');
+    let frequency = Number.parseInt(freqRaw ?? '10', 10);
+    if (!Number.isFinite(frequency)) frequency = 10;
+    frequency = Math.min(Math.max(frequency, 5), 3600); // 5s–1h
+    const name = interaction.options?.getString?.('name');
+    const ch = interaction.channel;
+    const channel_id = ch?.id;
+
+    // Validate channel type and send permission to avoid Unknown Channel at post time
+    try {
+        const allowedTypes = new Set([
+            ChannelType.GuildText,
+            ChannelType.PublicThread,
+            ChannelType.PrivateThread,
+            ChannelType.AnnouncementThread,
+        ]);
+        const isAllowedType = allowedTypes.has(ch?.type);
+        const canSend = !!ch?.permissionsFor?.(interaction.client.user)?.has?.(PermissionsBitField.Flags.SendMessages);
+        if (!channel_id || !isAllowedType || !canSend) {
+            try { console.warn('[cmd.warn] /new_search invalid_channel', { id: channel_id || null, type: ch?.type, canSend }); } catch {}
+            await safeEdit('Dieser Kanal ist für Benachrichtigungen ungeeignet. Bitte führe den Befehl in einem Textkanal aus, in dem der Bot schreiben darf.');
+            return;
+        }
+    } catch {}
 
     // validate the URL
-    const validation = validateUrl(url);
+    const validation = validateUrl(urlRaw);
     if (validation !== true) {
-        await interaction.followUp({ content: validation});
+        await safeEdit(String(validation));
         return;
     }
 
     try {
-        //register the search into the json file
-        const searches = JSON.parse(fs.readFileSync(filePath));
+        const canonicalUrl = canonicalizeUrl(urlRaw);
+        const canonicalKey = buildParentKey(canonicalUrl);
 
-        if (searches.some(search => search.channelName === name)) {
-            await interaction.followUp({ content: 'A search with the name ' + name + ' already exists.'});
-            return;
+        // Enqueue mutation to serialize writes and rebuilds
+        const queued = pendingMutations();
+        if (queued > 0) {
+          try { await safeEdit(`⏳ Eingereiht… (${queued} vor dir)`); } catch {}
         }
 
-        const search = {
-            "channelId": channel_id,
-            "channelName": name,
-            "url": url,
-            "frequency": frequency,
-            "titleBlacklist": banned_keywords
-        };
-        searches.push(search);
+        enqueueMutation('new_search', async () => {
+          try { console.log('[cmd.enqueued.mutation]', 'name=', name, 'op=new_search'); } catch {}
+          let op = 'created';
+          const searches = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+          const findByKey = (list, key) => {
+              if (!Array.isArray(list)) return -1;
+              for (let i = 0; i < list.length; i++) {
+                  const s = list[i] || {};
+                  const k = s.canonicalKey || buildParentKey(String(s.url || ''));
+                  if (k === key) return i;
+              }
+              return -1;
+          };
+          const idxByKey = findByKey(searches, canonicalKey);
+          const idxByName = searches.findIndex(s => String(s.channelName) === String(name));
 
-        try{
-            fs.writeFileSync(filePath, JSON.stringify(searches, null, 2));
-        } catch (error) {
-            console.error('\nError saving new search:', error);
-            await interaction.followUp({ content: 'There was an error starting the monitoring.'});
-        }
+          const next = {
+              channelId: channel_id,
+              channelName: name,
+              url: canonicalUrl,
+              frequency: Number(frequency),
+              titleBlacklist: banned_keywords,
+              canonicalKey,
+          };
 
-        // schedule immediately
+          if (idxByKey !== -1) {
+              const prev = searches[idxByKey] || {};
+              if (idxByName !== -1 && idxByName !== idxByKey) {
+                  next.channelName = prev.channelName;
+              }
+              searches[idxByKey] = { ...prev, ...next };
+              op = 'updated';
+          } else if (idxByName !== -1) {
+              const prev = searches[idxByName] || {};
+              searches[idxByName] = { ...prev, ...next };
+              op = 'updated';
+          } else {
+              searches.push(next);
+              op = 'created';
+          }
+
+          try {
+            writeJsonAtomic(filePath, searches);
+            appendWal('new_search', { name: next.channelName, url: next.url, channelId: next.channelId });
+          } catch (error) { console.error('[cmd] error saving new search:', error?.message || error); }
+
+          // Apply in-memory update to scheduler
+          try { await addSearch(interaction.client, next); } catch (e) { console.warn('[cmd] addSearch immediate failed, will rely on rebuild:', e?.message || e); }
+
+          // Auto webhooks
+          const WANT_AUTO = (interaction.options.getBoolean('auto_webhooks') ?? (String(process.env.AUTO_WEBHOOKS_ON_COMMAND || '1') === '1'));
+          if (WANT_AUTO) {
+            try { await ensureWebhooksForChannel(ch, Number(process.env.WEBHOOKS_PER_CHANNEL || 3), String(process.env.WEBHOOK_NAME_PREFIX || 'snipe-webhook')); } catch (e) { console.warn('[webhooks] auto failed:', e?.message || e); }
+          }
+
+          // Non-blocking diff rebuild to refresh families
+          try {
+            const mod = await import('../run.js');
+            if (typeof mod.incrementalRebuildFromDisk === 'function') mod.incrementalRebuildFromDisk(interaction.client);
+            else if (typeof mod.rebuildFromDisk === 'function') mod.rebuildFromDisk(interaction.client);
+          } catch (err) {
+            console.error('[cmd] rebuild after create failed:', err?.message || err);
+          }
+
+          // Respond when done
+        const exec = Date.now() - t0;
         try {
-            addSearch(interaction.client, search);
-        } catch (err) {
-            console.error('Live scheduling failed:', err);
-        }
-
+          const nameKey = '/new_search';
+          const k = nameKey;
+          const arr = (global.__cmd_exec_samples = global.__cmd_exec_samples || new Map());
+          let list = arr.get(k); if (!list) { list = []; arr.set(k, list); }
+          list.push(exec); if (list.length > 300) list.shift();
+          const a = list.slice().sort((x,y)=>x-y); const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
+          metrics.cmd_exec_ms_p95?.set({ command: nameKey }, p95);
+        } catch {}
         const embed = new EmbedBuilder()
-            .setTitle("Search saved!")
-            .setDescription("Monitoring for " + name + " is now live!")
+            .setTitle(op === 'created' ? 'Search created' : 'Search updated')
+            .setDescription(`Monitoring for ${next.channelName} is now ${op === 'created' ? 'live' : 'updated'}!`)
             .setColor(0x00FF00);
-
-        await interaction.followUp({ embeds: [embed]});
-
+        embed.addFields({ name: 'Key', value: `parent=${canonicalKey}`, inline: false });
+        await safeEdit({ embeds: [embed]});
+        try { console.log('[cmd.result] /new_search op=%s name=%s key=%s', op, next.channelName, canonicalKey); } catch {}
+        try { console.log('[cmd.latency] /new_search exec_ms=%d', exec); } catch {}
+        }, async (e) => {
+          console.error('Error starting monitoring:', e);
+          await safeEdit('There was an error starting the monitoring.');
+        });
     } catch (error) {
         console.error('Error starting monitoring:', error);
-        await interaction.followUp({ content: 'There was an error starting the monitoring.'});
+        await safeEdit('There was an error starting the monitoring.');
     }
 }
