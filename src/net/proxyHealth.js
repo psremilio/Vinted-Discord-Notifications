@@ -220,14 +220,14 @@ async function twoPhaseCheck(proxy, base) {
     const http = wrapper(axios.create({
       withCredentials: true,
       proxy: false,
-      httpAgent: agent,
-      httpsAgent: agent,
       headers: {
         'User-Agent': userAgent,
         Accept: 'application/json, text/plain, */*',
         'X-Requested-With': 'XMLHttpRequest',
       },
     }));
+    http.defaults.httpAgent = agent;
+    http.defaults.httpsAgent = agent;
     try { http.defaults.jar = jar; } catch {}
     return { http, jar, csrf: null };
   }
