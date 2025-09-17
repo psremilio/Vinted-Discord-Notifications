@@ -1,8 +1,10 @@
 import axios from 'axios';
 import { EventEmitter } from 'events';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { CookieJar } from 'tough-cookie';
 import { loadProxies } from './proxies.js';
 import { ensureProxySession, withCsrf } from './tokens.js';
+import { attachCookieJar } from './axiosCookies.js';
 
 // Configuration with sensible defaults and backwards compatibility
 const CAPACITY = Number(process.env.PROXY_CAPACITY || process.env.PROXY_HEALTHY_CAP || 800);
@@ -213,20 +215,21 @@ async function twoPhaseCheck(proxy, base) {
     let s = String(pxy || '').trim();
     if (s && !/^https?:\/\//i.test(s)) s = `http://${s}`;
     const agent = new HttpsProxyAgent(s);
-    // lazy import to avoid ESM issues if not installed; tokens.js requires axios-cookiejar-support usage within http.js
-    const { CookieJar } = await import('tough-cookie');
-    const { wrapper } = await import('axios-cookiejar-support');
     const jar = new CookieJar();
-    const http = wrapper(axios.create({
+    const http = axios.create({
       withCredentials: true,
       proxy: false,
+      httpAgent: agent,
+      httpsAgent: agent,
+      timeout: t,
+      maxRedirects: 5,
       headers: {
         'User-Agent': userAgent,
         Accept: 'application/json, text/plain, */*',
         'X-Requested-With': 'XMLHttpRequest',
       },
-    }));
-    try { http.defaults.jar = jar; } catch {}
+    });
+    attachCookieJar(http, jar);
     return { http, jar, csrf: null, agent };
   }
   const client = await createHealthClient(proxy);
@@ -343,7 +346,7 @@ export async function initProxyPool() {
       const slice = batch.slice(i, i + CHECK_CONCURRENCY);
       await Promise.allSettled(slice.map(p => testOne(p, base, stats)));
       if (FAST_ENABLED && healthyMap.size >= Math.min(FAST_MIN, CAPACITY)) {
-        console.log(`[proxy] fast-start with ${healthyMap.size} healthy â†’ continue filling in background`);
+        console.log(`[proxy] fast-start with ${healthyMap.size} healthy -> continue filling in background`);
         setTimeout(() => { refillIfBelowCap().catch(() => {}); }, 0);
         console.log(`[proxy] Healthy proxies: ${healthyMap.size}/${CAPACITY}`);
         try { healthEvents.emit('count', healthyMap.size); } catch {}
@@ -396,7 +399,7 @@ async function refillIfBelowCap() {
   }
   const delta = healthyMap.size - start;
   if (delta > 0) {
-    console.log(`[proxy] Top-up added ${delta} â†’ now ${healthyMap.size}/${CAPACITY}`);
+    console.log(`[proxy] Top-up added ${delta} -> now ${healthyMap.size}/${CAPACITY}`);
     try { healthEvents.emit('count', healthyMap.size); } catch {}
   }
 }
@@ -612,4 +615,5 @@ export function getProxyScores() {
   for (const [p, st] of healthyMap.entries()) out[p] = st?.score || 0;
   return out;
 }
+
 

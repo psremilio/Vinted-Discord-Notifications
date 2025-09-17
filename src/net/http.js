@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { CookieJar } from 'tough-cookie';
-import { wrapper as cookieJarWrapper } from 'axios-cookiejar-support';
+import { attachCookieJar } from './axiosCookies.js';
 import { ensureProxySession, withCsrf, retryOnceOn401_403 } from './tokens.js';
 import { updateFetchSuccessRate } from './fetchStats.js';
 import { getProxy, hasHealthy, releaseExploreToken, markBadInPool, quarantineProxy, recordProxySuccess, recordProxyOutcome, recordProxyTlsFailure } from './proxyHealth.js';
@@ -127,7 +127,7 @@ export function createClient(proxyStr) {
   const isDirect = !key || key.toUpperCase() === 'DIRECT' || parts.length < 2 || !Number.isFinite(port);
   if (isDirect) {
     const jar = new CookieJar();
-    const http = cookieJarWrapper(axios.create({
+    const http = axios.create({
       withCredentials: true,
       maxRedirects: 5,
       timeout: Number(process.env.FETCH_TIMEOUT_MS || 6000),
@@ -137,8 +137,8 @@ export function createClient(proxyStr) {
         Accept: 'application/json, text/plain, */*',
         'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-    }));
-    try { http.defaults.jar = jar; } catch {}
+    });
+    attachCookieJar(http, jar, { baseURL: BASE });
     const client = { http, warmedAt: Date.now(), proxyAgent: null, proxyLabel: 'DIRECT', jar, csrf: null };
     clientsByProxy.set('DIRECT', client);
     return client;
@@ -181,7 +181,7 @@ export function createClient(proxyStr) {
     baseHeaders['sec-ch-ua-mobile'] = '?0';
     baseHeaders['sec-ch-ua-platform'] = '"Windows"';
   }
-  const http = cookieJarWrapper(axios.create({
+  const http = axios.create({
     withCredentials: true,
     maxRedirects: 5,
     timeout: Number(process.env.FETCH_TIMEOUT_MS || 6000),
@@ -189,15 +189,15 @@ export function createClient(proxyStr) {
     httpAgent: proxyAgent,
     httpsAgent: proxyAgent, // Use our custom agent
     headers: baseHeaders,
-  }));
-  try { http.defaults.jar = jar; } catch {}
+  });
+  attachCookieJar(http, jar, { baseURL: BASE });
 
   const client = { http, warmedAt: 0, proxyAgent, proxyLabel: key, jar, csrf: null };
   clientsByProxy.set(key, client);
   return client;
 }
 
-// Legacy bootstrap logic removed – ensureProxySession handles warmup per client now.
+// Legacy bootstrap logic removed - ensureProxySession handles warmup per client now.
 
 export async function getHttp(base) {
   // Per-request: attempt to grab a proxy from the pool
@@ -681,6 +681,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     return { softFail: true };
   }
 }
+
 
 
 
