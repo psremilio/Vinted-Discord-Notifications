@@ -9,8 +9,31 @@ import { setIfAbsent as postedSetIfAbsent } from '../infra/postedStore.js';
 // Redis Streams posting is optional; load only when enabled
 import { aggQueue } from '../queue/aggQueue.js';
 import { familyForRule, channelIdsForFamily } from '../core/families.js';
+import { normalizeTimestampMs } from '../utils/time.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === 'function';
+const LOG_ENQUEUE = String(process.env.LOG_ENQUEUE || '0') === '1';
+const DEBUG_LOG = String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug';
+
+function extractTargetId(target) {
+  try {
+    if (typeof target === 'string' || typeof target === 'number') {
+      return String(target).trim();
+    }
+    const id = target?.id || target?.channelId || target?.name || '';
+    return String(id ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function logEnqueue(ruleName, targets, count, mode) {
+  if (!(LOG_ENQUEUE || DEBUG_LOG) || !count) return;
+  try {
+    const ids = (targets || []).map(extractTargetId).filter(Boolean);
+    console.log('[enqueue]', 'rule=', String(ruleName || ''), 'count=', count, 'mode=', mode, 'targets=', ids.join(',') || '(none)');
+  } catch {}
+}
 
 // Simple TTL cache for recently built/sanitized embeds per itemId
 const EMBED_CACHE_TTL_MS = Math.max(10_000, Number(process.env.EMBED_CACHE_TTL_MS || 60_000));
@@ -66,7 +89,9 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       const BOOTSTRAP_POST_MAX_AGE_MS = Math.max(0, Number(process.env.BOOTSTRAP_POST_MAX_AGE_MS || process.env.BOOTSTRAP_MAX_AGE_MS || 86_400_000));
       const limitMs = isBootstrap ? BOOTSTRAP_POST_MAX_AGE_MS : POST_MAX_AGE_MS;
       if (limitMs > 0) {
-        const createdMs0 = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+      const createdMs0 = normalizeTimestampMs(item.created_at_ts)
+        || normalizeTimestampMs(item.createdAt)
+        || normalizeTimestampMs(item.photo?.high_resolution?.timestamp);
         if (createdMs0 && (Date.now() - createdMs0) > limitMs) {
           if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
             try { console.log('[post.skip_old.pre]', 'item=', item.id, 'age_ms=', (Date.now() - createdMs0), 'limit_ms=', limitMs, 'bootstrap=', isBootstrap); } catch {}
@@ -82,7 +107,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       new ButtonBuilder().setLabel('Message').setEmoji('✉️').setStyle(ButtonStyle.Link).setURL(`${origin}/items/${item.id}/want_it/new?`),
     );
 
-    const ts = (item.created_at_ts != null ? item.created_at_ts : item.photo?.high_resolution?.timestamp); // seconds
+    const ts = item.created_at_ts ?? item.createdAt ?? item.photo?.high_resolution?.timestamp;
     const listing = {
       id: item.id,
       title: (item.__priceDrop ? '[PRICE DROP] ' : '') + (item.title || ''),
@@ -93,7 +118,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       price: item.price?.amount,
       currency: item.price?.currency_code,
       price_eur: item.price?.converted_amount,
-      createdAt: ts ? ts * 1000 : undefined,
+      createdAt: normalizeTimestampMs(ts) || undefined,
       seller_name: item.user?.login,
       seller_avatar: item.user?.profile_picture?.url,
       image_url: item.photo?.url,
@@ -135,6 +160,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
     const VIA_STREAMS = String(process.env.POST_VIA_STREAMS || '0') === '1';
     const VIA_SPOOL = String(process.env.POST_VIA_LOCAL_SPOOL || '0') === '1';
     if (VIA_STREAMS) {
+      logEnqueue(ruleName, targets, targets.length, 'streams');
       // Publish one task per channel into Redis Streams; worker posts it
       const createdAtMs = listing.createdAt || Date.now();
       const compJson = (payload.components || []).map(c => (typeof c.toJSON === 'function' ? c.toJSON() : c));
@@ -166,6 +192,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       }
       const job = { id: String(item.id), createdAtMs: listing.createdAt || Date.now(), embed: embedJson, components: null, content: null };
       aggQueue.putItemToChannels(job, chIds);
+      logEnqueue(ruleName, chIds, chIds.length, 'spool');
       continue;
     } else {
       // Per-target idempotency in-process: allow cross-posting across channels
@@ -180,6 +207,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
           if (ok) planned.push(ch);
         } catch { planned.push(ch); }
       }
+      logEnqueue(ruleName, planned, planned.length, 'direct');
       const rlist = await sendToTargetsSafely(planned, payload, meta);
       const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
       if (anyOk) {

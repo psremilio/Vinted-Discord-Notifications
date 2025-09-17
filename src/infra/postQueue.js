@@ -32,7 +32,14 @@ const CONC_MAX = Math.max(CONC, Number(process.env.DISCORD_POST_CONCURRENCY_MAX 
 const FAST_POST = String(process.env.FAST_POST || '1') === '1';
 const REORDER_WINDOW_MS = FAST_POST ? 0 : Math.max(0, Number(process.env.REORDER_WINDOW_MS || 1000));
 // Default: do NOT drop older items unless explicitly enabled via env
-const POST_MAX_AGE_MS = Math.max(0, Number(process.env.POST_MAX_AGE_MS || process.env.DROP_OLD_AFTER_MS || 0));
+const POST_MAX_AGE_MS = (() => {
+  const raw = process.env.MAX_POST_AGE_MS ?? process.env.POST_MAX_AGE_MS ?? process.env.DROP_OLD_AFTER_MS;
+  if (raw !== undefined) {
+    const val = Number(raw);
+    if (Number.isFinite(val) && val >= 0) return val;
+  }
+  return 3 * 60 * 1000;
+})();
 const BOOTSTRAP_POST_MAX_AGE_MS = Math.max(0, Number(process.env.BOOTSTRAP_POST_MAX_AGE_MS || process.env.BOOTSTRAP_MAX_AGE_MS || 0));
 const LOG_DROP_OLD = String(process.env.LOG_DROP_OLD || '1') === '1';
 
