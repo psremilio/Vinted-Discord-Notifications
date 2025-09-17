@@ -52,12 +52,12 @@ export function buildParentGroups(rules) {
       const parentKey = buildParentKey(raw);
       // Strict family key: host+path+(brand_ids,catalog,currency), ignoring price/size/status/etc.
       const key = autoFamily ? buildFamilyKeyFromURL(raw, 'auto') : parentKey;
-      if (!groupsByKey.has(key)) groupsByKey.set(key, []);
       const filters = parseRuleFilters(r.url || r.channelUrl || r.ruleUrl || r.link);
-      // Apply family gating: only group non-price dimensions (size/status) here.
       const gate = shouldFanoutByFilters(filters);
-      if (!gate.ok || gate.mode === 'price') continue;
-      groupsByKey.get(key).push({ rule: r, filters });
+      const mode = familyMode(filters);
+      if (!gate.ok && mode !== 'none') continue;
+      if (!groupsByKey.has(key)) groupsByKey.set(key, []);
+      groupsByKey.get(key).push({ rule: r, filters, mode });
       ll('[fanout.key]', r.channelName, 'canonical_url=', parentKey, 'familyKey=', key);
     } catch {}
   }
@@ -74,12 +74,26 @@ export function buildParentGroups(rules) {
     }
     // normalize parent & children
     const parent = arr[parentIdx];
-    // Strict: children must only differ in the parent's family dimension (size/status)
-    const mode = familyMode(parent.filters);
+    // Strict: children must only differ in the parent's family dimension (size/status/price)
+    let mode = parent.mode;
+    if (mode === 'none') {
+      const fallback = arr.find((entry, idx) => idx !== parentIdx && entry.mode !== 'none');
+      mode = fallback?.mode || 'none';
+    }
+    if (mode === 'none') continue;
     const pivotStrict = canonicalizeUrlExcept(parent.rule.url || '', ['price_from','price_to','size_ids[]','status_ids[]','size_ids','status_ids']);
     const children = arr.filter((_, i) => i !== parentIdx)
-      .filter(c => (mode === 'size' || mode === 'status') && onlyDiffersByDimension(c.filters, parent.filters, mode))
+      .filter(c => {
+        if (mode === 'size' || mode === 'status') {
+          return (c.mode === mode) && onlyDiffersByDimension(c.filters, parent.filters, mode);
+        }
+        if (mode === 'price') {
+          return (c.mode === 'price') && onlyDiffersInPrice(c.filters, parent.filters);
+        }
+        return false;
+      })
       .filter(c => canonicalizeUrlExcept(c.rule.url || '', ['price_from','price_to','size_ids[]','status_ids[]','size_ids','status_ids']) === pivotStrict);
+    if (!children.length) continue;
     families.push({ parent: parent.rule, parentFilters: parent.filters, children: children.map(c => ({ rule: c.rule, filters: c.filters })) });
     ll('[fanout.pick]', 'parent=', parent.rule.channelName, 'children=', (children.map(c=>c.rule.channelName).join(',')) || '');
   }
