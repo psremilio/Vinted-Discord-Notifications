@@ -115,19 +115,34 @@ export class EdfScheduler {
       if (Date.now() < EdfGate.pauseUntil) return;
     } catch {}
     const safeModeMin = Math.max(0, Number(process.env.SAFE_MODE_MIN_HEALTHY || process.env.MIN_HEALTHY || 10));
-    const inSafeMode = typeof shouldSafeMode === 'function' ? shouldSafeMode() : false;
-    if (inSafeMode) {
-      try { metrics.proxy_safe_mode?.set?.(1); } catch {}
+    let healthy = 0;
+    try { healthy = healthyCount(); } catch {}
+    if (!Number.isFinite(healthy) || healthy < 0) healthy = 0;
+    const safeModeActive = typeof shouldSafeMode === 'function' ? shouldSafeMode() : (safeModeMin > 0 && healthy < safeModeMin);
+    const softEnabled = String(process.env.SOFT_SAFE_MODE || '0') === '1';
+    const softRateRaw = Number(process.env.SOFT_SAFE_MODE_RATE || 0.25);
+    const softRate = Math.max(0.05, Math.min(1, Number.isFinite(softRateRaw) ? softRateRaw : 0.25));
+    let softScale = null;
+    if (safeModeActive && safeModeMin > 0 && healthy < safeModeMin) {
       const now = Date.now();
+      const hardStop = healthy <= 0 || !softEnabled;
+      try { metrics.proxy_safe_mode?.set?.(1); } catch {}
       if (!this._lastSafeModeLog || (now - this._lastSafeModeLog) >= SAFE_MODE_LOG_INTERVAL_MS) {
         this._lastSafeModeLog = now;
-        try { console.warn(`[sched.safe_mode] paused scheduling (healthy=${healthyCount()} < min=${safeModeMin})`); } catch {}
+        const label = hardStop ? 'paused scheduling' : `soft throttle (${Math.round(softRate * 100)}%)`;
+        try { console.warn(`[sched.safe_mode] ${label} (healthy=${healthy} < min=${safeModeMin})`); } catch {}
       }
-      return;
+      if (hardStop) {
+        return;
+      }
+      if (Math.random() > softRate) {
+        return;
+      }
+      softScale = softRate;
     } else {
+      this._lastSafeModeLog = 0;
       try { metrics.proxy_safe_mode?.set?.(0); } catch {}
     }
-
     // Determine dispatch budget with optional auto-scaling
     // Slightly higher default scheduler concurrency for faster discovery on hot rules
     const cfg = Math.max(1, Number(process.env.SEARCH_SCHED_CONCURRENCY || process.env.SEARCH_CONCURRENCY || 16));
@@ -140,14 +155,12 @@ export class EdfScheduler {
       const want = Math.max(cfg, Math.min(maxC, Math.ceil(readyCount / 2)));
       budget = Math.min(maxC, Math.max(cfg, want));
     }
-    const concurrencyCap = (() => {
-      try {
-        const n = healthyCount();
-        return Math.max(1, Number.isFinite(n) ? n : 0);
-      } catch {
-        return 1;
-      }
-    })();
+    let concurrencyCap = Math.max(1, healthy || 1);
+    if (softScale !== null) {
+      budget = Math.max(1, Math.floor(Math.max(1, budget * softScale)));
+      const scaledCap = Math.max(1, Math.floor(Math.max(1, concurrencyCap * Math.max(softScale, 0.1))));
+      concurrencyCap = scaledCap;
+    }
     let dispatched = 0;
     while (dispatched < budget && (this.inflight + dispatched) < concurrencyCap) {
       const st = this._pickReady();

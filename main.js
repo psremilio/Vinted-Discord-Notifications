@@ -5,7 +5,7 @@ process.on('uncaughtException',(err)=>{
 
 import dotenv from 'dotenv';
 import http from 'http';
-import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
+import { Client, GatewayIntentBits, REST, Routes, Events, ChannelType } from 'discord.js';
 import fs from 'fs';
 import { channelsPath } from './src/infra/paths.js';
 // channelsStore is optional; fall back to legacy loader if module missing
@@ -335,9 +335,10 @@ async function onClientReady() {
     console.warn('[localPoster.init] failed:', e?.message || e);
   }
 }
-client.on('ready', onClientReady);
-// Prepare for discord.js v15 rename (clientReady)
-try { client.on('clientReady', onClientReady); } catch {}
+const readyEvent = Events?.ClientReady ?? 'ready';
+client.once(readyEvent, onClientReady);
+const fallbackReadyEvent = readyEvent === 'clientReady' ? 'ready' : 'clientReady';
+try { client.once(fallbackReadyEvent, onClientReady); } catch {}
 // Always handle interactions when commands are enabled
 client.on('interactionCreate',interaction=>{
   if (!COMMANDS_ENABLED) return;
@@ -496,8 +497,4 @@ function shutdown(signal){
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
-
-
-
-
 

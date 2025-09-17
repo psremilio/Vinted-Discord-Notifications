@@ -7,7 +7,12 @@ import { ensureProxySession, withCsrf } from './tokens.js';
 // Configuration with sensible defaults and backwards compatibility
 const CAPACITY = Number(process.env.PROXY_CAPACITY || process.env.PROXY_HEALTHY_CAP || 800);
 const CHECK_CONCURRENCY = Number(process.env.PROXY_CHECK_CONCURRENCY || process.env.PROXY_TEST_CONCURRENCY || 8);
-const CHECK_TIMEOUT_SEC = Number(process.env.PROXY_CHECK_TIMEOUT_SEC || process.env.CHECK_TIMEOUT_SEC || 8);
+const CHECK_TIMEOUT_BASE_SEC = Number(process.env.PROXY_CHECK_TIMEOUT_SEC || process.env.CHECK_TIMEOUT_SEC || 8);
+const PROXY_TEST_TIMEOUT_MS = Math.max(0, Number(process.env.PROXY_TEST_TIMEOUT_MS || 0));
+const CHECK_TIMEOUT_MS = PROXY_TEST_TIMEOUT_MS > 0 ? Math.max(1000, PROXY_TEST_TIMEOUT_MS) : Math.max(1000, (Number.isFinite(CHECK_TIMEOUT_BASE_SEC) ? CHECK_TIMEOUT_BASE_SEC : 8) * 1000);
+const PROXY_TEST_RETRIES = Math.max(0, Number(process.env.PROXY_TEST_RETRIES || 0));
+const PROXY_TEST_BACKOFF_MS = Math.max(100, Number(process.env.PROXY_TEST_BACKOFF_MS || 1000));
+const PROXY_TEST_BACKOFF_MAX_MS = Math.max(PROXY_TEST_BACKOFF_MS, Number(process.env.PROXY_TEST_BACKOFF_MAX_MS || 10000));
 const COOLDOWN_MIN = Number(process.env.PROXY_COOLDOWN_MIN || process.env.COOLDOWN_MIN || 30);
 const FAIL_MAX = Number(process.env.PROXY_FAIL_MAX || 3);
 const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 40);
@@ -24,6 +29,17 @@ function boolEnv(name, def = false) {
   if ([ '1','true','yes','y','on' ].includes(s)) return true;
   if ([ '0','false','no','n','off' ].includes(s)) return false;
   return !!def;
+}
+
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+  "Mozilla/5.0 (X11; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0",
+];
+function pickUserAgent() {
+  if (!USER_AGENTS.length) return "Mozilla/5.0";
+  const idx = Math.floor(Math.random() * USER_AGENTS.length);
+  return USER_AGENTS[idx] || USER_AGENTS[0];
 }
 
 class MinuteBucket {
@@ -175,7 +191,8 @@ async function twoPhaseCheck(proxy, base) {
   let url = String(proxy || '').trim();
   if (url && !/^[a-z]+:\/\//i.test(url)) url = `http://${url}`;
   const agent = new HttpsProxyAgent(url);
-  const t = CHECK_TIMEOUT_SEC * 1000;
+  const userAgent = pickUserAgent();
+  const t = CHECK_TIMEOUT_MS;
   const probeUrl = process.env.PROXY_PROBE_URL || 'https://api.ipify.org?format=json';
   const a = await axios.get(probeUrl, {
     proxy: false,
@@ -184,7 +201,7 @@ async function twoPhaseCheck(proxy, base) {
     timeout: t,
     validateStatus: () => true,
     headers: {
-      'User-Agent': 'Mozilla/5.0',
+      'User-Agent': userAgent,
       'Accept': 'application/json, text/plain, */*',
     }
   });
@@ -206,7 +223,7 @@ async function twoPhaseCheck(proxy, base) {
       httpAgent: agent,
       httpsAgent: agent,
       headers: {
-        'User-Agent': 'Mozilla/5.0',
+        'User-Agent': userAgent,
         Accept: 'application/json, text/plain, */*',
         'X-Requested-With': 'XMLHttpRequest',
       },
@@ -223,12 +240,29 @@ async function twoPhaseCheck(proxy, base) {
   return { ok: cls === 'ok', reason: `${cls}:${code}`, status: code, headers: b?.headers || {} };
 }
 
+async function probeWithRetry(proxy, base) {
+  let lastErr;
+  const attempts = Math.max(0, PROXY_TEST_RETRIES);
+  for (let attempt = 0; attempt <= attempts; attempt++) {
+    try {
+      return await twoPhaseCheck(proxy, base);
+    } catch (err) {
+      lastErr = err;
+      if (attempt === attempts) break;
+      const backoff = Math.min(PROXY_TEST_BACKOFF_MAX_MS, PROXY_TEST_BACKOFF_MS * Math.pow(2, attempt));
+      const jitter = Math.floor(Math.random() * 250);
+      await new Promise(resolve => setTimeout(resolve, backoff + jitter));
+    }
+  }
+  throw lastErr || new Error('proxy_test_failed');
+}
+
 async function testOne(proxy, base, stats) {
   stats.tested++;
   const coolUntil = cooldown.get(proxy) || 0;
   if (coolUntil > Date.now()) return; // still cooling down
   try {
-    const res = await twoPhaseCheck(proxy, base);
+    const res = await probeWithRetry(proxy, base);
     if (res.ok) {
       addHealthy(proxy, { status: res.status });
       stats.successful++;
@@ -273,8 +307,11 @@ async function testOne(proxy, base, stats) {
         stats.failed++;
       }
     }
-  } catch {
+  } catch (err) {
     stats.failed++;
+    if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+      console.warn(`[proxy.test] error ${proxy}: ${err?.message || err}`);
+    }
   }
 }
 
@@ -577,3 +614,4 @@ export function getProxyScores() {
   for (const [p, st] of healthyMap.entries()) out[p] = st?.score || 0;
   return out;
 }
+
