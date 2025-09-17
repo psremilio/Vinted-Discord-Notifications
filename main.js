@@ -46,7 +46,6 @@ import { ensureWebhooksForChannel } from './src/infra/webhooksManager.js';
 import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
 import { startLocalPoster } from './src/poster/localPoster.js';
 import { buildChannelsStore } from './src/bootstrap/channels.js';
-import { ChannelType } from 'discord.js';
 import { ensureBucket as ensureSearchBucket } from './src/utils/limiter.js';
 
 dotenv.config();
@@ -497,4 +496,5 @@ function shutdown(signal){
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+
 
