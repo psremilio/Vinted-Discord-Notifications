@@ -110,6 +110,10 @@ function updateSlidingRates(proxy) {
 const healthyMap = new Map();
 export const healthEvents = new EventEmitter();
 export function healthyCount() { return healthyMap.size; }
+export function shouldSafeMode() {
+  const min = Math.max(0, Number(process.env.SAFE_MODE_MIN_HEALTHY || process.env.MIN_HEALTHY || 10));
+  try { return healthyMap.size < min; } catch { return true; }
+}
 const cooldown = new Map();   // proxy -> timestamp when usable again
 const failCounts = new Map(); // proxy -> fails since last ok
 

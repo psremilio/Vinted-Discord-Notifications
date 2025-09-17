@@ -3,6 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { CookieJar } from 'tough-cookie';
 import { wrapper as cookieJarWrapper } from 'axios-cookiejar-support';
 import { ensureProxySession, withCsrf, retryOnceOn401_403 } from './tokens.js';
+import { updateFetchSuccessRate } from './fetchStats.js';
 import { getProxy, hasHealthy, releaseExploreToken, markBadInPool, quarantineProxy, recordProxySuccess, recordProxyOutcome, recordProxyTlsFailure } from './proxyHealth.js';
 import { stickyMap } from '../schedule/stickyMap.js';
 import { getBuckets, dropBuckets } from '../schedule/proxyBuckets.js';
@@ -51,6 +52,9 @@ function recordOutcome({ ok = false, softfail = false, status = null } = {}) {
     const rate403 = Math.min(1, Math.max(0, err403s.length / total));
     metrics.http_429_rate_60s?.set(Math.round(rate429 * 100));
     metrics.fetch_403_rate_60s?.set(Math.round(rate403 * 100));
+    const success = Math.min(1, Math.max(0, 1 - (softFails.length / total)));
+    updateFetchSuccessRate(success);
+    metrics.fetch_success_rate_60s?.set?.(Math.round(success * 100));
   } catch {}
 }
 function getSoftfailRate60s() {
@@ -593,7 +597,7 @@ export async function fetchRule(ruleId, url, opts = {}) {
     }
     if (is429) scheduleProxy429Cooldown(proxy, res?.headers);
     if (isAuthBlock && proxy && proxy !== 'DIRECT') {
-      const blockMs = Math.max(60_000, Number(process.env.PROXY_403_COOLDOWN_MS || 600_000));
+      const blockMs = Math.max(60_000, Number(process.env.PROXY_403_COOLDOWN_MS || 120_000));
       quarantineProxy(proxy, blockMs);
       metrics.proxy_block_403_total?.inc();
       if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.warn(`[fetch] proxy cooldown ${proxy} code=${code} ms=${blockMs}`);

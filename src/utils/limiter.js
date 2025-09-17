@@ -1,5 +1,6 @@
 import Bottleneck from 'bottleneck';
 import { metrics } from '../infra/metrics.js';
+import { getFetchSuccessRate } from '../net/fetchStats.js';
 
 function unquote(v) {
   if (v == null) return v;
@@ -57,25 +58,50 @@ const MAX_RPM = Math.max(MIN_RPM, getNum('SEARCH_MAX_RPM', 800));
 const INC_FACTOR = MODE === 'aggressive' ? Math.max(1.01, Number(getNum('SEARCH_INC_FACTOR', 1.2))) : Math.max(1.01, Number(getNum('SEARCH_INC_FACTOR', 1.05)));
 const DEC_FACTOR = MODE === 'aggressive' ? Math.min(0.99, Number(getNum('SEARCH_DEC_FACTOR', 0.85))) : Math.min(0.99, Number(getNum('SEARCH_DEC_FACTOR', 0.7)));
 const RATE_THR = MODE === 'aggressive' ? Math.max(0, Math.min(1, Number(getNum('SEARCH_429_RATE_THR', 0.08)))) : Math.max(0, Math.min(1, Number(getNum('SEARCH_429_RATE_THR', 0.01))));
+const RATE403_THR = Math.max(0, Math.min(1, Number(getNum('SEARCH_403_RATE_THR', MODE === 'aggressive' ? 0.12 : 0.04))));
+const SUCCESS_FLOOR = Math.max(0, Math.min(1, Number(getNum('SEARCH_SUCCESS_FLOOR', 0.05))));
 let currentRpm = TARGET_RPM;
 
 if (!DISABLE_RES && ADAPTIVE) {
-  try { console.log(`[limiter.adapt] on rpm=${currentRpm} min=${MIN_RPM} max=${MAX_RPM} inc=${INC_FACTOR} dec=${DEC_FACTOR} thr=${RATE_THR}`); } catch {}
+  try {
+    console.log(`[limiter.adapt] on rpm=${currentRpm} min=${MIN_RPM} max=${MAX_RPM} inc=${INC_FACTOR} dec=${DEC_FACTOR} thr429=${RATE_THR} thr403=${RATE403_THR} succFloor=${SUCCESS_FLOOR}`);
+  } catch {}
   setInterval(() => {
     try {
-      // Use Vinted-specific 429 rate only for search adaptation
-      const ratePct = Number(metrics.vinted_http_429_rate_60s?.get?.() ?? 0);
-      const rate = isFinite(ratePct) ? Math.max(0, Math.min(1, ratePct / 100)) : 0;
+      // Evaluate recent success/error windows for adaptive RPM
+      const successRaw = Number(getFetchSuccessRate());
+      const success = Number.isFinite(successRaw) ? Math.max(0, Math.min(1, successRaw)) : 0;
+      const vinted429Pct = Number(metrics.vinted_http_429_rate_60s?.get?.() ?? 0);
+      const http429Pct = Number(metrics.http_429_rate_60s?.get?.() ?? vinted429Pct);
+      const rate429 = Number.isFinite(http429Pct) ? Math.max(0, Math.min(1, http429Pct / 100)) : 0;
+      const rate403Pct = Number(metrics.fetch_403_rate_60s?.get?.() ?? 0);
+      const rate403 = Number.isFinite(rate403Pct) ? Math.max(0, Math.min(1, rate403Pct / 100)) : 0;
       let next = currentRpm;
-      if (rate > RATE_THR) {
-        next = Math.max(MIN_RPM, Math.floor(currentRpm * DEC_FACTOR));
-      } else {
-        next = Math.min(MAX_RPM, Math.ceil(currentRpm * INC_FACTOR));
+      let action = 'hold';
+      if (success <= SUCCESS_FLOOR || rate429 > RATE_THR || rate403 > RATE403_THR) {
+        const candidate = Math.max(MIN_RPM, Math.floor(currentRpm * DEC_FACTOR));
+        if (candidate < currentRpm) {
+          next = candidate;
+          action = 'dec';
+        }
+      } else if (rate429 < RATE_THR && rate403 < RATE403_THR) {
+        const candidate = Math.min(MAX_RPM, Math.ceil(currentRpm * INC_FACTOR));
+        if (candidate > currentRpm) {
+          next = candidate;
+          action = 'inc';
+        }
       }
       if (next !== currentRpm) {
         currentRpm = next;
         limiter.updateSettings({ reservoir: currentRpm, reservoirRefreshAmount: currentRpm });
-        try { console.log(`[limiter.adapt] http429_rate60=${Math.round(rate*100)}% -> rpm=${currentRpm}`); } catch {}
+      }
+      if (action !== 'hold') {
+        const succPct = Math.round(success * 100);
+        const rate429Pct = Math.round(rate429 * 100);
+        const rate403Pct = Math.round(rate403 * 100);
+        try {
+          console.log(`[limiter.adapt] succ=${succPct}% 429=${rate429Pct}% 403=${rate403Pct}% -> rpm=${currentRpm} (${action})`);
+        } catch {}
       }
     } catch {}
   }, 60 * 1000).unref?.();
@@ -200,3 +226,5 @@ export function giveBackBucket(host, tokens = 1) {
   if (!bucket) return;
   bucket.giveBack(tokens);
 }
+
+

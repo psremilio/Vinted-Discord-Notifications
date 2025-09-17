@@ -2,12 +2,14 @@
 import { tierOf, TIER_TARGET_SEC } from './tiers.js';
 import { getRuleSkipRatio } from './stickyMap.js';
 import { metrics } from '../infra/metrics.js';
-import { healthyCount } from '../net/proxyHealth.js';
+import { healthyCount, shouldSafeMode } from '../net/proxyHealth.js';
 
 function jitter(ms, spread = 0.2) {
   const k = 1 - spread + Math.random() * (2 * spread);
   return Math.max(1000, Math.floor(ms * k));
 }
+
+const SAFE_MODE_LOG_INTERVAL_MS = Math.max(1, Number(process.env.SAFE_MODE_LOG_INTERVAL_MS || 30_000));
 
 export class EdfScheduler {
   constructor(runFn) {
@@ -16,6 +18,7 @@ export class EdfScheduler {
     this.timer = null;
     this.client = null;
     this.inflight = 0;
+    this._lastSafeModeLog = 0;
   }
 
   addRule(client, rule) {
@@ -111,6 +114,20 @@ export class EdfScheduler {
     try {
       if (Date.now() < EdfGate.pauseUntil) return;
     } catch {}
+    const safeModeMin = Math.max(0, Number(process.env.SAFE_MODE_MIN_HEALTHY || process.env.MIN_HEALTHY || 10));
+    const inSafeMode = typeof shouldSafeMode === 'function' ? shouldSafeMode() : false;
+    if (inSafeMode) {
+      try { metrics.proxy_safe_mode?.set?.(1); } catch {}
+      const now = Date.now();
+      if (!this._lastSafeModeLog || (now - this._lastSafeModeLog) >= SAFE_MODE_LOG_INTERVAL_MS) {
+        this._lastSafeModeLog = now;
+        try { console.warn(`[sched.safe_mode] paused scheduling (healthy=${healthyCount()} < min=${safeModeMin})`); } catch {}
+      }
+      return;
+    } else {
+      try { metrics.proxy_safe_mode?.set?.(0); } catch {}
+    }
+
     // Determine dispatch budget with optional auto-scaling
     // Slightly higher default scheduler concurrency for faster discovery on hot rules
     const cfg = Math.max(1, Number(process.env.SEARCH_SCHED_CONCURRENCY || process.env.SEARCH_CONCURRENCY || 16));

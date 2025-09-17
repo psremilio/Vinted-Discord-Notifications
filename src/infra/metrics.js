@@ -57,6 +57,8 @@ export const metrics = {
   // aggregated, low-cardinality gauges
   http_429_rate_60s: new Gauge('http_429_rate_60s'),
   fetch_403_rate_60s: new Gauge('fetch_403_rate_60s'),
+  fetch_success_rate_60s: new Gauge('fetch_success_rate_60s'),
+  proxy_safe_mode: new Gauge('proxy_safe_mode'),
   global_latency_p95_ms: new Gauge('global_latency_p95_ms'),
   backfill_pages_active: new Gauge('backfill_pages_active'),
   rules_reassigned_total: new Counter('rules_reassigned_total'),
@@ -147,6 +149,8 @@ export function serializeMetrics() {
   lineHelpType('discord_http_429_rate_60s', 'Discord 429 rate over 60s window (percent)', 'gauge'); out.push(`discord_http_429_rate_60s ${metrics.discord_http_429_rate_60s.get()}`);
   lineHelpType('http_429_rate_60s', 'Global 429 rate over 60s window (percent)', 'gauge'); out.push(`http_429_rate_60s ${metrics.http_429_rate_60s.get()}`);
   lineHelpType('fetch_403_rate_60s', 'Global 403 rate over 60s window (percent)', 'gauge'); out.push(`fetch_403_rate_60s ${metrics.fetch_403_rate_60s.get()}`);
+  lineHelpType('fetch_success_rate_60s', 'Global fetch success rate over 60s window (percent)', 'gauge'); out.push(`fetch_success_rate_60s ${metrics.fetch_success_rate_60s.get()}`);
+  lineHelpType('proxy_safe_mode', 'Proxy safe mode flag (0/1)', 'gauge'); out.push(`proxy_safe_mode ${metrics.proxy_safe_mode.get()}`);
   lineHelpType('global_latency_p95_ms', 'Global p95 latency over window (ms)', 'gauge'); out.push(`global_latency_p95_ms ${metrics.global_latency_p95_ms.get()}`);
   lineHelpType('discord_queue_depth', 'Discord posting queue depth', 'gauge'); out.push(`discord_queue_depth ${metrics.discord_queue_depth.get()}`);
   lineHelpType('discord_dropped_total', 'Discord posts dropped due to full queue', 'counter'); out.push(`discord_dropped_total ${metrics.discord_dropped_total.get()}`);
