@@ -37,6 +37,7 @@ export POLL_NO_JITTER=1
 export DEDUPE_SCOPE=per_rule   # or 'global'
 # TTL for processed items (seconds). 7200 = 2h keeps rediscovery snappy without spam
 export DEDUPE_TTL_SEC=7200
+# Dedupe keys also include the Discord channel ID so a rule can post to multiple channels without starving fanout
 # Strict recency window in milliseconds (default 3 minutes)
 export RECENT_STRICT_MS=180000
 # Optional relaxed window when idle (ms). Must be >= strict window
@@ -59,6 +60,8 @@ export STARTUP_BACKFILL_PAGES=0
 export MAX_POST_AGE_MS=180000
 # Enable verbose poll logs (scraped counts, matches, sample reasons)
 export DEBUG_POLL=0            # set to 1 for verbose
+# Emit one log line per enqueue to validate queue behaviour without enabling full debug logging
+export LOG_ENQUEUE=0
 
 # Proxy-Pool Tuning
 # Hard cap for concurrently healthy proxies

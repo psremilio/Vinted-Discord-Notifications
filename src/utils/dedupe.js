@@ -24,6 +24,14 @@ export const ttlMs = (DEDUPE_TTL_SEC > 0 ? DEDUPE_TTL_SEC * 1000 : PROCESSED_TTL
 
 const slug = (s) => String(s || '').toLowerCase().trim().replace(/\s+/g, '-');
 
+function channelIdentifier(channel) {
+  try {
+    const id = channel?.channelId || channel?.id || channel?.channel_id;
+    if (id != null && String(id).trim() !== '') return String(id).trim();
+  } catch {}
+  return '';
+}
+
 export function dedupeKey(ruleName, itemId) {
   const id = String(itemId ?? '');
   return (DEDUPE_SCOPE === 'global')
@@ -35,16 +43,21 @@ export function dedupeKey(ruleName, itemId) {
 export function dedupeKeyForChannel(channel, itemId, familyKeyOptional) {
   try {
     const id = String(itemId ?? '');
+    const chanId = channelIdentifier(channel);
+    const chanSuffix = chanId ? `:chan:${chanId}` : '';
     if (DEDUPE_SCOPE === 'global') return `seen:item:${id}`;
-    if (DEDUPE_SCOPE === 'channel') return `seen:chan:${String(channel?.channelId || channel?.id || '')}:item:${id}`;
+    if (DEDUPE_SCOPE === 'channel') {
+      const c = chanId || slug(channel?.channelName || channel?.name || '');
+      return `seen:chan:${c}:item:${id}`;
+    }
     if (DEDUPE_SCOPE === 'family') {
       const fk = String(familyKeyOptional || '');
-      if (fk) return `seen:family:${slug(fk)}:item:${id}`;
+      if (fk) return `seen:family:${slug(fk)}${chanSuffix}:item:${id}`;
       // Fallback to per_rule when no family key provided
-      return `seen:rule:${slug(channel?.channelName || '')}:item:${id}`;
+      return `seen:rule:${slug(channel?.channelName || channel?.name || '')}${chanSuffix}:item:${id}`;
     }
     // per_rule
-    return `seen:rule:${slug(channel?.channelName || '')}:item:${id}`;
+    return `seen:rule:${slug(channel?.channelName || channel?.name || '')}${chanSuffix}:item:${id}`;
   } catch {
     return dedupeKey(channel?.channelName || '', itemId);
   }

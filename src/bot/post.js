@@ -12,6 +12,28 @@ import { familyForRule, channelIdsForFamily } from '../core/families.js';
 import { normalizeTimestampMs } from '../utils/time.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === 'function';
+const LOG_ENQUEUE = String(process.env.LOG_ENQUEUE || '0') === '1';
+const DEBUG_LOG = String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug';
+
+function extractTargetId(target) {
+  try {
+    if (typeof target === 'string' || typeof target === 'number') {
+      return String(target).trim();
+    }
+    const id = target?.id || target?.channelId || target?.name || '';
+    return String(id ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function logEnqueue(ruleName, targets, count, mode) {
+  if (!(LOG_ENQUEUE || DEBUG_LOG) || !count) return;
+  try {
+    const ids = (targets || []).map(extractTargetId).filter(Boolean);
+    console.log('[enqueue]', 'rule=', String(ruleName || ''), 'count=', count, 'mode=', mode, 'targets=', ids.join(',') || '(none)');
+  } catch {}
+}
 
 // Simple TTL cache for recently built/sanitized embeds per itemId
 const EMBED_CACHE_TTL_MS = Math.max(10_000, Number(process.env.EMBED_CACHE_TTL_MS || 60_000));
@@ -138,6 +160,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
     const VIA_STREAMS = String(process.env.POST_VIA_STREAMS || '0') === '1';
     const VIA_SPOOL = String(process.env.POST_VIA_LOCAL_SPOOL || '0') === '1';
     if (VIA_STREAMS) {
+      logEnqueue(ruleName, targets, targets.length, 'streams');
       // Publish one task per channel into Redis Streams; worker posts it
       const createdAtMs = listing.createdAt || Date.now();
       const compJson = (payload.components || []).map(c => (typeof c.toJSON === 'function' ? c.toJSON() : c));
@@ -169,6 +192,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       }
       const job = { id: String(item.id), createdAtMs: listing.createdAt || Date.now(), embed: embedJson, components: null, content: null };
       aggQueue.putItemToChannels(job, chIds);
+      logEnqueue(ruleName, chIds, chIds.length, 'spool');
       continue;
     } else {
       // Per-target idempotency in-process: allow cross-posting across channels
@@ -183,6 +207,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
           if (ok) planned.push(ch);
         } catch { planned.push(ch); }
       }
+      logEnqueue(ruleName, planned, planned.length, 'direct');
       const rlist = await sendToTargetsSafely(planned, payload, meta);
       const anyOk = Array.isArray(rlist) ? rlist.some(r => r && r.ok) : false;
       if (anyOk) {
