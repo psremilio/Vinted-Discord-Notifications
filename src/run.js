@@ -13,6 +13,7 @@ import { buildParentGroups, buildExplicitFamily, buildAutoPriceFamilies, canonic
 import { loadFamiliesFromConfig } from "./rules/families.js";
 import { itemMatchesFilters, parseRuleFilters, buildFamilyKey, buildParentKey, debugMatchFailReason, canonicalizeUrl, buildFamilyKeyFromURL, canonicalizeUrlExcept } from "./rules/urlNormalizer.js";
 import { recordFirstMatch } from "./bot/matchStore.js";
+import { normalizeTimestampMs } from "./utils/time.js";
 import { hadSoftFailRecently } from "./state.js";
 import { learnFromRules } from "./rules/catalogLearn.js";
 
@@ -200,9 +201,14 @@ export const runSearch = async (client, channel, opts = {}) => {
         const qDepth = (metrics.discord_queue_depth?.get?.() ?? 0);
         const HIGHQ = Math.max(200, Number(process.env.QUEUE_HIGH_WATER || 500));
         const lowBacklog = qDepth < HIGHQ;
-        const bfDefault = Math.max(1, Number(process.env.BACKFILL_PAGES || 1));
+        const startupBackfill = Math.max(0, Number(process.env.STARTUP_BACKFILL_PAGES || 0));
+        const configuredBackfill = (() => {
+          if (process.env.BACKFILL_PAGES === undefined) return startupBackfill;
+          const val = Number(process.env.BACKFILL_PAGES);
+          return Number.isFinite(val) ? Math.max(0, val) : startupBackfill;
+        })();
         // When backlog is low and backfill condition is on, use configured BACKFILL_PAGES; otherwise stick to 1 page
-        const bfPages = useBackfill && lowBacklog ? bfDefault : 1;
+        const bfPages = useBackfill && lowBacklog ? Math.max(1, configuredBackfill) : 1;
         try { metrics.backfill_pages_active.set(countActiveBackfill()); } catch {}
         const tPoll0 = Date.now();
         const articles = await limiter.schedule(() => vintedSearch(channel, processedStore, { ...opts, backfillPages: bfPages }));
@@ -466,7 +472,9 @@ export const runSearch = async (client, channel, opts = {}) => {
                   try { it.__firstMatchedAt = first; } catch {}
                   try { metrics.parent_child_drift_ms_histogram?.set({ family: String(channel.channelName) }, Math.max(0, Number(first||now) - Number(it.discoveredAt || now))); } catch {}
                   const age = now - Number(first || now);
-                  const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || Number(it.createdAt || 0) || 0;
+                const createdMs = normalizeTimestampMs(it.created_at_ts)
+                  || normalizeTimestampMs(it.createdAt)
+                  || normalizeTimestampMs(it.photo?.high_resolution?.timestamp);
                   const listedAge = createdMs ? (now - createdMs) : 0;
                   if (ENFORCE_MAX && listedAge > 0 && hardMax > 0 && listedAge > hardMax) {
                     dropStale++; continue; // hard drop stale
@@ -582,7 +590,9 @@ export const runSearch = async (client, channel, opts = {}) => {
                 const ENFORCE_MAX = String(process.env.ENFORCE_MAX_AGE || '0') === '1';
                 const fresh = [];
                 for (const it of articles) {
-                  const createdMs = Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || Number(it.createdAt || 0) || 0;
+                  const createdMs = normalizeTimestampMs(it.created_at_ts)
+                    || normalizeTimestampMs(it.createdAt)
+                    || normalizeTimestampMs(it.photo?.high_resolution?.timestamp);
                   const listedAge = createdMs ? (now - createdMs) : 0;
                   if (ENFORCE_MAX && hardMax > 0 && listedAge > hardMax) continue;
                   fresh.push(it);

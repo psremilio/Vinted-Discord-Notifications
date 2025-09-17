@@ -37,16 +37,26 @@ export POLL_NO_JITTER=1
 export DEDUPE_SCOPE=per_rule   # or 'global'
 # TTL for processed items (seconds). 7200 = 2h keeps rediscovery snappy without spam
 export DEDUPE_TTL_SEC=7200
-# Define how recent an item must be to be considered (minutes)
-export RECENT_MAX_MIN=10
+# Strict recency window in milliseconds (default 3 minutes)
+export RECENT_STRICT_MS=180000
+# Optional relaxed window when idle (ms). Must be >= strict window
+export RECENT_RELAXED_MS=600000
+# Force strict behaviour globally (set to "relaxed" to allow fallback)
+export FORCE_RECENT_MODE=strict
+# Legacy minute knobs remain supported when overriding behaviour
+export RECENT_MAX_MIN=3
 # How long after startup we keep relaxed recency before first post (minutes)
 export RECENT_BOOTSTRAP_MIN=10
 # Relax recency after the bot has been idle for this many ms
 export RELAX_RECENT_AFTER_MS=600000
-# Maximum relaxed window (minutes) when idle
+# Maximum relaxed window (minutes) when idle (legacy fallback)
 export RELAX_RECENT_MAX_MIN=60
 # Keep startup skip disabled so fresh finds are not dropped
 export STARTUP_SKIP_OLD_MINUTES=0
+# Disable additional page pulls during startup backfill
+export STARTUP_BACKFILL_PAGES=0
+# Hard gate to drop stale items right before posting (ms)
+export MAX_POST_AGE_MS=180000
 # Enable verbose poll logs (scraped counts, matches, sample reasons)
 export DEBUG_POLL=0            # set to 1 for verbose
 
