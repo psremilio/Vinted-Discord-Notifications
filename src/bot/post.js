@@ -9,6 +9,7 @@ import { setIfAbsent as postedSetIfAbsent } from '../infra/postedStore.js';
 // Redis Streams posting is optional; load only when enabled
 import { aggQueue } from '../queue/aggQueue.js';
 import { familyForRule, channelIdsForFamily } from '../core/families.js';
+import { normalizeTimestampMs } from '../utils/time.js';
 
 const isTextChannelLike = ch => ch && typeof ch.send === 'function';
 
@@ -66,7 +67,9 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       const BOOTSTRAP_POST_MAX_AGE_MS = Math.max(0, Number(process.env.BOOTSTRAP_POST_MAX_AGE_MS || process.env.BOOTSTRAP_MAX_AGE_MS || 86_400_000));
       const limitMs = isBootstrap ? BOOTSTRAP_POST_MAX_AGE_MS : POST_MAX_AGE_MS;
       if (limitMs > 0) {
-        const createdMs0 = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+      const createdMs0 = normalizeTimestampMs(item.created_at_ts)
+        || normalizeTimestampMs(item.createdAt)
+        || normalizeTimestampMs(item.photo?.high_resolution?.timestamp);
         if (createdMs0 && (Date.now() - createdMs0) > limitMs) {
           if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
             try { console.log('[post.skip_old.pre]', 'item=', item.id, 'age_ms=', (Date.now() - createdMs0), 'limit_ms=', limitMs, 'bootstrap=', isBootstrap); } catch {}
@@ -82,7 +85,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       new ButtonBuilder().setLabel('Message').setEmoji('✉️').setStyle(ButtonStyle.Link).setURL(`${origin}/items/${item.id}/want_it/new?`),
     );
 
-    const ts = (item.created_at_ts != null ? item.created_at_ts : item.photo?.high_resolution?.timestamp); // seconds
+    const ts = item.created_at_ts ?? item.createdAt ?? item.photo?.high_resolution?.timestamp;
     const listing = {
       id: item.id,
       title: (item.__priceDrop ? '[PRICE DROP] ' : '') + (item.title || ''),
@@ -93,7 +96,7 @@ export async function postArticles(newArticles, channelToSend, ruleName) {
       price: item.price?.amount,
       currency: item.price?.currency_code,
       price_eur: item.price?.converted_amount,
-      createdAt: ts ? ts * 1000 : undefined,
+      createdAt: normalizeTimestampMs(ts) || undefined,
       seller_name: item.user?.login,
       seller_avatar: item.user?.profile_picture?.url,
       image_url: item.photo?.url,

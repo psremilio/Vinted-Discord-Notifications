@@ -23,7 +23,7 @@ export PROXY_WHITELIST_URL="https://provider.example/whitelist?token=XYZ&ip={{IP
 # optional: refresh proxy list every N minutes
 export LIST_REFRESH_MIN=30
 # set to 1 to allow direct requests when all proxies fail
-export ALLOW_DIRECT=0
+export ALLOW_DIRECT=1
 
 # Testing / Polling
 # Override all per-channel frequencies (seconds). Useful to experiment quickly.
@@ -35,10 +35,28 @@ export POLL_NO_JITTER=1
 # Filtering / Dedupe
 # Scope of dedupe keys: per rule (default) or global
 export DEDUPE_SCOPE=per_rule   # or 'global'
-# How long a processed item stays in-memory (minutes)
-export PROCESSED_TTL_MIN=60
-# Define how recent an item must be to be considered (minutes)
-export RECENT_MAX_MIN=15
+# TTL for processed items (seconds). 7200 = 2h keeps rediscovery snappy without spam
+export DEDUPE_TTL_SEC=7200
+# Strict recency window in milliseconds (default 3 minutes)
+export RECENT_STRICT_MS=180000
+# Optional relaxed window when idle (ms). Must be >= strict window
+export RECENT_RELAXED_MS=600000
+# Force strict behaviour globally (set to "relaxed" to allow fallback)
+export FORCE_RECENT_MODE=strict
+# Legacy minute knobs remain supported when overriding behaviour
+export RECENT_MAX_MIN=3
+# How long after startup we keep relaxed recency before first post (minutes)
+export RECENT_BOOTSTRAP_MIN=10
+# Relax recency after the bot has been idle for this many ms
+export RELAX_RECENT_AFTER_MS=600000
+# Maximum relaxed window (minutes) when idle (legacy fallback)
+export RELAX_RECENT_MAX_MIN=60
+# Keep startup skip disabled so fresh finds are not dropped
+export STARTUP_SKIP_OLD_MINUTES=0
+# Disable additional page pulls during startup backfill
+export STARTUP_BACKFILL_PAGES=0
+# Hard gate to drop stale items right before posting (ms)
+export MAX_POST_AGE_MS=180000
 # Enable verbose poll logs (scraped counts, matches, sample reasons)
 export DEBUG_POLL=0            # set to 1 for verbose
 

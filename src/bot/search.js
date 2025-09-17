@@ -3,6 +3,7 @@ import { buildHeaders } from "../net/headers.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKeyForChannel, ttlMs } from "../utils/dedupe.js";
 import { buildFamilyKeyFromURL, canonicalizeUrl } from "../rules/urlNormalizer.js";
+import { normalizeTimestampMs, ensureRecentMode } from "../utils/time.js";
 import { stats } from "../utils/stats.js";
 import { state, markFetchAttempt, markFetchSuccess, markFetchError, recordSoftFail } from "../state.js";
 import { metrics } from "../infra/metrics.js";
@@ -11,14 +12,36 @@ const DEBUG_POLL = process.env.DEBUG_POLL === '1';
 const TRACE = String(process.env.TRACE_SEARCH || '0') === '1';
 const d = (...args) => { if (DEBUG_POLL || String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') console.log(...args); };
 const trace = (...a) => { if (TRACE) console.log('[trace]', ...a); };
-const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '15', 10);
-function computeRecentMs() {
-  // Base recency window
-  let ms = Math.max(0, RECENT_MAX_MIN) * 60 * 1000;
+const RECENT_MAX_MIN = parseInt(process.env.RECENT_MAX_MIN ?? '3', 10);
+const RECENT_STRICT_MS = (() => {
+  if (process.env.RECENT_STRICT_MS !== undefined) {
+    const val = Number(process.env.RECENT_STRICT_MS);
+    if (Number.isFinite(val) && val >= 0) return val;
+  }
+  if (Number.isFinite(RECENT_MAX_MIN)) {
+    return Math.max(0, RECENT_MAX_MIN) * 60 * 1000;
+  }
+  return 3 * 60 * 1000;
+})();
+const RELAX_RECENT_MAX_MIN = Math.max(0, Number(process.env.RELAX_RECENT_MAX_MIN || 60));
+const RECENT_RELAXED_MS = (() => {
+  if (process.env.RECENT_RELAXED_MS !== undefined) {
+    const val = Number(process.env.RECENT_RELAXED_MS);
+    if (Number.isFinite(val) && val >= 0) return Math.max(val, RECENT_STRICT_MS);
+  }
+  const relaxedMin = RELAX_RECENT_MAX_MIN > 0 ? RELAX_RECENT_MAX_MIN * 60 * 1000 : 10 * 60 * 1000;
+  return Math.max(relaxedMin, RECENT_STRICT_MS);
+})();
+const FORCED_RECENT_MODE = ensureRecentMode(process.env.FORCE_RECENT_MODE);
+const DEFAULT_RECENT_MODE = FORCED_RECENT_MODE || 'strict';
+function computeRecentMs(mode) {
+  const desired = ensureRecentMode(mode);
+  const activeMode = FORCED_RECENT_MODE || desired || DEFAULT_RECENT_MODE;
+  let ms = activeMode === 'relaxed' ? RECENT_RELAXED_MS : RECENT_STRICT_MS;
   // Optional bootstrap: relax recency on cold start until first successful post
   try {
     const bootMin = Math.max(0, parseInt(process.env.RECENT_BOOTSTRAP_MIN ?? '60', 10));
-    if (!state.lastPostAt && bootMin > 0) {
+    if (!state.lastPostAt && bootMin > 0 && !FORCED_RECENT_MODE) {
       const bootMs = bootMin * 60 * 1000;
       if (bootMs > ms) ms = bootMs;
     }
@@ -31,7 +54,6 @@ function computeRecentMs() {
 const DISABLE_RECENT = String(process.env.DISABLE_RECENT_FILTER || '0') === '1';
 const RELAX_RECENT_FILTER = String(process.env.RELAX_RECENT_FILTER || '1') === '1';
 const RELAX_RECENT_AFTER_MS = Math.max(0, Number(process.env.RELAX_RECENT_AFTER_MS || 5 * 60 * 1000));
-const RELAX_RECENT_MAX_MIN = Math.max(0, Number(process.env.RELAX_RECENT_MAX_MIN || 240));
 const RELAX_DEDUPE_ON_IDLE = String(process.env.RELAX_DEDUPE_ON_IDLE || '1') === '1';
 const IGNORE_PROCESSED_BOOT = String(process.env.BOOTSTRAP_IGNORE_PROCESSED || '1') === '1';
 const firstAgeByRule = new Map(); // rule -> number[]
@@ -45,6 +67,13 @@ function recordFirstAge(rule, ms) {
     const p95 = a[Math.min(a.length - 1, Math.floor(a.length * 0.95))];
     metrics.first_age_ms_p95?.set({ rule: String(rule) }, p95);
   } catch {}
+}
+
+function createdAtMsOf(item) {
+  if (!item) return 0;
+  return normalizeTimestampMs(item.created_at_ts)
+    || normalizeTimestampMs(item.createdAt)
+    || normalizeTimestampMs(item.photo?.high_resolution?.timestamp);
 }
 
 // Retry with exponential backoff
@@ -148,7 +177,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 const old = [];
                 const fresh = [];
                 for (const it of filtered) {
-                  const ts = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                  const ts = createdAtMsOf(it);
                   if (ts && ts < cutoff) old.push(it); else fresh.push(it);
                 }
                 // mark old as processed to avoid later posting, but do not return them
@@ -171,7 +200,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 if (String(process.env.DIAG_TIMING || '0') === '1' && filtered.length) {
                   const sample = filtered.slice(0, Math.min(3, filtered.length));
                   for (const it of sample) {
-                    const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                    const createdMs = createdAtMsOf(it);
                     const age = createdMs ? (tdisc - createdMs) : -1;
                     console.log('[diag.discovery]', 'rule=', channel.channelName, 'item=', it.id, 'age_ms=', age);
                   }
@@ -180,7 +209,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
               // record first-age (listed->discovered) samples
               try {
                 for (const it of filtered) {
-                  const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+                  const createdMs = createdAtMsOf(it);
                   if (createdMs) recordFirstAge(channel.channelName, Math.max(0, tdisc - createdMs));
                 }
               } catch {}
@@ -231,7 +260,9 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
 // chooses only articles not already seen & posted in the last 10min
 const selectNewArticles = (items, processedStore, channel) => {
   const titleBlacklist = Array.isArray(channel.titleBlacklist) ? channel.titleBlacklist : [];
-  const cutoff = Date.now() - computeRecentMs();
+  const channelRecentMode = ensureRecentMode(channel?.recentMode);
+  const recentWindowMs = computeRecentMs(channelRecentMode);
+  const cutoff = Date.now() - recentWindowMs;
   let familyKey = null; try { familyKey = buildFamilyKeyFromURL(String(channel.url || ''), 'auto'); } catch {}
   // Respect DISABLE_RECENT_FILTER for ingest default cap as well (bugfix)
   const defaultCap = (DISABLE_RECENT || String(process.env.DISABLE_RECENT || '0') === '1')
@@ -245,14 +276,15 @@ const selectNewArticles = (items, processedStore, channel) => {
       const title = it.title;
       const photo = it.photo;
       const hasPhoto = !!photo;
-      const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+      const createdMs = createdAtMsOf(it);
       let recentOk = DISABLE_RECENT || (createdMs > cutoff);
       const key = dedupeKeyForChannel(channel, id, familyKey);
       let dup = !!processedStore?.has?.(key);
       const lastPostAt = state.lastPostAt instanceof Date ? state.lastPostAt.getTime() : 0;
       const idleMs = lastPostAt > 0 ? Math.max(0, now - lastPostAt) : Number.POSITIVE_INFINITY;
-      const relaxEligible = RELAX_RECENT_FILTER && idleMs >= RELAX_RECENT_AFTER_MS;
-      const relaxWindowMs = Math.max(cutoff, (RELAX_RECENT_MAX_MIN || 0) * 60_000) || cutoff;
+      const relaxWindowMs = computeRecentMs('relaxed');
+      const allowRelax = !FORCED_RECENT_MODE || FORCED_RECENT_MODE === 'relaxed';
+      const relaxEligible = allowRelax && RELAX_RECENT_FILTER && idleMs >= RELAX_RECENT_AFTER_MS && relaxWindowMs > recentWindowMs;
       if (!recentOk && relaxEligible) {
         if (!createdMs || (now - createdMs) <= relaxWindowMs) {
           recentOk = true;
@@ -288,7 +320,7 @@ const selectNewArticles = (items, processedStore, channel) => {
     const sample = items.slice(0, 5);
     for (const item of sample) {
       const hasPhoto = !!item.photo;
-      const createdMs = Number(((item.created_at_ts || 0) * 1000)) || Number((item.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+      const createdMs = createdAtMsOf(item);
       const isRecent = createdMs > cutoff;
       const wasProcessed = !!processedStore?.has?.(dedupeKeyForChannel(channel, item.id, familyKey));
       const isBlacklisted = titleBlacklist.some(word => (item.title || '').toLowerCase().includes(word));
@@ -309,15 +341,15 @@ const selectNewArticles = (items, processedStore, channel) => {
           const now = Date.now();
           // Sort by created desc
           const sorted = items.slice().sort((a,b) => {
-            const ac = Number(((a.created_at_ts || 0) * 1000)) || Number((a.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
-            const bc = Number(((b.created_at_ts || 0) * 1000)) || Number((b.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+            const ac = createdAtMsOf(a);
+            const bc = createdAtMsOf(b);
             return bc - ac;
           });
           const picked = [];
           for (const it of sorted) {
             if (picked.length >= allowN) break;
             try {
-              const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+            const createdMs = createdAtMsOf(it);
               if (createdMs && (now - createdMs) > maxAgeMs) continue;
               const key = dedupeKeyForChannel(channel, it.id, familyKey);
               const wasSeen = !!processedStore?.has?.(key);
@@ -348,7 +380,7 @@ const selectNewArticles = (items, processedStore, channel) => {
     const nowTs = Date.now();
     const ageOk = filteredArticles.filter(it => {
       try {
-        const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+        const createdMs = createdAtMsOf(it);
         return !createdMs || (nowTs - createdMs) <= MAX_ITEM_AGE_MS;
       } catch { return true; }
     });
@@ -357,8 +389,8 @@ const selectNewArticles = (items, processedStore, channel) => {
     const cap = totalQ >= Q_HIGH_THRESHOLD ? CAP_WHEN_Q_HIGH : CAP_BASE;
     // sort newest first by created timestamp
     const sorted = ageOk.slice().sort((a,b) => {
-      const ac = Number(((a.created_at_ts || 0) * 1000)) || Number((a.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
-      const bc = Number(((b.created_at_ts || 0) * 1000)) || Number((b.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
+      const ac = createdAtMsOf(a);
+      const bc = createdAtMsOf(b);
       return bc - ac;
     });
     return sorted.slice(0, cap);

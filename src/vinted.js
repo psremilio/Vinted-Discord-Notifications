@@ -1,4 +1,5 @@
 import { request } from 'undici';
+import { normalizeTimestampMs } from './utils/time.js';
 
 export async function fetchVinted(params = {}) {
   const market = (process.env.MARKET || 'de').toLowerCase();
@@ -38,7 +39,7 @@ export async function fetchVinted(params = {}) {
     seller: { name: i.user?.login, rating: i.user?.positive_feedback_count },
     price: i.price?.amount,
     currency: i.price?.currency_code,
-    createdAt: i.created_at_ts ? i.created_at_ts * 1000 : Date.now(),
+    createdAt: normalizeTimestampMs(i.created_at_ts) || Date.now(),
     shipping: i.shipping?.default?.price || null,
   }));
   return items;

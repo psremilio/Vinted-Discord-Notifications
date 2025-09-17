@@ -16,7 +16,8 @@ Recommended ENV
   - `SEARCH_SCHED_CONCURRENCY=16`
   - `SEARCH_SCHED_MAX_CONC=32`
 - Search/Recency (optional)
-  - `RECENT_MAX_MIN=5` (only post items <5min old)
+  - `RECENT_STRICT_MS=300000` (only post items <5min old)
+  - `FORCE_RECENT_MODE=strict` (keep relaxed fallback disabled)
   - `INGEST_MAX_AGE_MS=120000` (cap ingest to ≤2min when RECENT disabled)
   - `SEARCH_HEDGE=1`
   - `SEARCH_CONCURRENCY=24`, `SEARCH_TARGET_RPM=600` (adaptive)
