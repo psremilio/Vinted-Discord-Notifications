@@ -1,7 +1,7 @@
 import { fetchRule, hedgedGet } from "../net/http.js";
 import { buildHeaders } from "../net/headers.js";
 import { handleParams } from "./handle-params.js";
-import { dedupeKeyForChannel } from "../utils/dedupe.js";
+import { dedupeKeyForChannel, ttlMs } from "../utils/dedupe.js";
 import { buildFamilyKeyFromURL, canonicalizeUrl } from "../rules/urlNormalizer.js";
 import { stats } from "../utils/stats.js";
 import { state, markFetchAttempt, markFetchSuccess, markFetchError, recordSoftFail } from "../state.js";
@@ -29,6 +29,7 @@ function computeRecentMs() {
 // avoid flooding the queue with very old items. Use INGEST_DEFAULT_CAP_MS when
 // RECENT filter is disabled.
 const DISABLE_RECENT = String(process.env.DISABLE_RECENT_FILTER || '0') === '1';
+const IGNORE_PROCESSED_BOOT = String(process.env.BOOTSTRAP_IGNORE_PROCESSED || '1') === '1';
 const firstAgeByRule = new Map(); // rule -> number[]
 function recordFirstAge(rule, ms) {
   try {
@@ -148,7 +149,12 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 }
                 // mark old as processed to avoid later posting, but do not return them
                 for (const it of old) {
-                  try { processedStore.set(dedupeKeyForChannel(channel, it.id, familyKey), Date.now()); } catch {}
+                  try {
+                    processedStore.set(dedupeKeyForChannel(channel, it.id, familyKey), Date.now(), { ttl: ttlMs });
+                    if (String(process.env.LOG_LEVEL || '').toLowerCase() === 'debug') {
+                      console.log('[dedupe.mark.old]', 'rule=', channel.channelName, 'item=', it.id, 'ttl_ms=', ttlMs);
+                    }
+                  } catch {}
                 }
                 if (old.length) { try { metrics.fetch_skipped_total.inc(old.length); } catch {} }
                 filtered = fresh;
@@ -242,7 +248,7 @@ const selectNewArticles = (items, processedStore, channel) => {
       // Hard ingest age cap (created_at_ts preferred, else photo.timestamp)
       const tooOldIngest = INGEST_MAX_AGE_MS > 0 && createdMs > 0 && (now - createdMs) > INGEST_MAX_AGE_MS;
       if (tooOldIngest) {
-        try { processedStore?.set?.(key, Date.now(), { ttl: undefined }); } catch {}
+        try { processedStore?.set?.(key, Date.now(), { ttl: ttlMs }); } catch {}
         try { metrics.ingest_dropped_too_old_total?.inc({ rule: String(channel.channelName || '') }); } catch {}
       }
       const titleBlocked = titleBlacklist.some(word => String(title || '').toLowerCase().includes(word));
@@ -292,7 +298,8 @@ const selectNewArticles = (items, processedStore, channel) => {
               const createdMs = Number(((it.created_at_ts || 0) * 1000)) || Number((it.photo?.high_resolution?.timestamp || 0) * 1000) || 0;
               if (createdMs && (now - createdMs) > maxAgeMs) continue;
               const key = dedupeKeyForChannel(channel, it.id, familyKey);
-              if (processedStore?.has?.(key)) continue;
+              const wasSeen = !!processedStore?.has?.(key);
+              if (wasSeen && !IGNORE_PROCESSED_BOOT) continue;
               const isBlacklisted = titleBlacklist.some(word => (it.title || '').toLowerCase().includes(word));
               if (isBlacklisted) continue;
               picked.push(it);
