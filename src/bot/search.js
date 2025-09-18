@@ -271,7 +271,7 @@ const selectNewArticles = (items, processedStore, channel) => {
     : 0; // 30min when recent filter disabled
   const INGEST_MAX_AGE_MS = Math.max(0, Number(process.env.INGEST_MAX_AGE_MS || defaultCap));
   const now = Date.now();
-  const filteredArticles = items.filter((it) => {
+  const acceptArticle = (it) => {
     try {
       const id = it.id;
       const title = it.title;
@@ -317,7 +317,9 @@ const selectNewArticles = (items, processedStore, channel) => {
     } catch {
       return false;
     }
-  });
+  };
+
+  const filteredArticles = items.filter(acceptArticle);
 
   d(`[debug][rule:${channel.channelName}] matches=${filteredArticles.length} ` +
     `firstIds=${filteredArticles.slice(0, 5).map(x => x.id).join(',')}`);
