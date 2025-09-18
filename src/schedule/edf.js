@@ -14,6 +14,8 @@ const SAFE_MODE_LOG_INTERVAL_MS = Math.max(1, Number(process.env.SAFE_MODE_LOG_I
 export class EdfScheduler {
   constructor(runFn) {
     this.runFn = runFn; // async (client, rule)
+    this._lastDispatchAt = 0;
+    this._lastStallLogAt = 0;
     this.rules = new Map(); // name -> { rule, tier, targetMs, nextAt, running, phaseOffset }
     this.timer = null;
     this.client = null;
@@ -77,12 +79,36 @@ export class EdfScheduler {
     this.timer = setInterval(() => this._tick(), 250);
     // light observability
     let lastLog = Date.now();
-    setInterval(() => {
+    const logTimer = setInterval(() => {
       const now = Date.now();
       const ready = Array.from(this.rules.values()).filter(r => !r.running && r.nextAt <= now).length;
       const total = this.rules.size;
       console.log(`[sched.edf.tick] ready=${ready} rules=${total}`);
-    }, 2000).unref?.();
+    }, 2000);
+    logTimer.unref?.();
+
+    // Stall guard: ensure rules eventually dispatch even if timers drift
+    const STALL_SEC = Math.max(5, Number(process.env.SCHED_STALL_RESET_SEC || 20));
+    const stallTimer = setInterval(() => {
+      const nowStall = Date.now();
+      if ((this.inflight || 0) > 0) return;
+      const last = this._lastDispatchAt || 0;
+      if (!last) return;
+      if (nowStall - last > STALL_SEC * 1000) {
+        let bumped = 0;
+        for (const st of this.rules.values()) {
+          if (!st.running && st.nextAt > nowStall) {
+            st.nextAt = nowStall + Math.floor(Math.random() * 200);
+            bumped++;
+          }
+        }
+        if (bumped > 0 && (nowStall - this._lastStallLogAt) > 5000) {
+          this._lastStallLogAt = nowStall;
+          console.warn(`[sched.edf.stall] reset nextAt for ${bumped} rules after ${Math.round((nowStall - last) / 1000)}s idle`);
+        }
+      }
+    }, 1500);
+    stallTimer.unref?.();
   }
 
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
@@ -168,6 +194,7 @@ export class EdfScheduler {
       st.running = true;
       this.inflight++;
       dispatched++;
+      this._lastDispatchAt = Date.now();
       // fire-and-forget; limiter in runFn enforces real concurrency
       const ratio = (()=>{ try { return getRuleSkipRatio(st.rule.channelName); } catch { return 0; } })();
       const thr = Number(process.env.STARVATION_SKIP_RATIO || 0.3);
@@ -193,7 +220,7 @@ export class EdfScheduler {
           this.inflight = Math.max(0, this.inflight - 1);
         });
     }
-    if (dispatched && String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+    if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
       const ready = Array.from(this.rules.values()).filter(r => !r.running && r.nextAt <= Date.now()).length;
       console.log(`[sched.edf.tick] dispatched=${dispatched} inflight=${this.inflight} readyLeft=${ready}`);
     }
