@@ -13,9 +13,12 @@ import path from 'path';
 // }
 
 function parseBucketsCsv(csv) {
-  const nums = String(csv || '')
+  const parts = String(csv || '')
     .split(/[,|;\s]+/)
-    .map(s => Number(s.trim()))
+    .map(s => s.trim())
+    .filter(Boolean);
+  const nums = parts
+    .map(s => Number(s))
     .filter(n => Number.isFinite(n));
   return new Set(nums);
 }
