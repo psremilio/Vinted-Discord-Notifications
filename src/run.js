@@ -16,6 +16,18 @@ import { recordFirstMatch } from "./bot/matchStore.js";
 import { normalizeTimestampMs } from "./utils/time.js";
 import { hadSoftFailRecently } from "./state.js";
 import { learnFromRules } from "./rules/catalogLearn.js";
+const RUN_TIMEOUT_MS = Math.max(3000, Number(process.env.EDF_RUN_TIMEOUT_MS || 15000));
+function withTimeout(promise, ms, tag = '') {
+  let timer;
+  const fail = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`edf-run-timeout:${tag}`)), ms);
+  });
+  return Promise.race([
+    Promise.resolve(promise),
+    fail,
+  ]).finally(() => clearTimeout(timer));
+}
+
 
 // Robust channels store loader with fallback when module missing at runtime
 async function loadChannelsStore() {
@@ -680,7 +692,7 @@ export const runSearch = async (client, channel, opts = {}) => {
 
 // Attach a new search to the scheduler (EDF)
 const edf = new EdfScheduler(async (client, rule) => {
-  await runSearch(client, rule);
+  await withTimeout(runSearch(client, rule), RUN_TIMEOUT_MS, rule?.channelName || '');
 });
 
 const addSearch = (client, search) => {

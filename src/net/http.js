@@ -239,10 +239,19 @@ export async function hedgedGet(url, config = {}, base = BASE) {
   const HEDGE_N = Math.max(1, getHedgeBudget());
   const HEDGE_DELAY = Math.max(0, Number(process.env.HEDGE_DELAY_MS || 200));
   const RETRY_DELAY = Math.max(0, Number(process.env.RETRY_DELAY_MS || 500));
+  const OVERALL_MS = Math.max(3000, Number(process.env.HEDGE_OVERALL_TIMEOUT_MS || process.env.FETCH_TIMEOUT_MS || 8000));
 
   const attempts = [];
   const controllers = [];
   let resolved = false;
+  const overallTimer = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      for (const c of controllers) {
+        try { c.abort?.(); } catch {}
+      }
+    }
+  }, OVERALL_MS);
 
   const host = (() => {
     try { return new URL(url).host; }
@@ -336,26 +345,30 @@ export async function hedgedGet(url, config = {}, base = BASE) {
     });
   }
 
-  for (let i = 0; i < HEDGE_N; i++) {
-    attempts.push(runAttempt(i === 0 ? 0 : i * HEDGE_DELAY));
-  }
-
-  const results = await Promise.all(attempts);
-  const winner = results.find(x => x && x.res);
-  if (winner) return winner.res;
-
   try {
-    const ALLOW = String(process.env.ALLOW_DIRECT_ON_HEDGE_FAIL || process.env.ALLOW_DIRECT || '0') === '1';
-    if (ALLOW) {
-      const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 8000), validateStatus: () => true });
-      const code = Number(res?.status || 0);
-      if (code >= 200 && code < 300) {
-        try { recordOutcome({ ok: true, status: code }); } catch {}
-        return res;
-      }
+    for (let i = 0; i < HEDGE_N; i++) {
+      attempts.push(runAttempt(i === 0 ? 0 : i * HEDGE_DELAY));
     }
-  } catch {}
-  throw new Error('Hedged requests failed');
+
+    const results = await Promise.all(attempts);
+    const winner = results.find(x => x && x.res);
+    if (winner) return winner.res;
+
+    try {
+      const ALLOW = String(process.env.ALLOW_DIRECT_ON_HEDGE_FAIL || process.env.ALLOW_DIRECT || '0') === '1';
+      if (ALLOW) {
+        const res = await axios.get(url, { ...config, proxy: false, timeout: Number(process.env.FETCH_TIMEOUT_MS || 8000), validateStatus: () => true });
+        const code = Number(res?.status || 0);
+        if (code >= 200 && code < 300) {
+          try { recordOutcome({ ok: true, status: code }); } catch {}
+          return res;
+        }
+      }
+    } catch {}
+    throw new Error('Hedged requests failed');
+  } finally {
+    clearTimeout(overallTimer);
+  }
 }
 
 

@@ -21,6 +21,7 @@ export class EdfScheduler {
     this.client = null;
     this.inflight = 0;
     this._lastSafeModeLog = 0;
+    this._stuckResetMs = Math.max(5000, Number(process.env.EDF_STUCK_RESET_MS || 30000));
   }
 
   addRule(client, rule) {
@@ -192,6 +193,7 @@ export class EdfScheduler {
       const st = this._pickReady();
       if (!st) break;
       st.running = true;
+      st._startedAt = Date.now();
       this.inflight++;
       dispatched++;
       this._lastDispatchAt = Date.now();
@@ -203,6 +205,7 @@ export class EdfScheduler {
         .catch(() => {})
         .finally(() => {
           st.running = false;
+          st._startedAt = 0;
           // Next schedule time: optionally use per-rule targetMs to avoid 10s bursts
           const t = Date.now();
           const USE_TARGET = String(process.env.EDF_USE_TARGET_MS || '1') === '1';
@@ -219,6 +222,22 @@ export class EdfScheduler {
           }
           this.inflight = Math.max(0, this.inflight - 1);
         });
+    }
+    const nowCheck = Date.now();
+    for (const st of this.rules.values()) {
+      if (st.running && st._startedAt) {
+        const stuckFor = nowCheck - st._startedAt;
+        if (stuckFor > this._stuckResetMs) {
+          st.running = false;
+          st._startedAt = 0;
+          this.inflight = Math.max(0, this.inflight - 1);
+          st.nextAt = nowCheck + 500;
+          try { metrics.rule_stuck_resets_total?.inc?.(); } catch {}
+          if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
+            console.warn('[sched.edf.stuck]', 'unlocked rule=', st?.rule?.channelName, 'after_ms=', stuckFor);
+          }
+        }
+      }
     }
     if (String(process.env.LOG_LEVEL||'').toLowerCase()==='debug') {
       const ready = Array.from(this.rules.values()).filter(r => !r.running && r.nextAt <= Date.now()).length;

@@ -6,42 +6,116 @@ const STRIP_KEYS = new Set([
   'order', 'sort', 'page', '_t', 'time', 'cursor', 'ref', 'utm_source', 'utm_medium', 'utm_campaign', 'search_id'
 ]);
 const ARRAY_KEYS = new Set([
-  'catalog[]', 'size_ids[]', 'brand_ids[]', 'status_ids[]', 'color_ids[]', 'material_ids[]'
+  'catalog[]', 'catalog_ids[]', 'size_ids[]', 'brand_ids[]', 'status_ids[]', 'color_ids[]', 'material_ids[]'
+]);
+const PRICE_KEYS = new Set([
+  'price_from', 'price_to', 'priceMin', 'priceMax', 'min_price', 'max_price'
+]);
+const VARIANT_KEYS = new Set([
+  'size_ids', 'size_ids[]', 'size_id', 'size',
+  'status_ids', 'status_ids[]', 'status_id', 'status'
 ]);
 
 function normalizeArray(values) {
   return Array.from(new Set(values.filter(Boolean).map(String))).sort();
 }
 
+function normText(v) {
+  return String(v || '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 export function buildParentKey(rawUrl, opts = {}) {
   try {
     const u = new URL(String(rawUrl || ''));
     const params = new URLSearchParams(u.search);
-    // collect into ordered object
-    const norm = {};
-    for (const [k, v] of params.entries()) {
-      if (STRIP_KEYS.has(k)) continue;
-      if (opts.stripPrice && (k === 'price_from' || k === 'price_to')) continue;
-      if (ARRAY_KEYS.has(k)) {
-        norm[k] = norm[k] || [];
-        norm[k].push(v);
+    const norm = new Map();
+    const brandSet = new Set();
+    const catalogSet = new Set();
+    const colorSet = new Set();
+    const materialSet = new Set();
+    let searchText = null;
+
+    const pushCsv = (set, raw) => {
+      String(raw || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .forEach(item => set.add(item));
+    };
+
+    for (const [rawKey, rawVal] of params.entries()) {
+      const key = String(rawKey || '');
+      if (!key) continue;
+      if (STRIP_KEYS.has(key)) continue;
+      const value = String(rawVal || '');
+
+      if (PRICE_KEYS.has(key)) {
+        if (opts.stripPrice === false) {
+          norm.set(key, value);
+        }
+        continue;
+      }
+      if (VARIANT_KEYS.has(key)) continue;
+
+      if (key === 'search_text') {
+        if (!searchText) searchText = normText(value);
+        continue;
+      }
+
+      if (key === 'brand_ids[]' || key === 'brand_ids' || key === 'brand_id' || key === 'brand') {
+        pushCsv(brandSet, value);
+        continue;
+      }
+      if (key === 'catalog[]' || key === 'catalog_ids[]' || key === 'catalog_ids' || key === 'catalog' || key === 'catalog_id') {
+        pushCsv(catalogSet, value);
+        continue;
+      }
+      if (key === 'color_ids[]' || key === 'color_ids') {
+        pushCsv(colorSet, value);
+        continue;
+      }
+      if (key === 'material_ids[]' || key === 'material_ids') {
+        pushCsv(materialSet, value);
+        continue;
+      }
+
+      if (key.endsWith('[]') || ARRAY_KEYS.has(key)) {
+        const arrKey = key;
+        if (!norm.has(arrKey)) norm.set(arrKey, []);
+        norm.get(arrKey).push(value);
       } else {
-        norm[k] = String(v || '');
+        norm.set(key, value);
       }
     }
-    // normalize array keys deterministically
-    for (const k of Object.keys(norm)) {
-      if (ARRAY_KEYS.has(k)) norm[k] = normalizeArray(norm[k]);
+
+    if (brandSet.size) {
+      norm.set('brand_ids[]', normalizeArray([...brandSet]).join(','));
     }
-    // construct a canonical string key
+    if (catalogSet.size) {
+      norm.set('catalog[]', normalizeArray([...catalogSet]).join(','));
+    } else {
+      norm.set('no_catalog', '1');
+    }
+    if (colorSet.size) {
+      norm.set('color_ids[]', normalizeArray([...colorSet]).join(','));
+    }
+    if (materialSet.size) {
+      norm.set('material_ids[]', normalizeArray([...materialSet]).join(','));
+    }
+    if (searchText) norm.set('search_text', searchText);
+
     const parts = [];
-    const keys = Object.keys(norm).sort();
-    for (const k of keys) {
-      const v = norm[k];
-      if (Array.isArray(v)) parts.push(`${k}=${v.join(',')}`);
-      else parts.push(`${k}=${v}`);
+    for (const [key, value] of norm.entries()) {
+      if (Array.isArray(value)) {
+        const arr = normalizeArray(value);
+        if (arr.length) parts.push(`${key}=${arr.join(',')}`);
+      } else {
+        parts.push(`${key}=${value}`);
+      }
     }
-    // include host + pathname to avoid cross-site collisions
+    parts.sort();
     return `${u.host}${u.pathname}?${parts.join('&')}`;
   } catch {
     return String(rawUrl || '');
@@ -49,62 +123,50 @@ export function buildParentKey(rawUrl, opts = {}) {
 }
 
 // Build a structured family/base key from a Vinted search URL by keeping only
-// stable filters that define a family and intentionally ignoring price bounds
-// and volatile params. Kept (sorted): brand_ids[], catalog[]/catalog_ids[],
-// size_ids[], status_ids[], currency. Ignored: price_from, price_to, search_id,
-// page, order, time (and alias 'sort').
+// stable filters that define a family and intentionally ignoring price/size/status
+// variants. Kept (sorted): brand_ids[], catalog[]/catalog_ids[], currency, search_text.
+// Ignored: price_from, price_to, size/status variants, search_id, page, order, time (and alias 'sort').
 export function buildFamilyKey(rawUrl) {
   try {
     const u = new URL(String(rawUrl || ''));
     const params = new URLSearchParams(u.search);
-    // Normalize and collect allowed keys
-    const allowArrKeys = new Map([
-      ['brand_ids[]', []],
-      ['catalog[]', []],
-      ['catalog_ids[]', []],
-      ['size_ids[]', []],
-      ['status_ids[]', []],
-    ]);
+    const brands = new Set();
+    const catalogs = new Set();
     let currency = '';
+    let searchText = '';
+
+    const pushCsv = (set, raw) => {
+      String(raw || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .forEach(item => set.add(item));
+    };
+
     for (const [k, v] of params.entries()) {
-      const kk = String(k);
-      if (kk === 'price_from' || kk === 'price_to' || kk === 'search_id' || kk === 'page' || kk === 'order' || kk === 'time' || kk === 'sort') {
+      const key = String(k);
+      if (key === 'brand_ids[]' || key === 'brand_ids' || key === 'brand_id' || key === 'brand') {
+        pushCsv(brands, v);
         continue;
       }
-      if (allowArrKeys.has(kk)) {
-        allowArrKeys.get(kk).push(String(v || ''));
-      } else if (kk === 'currency') {
+      if (key === 'catalog[]' || key === 'catalog_ids[]' || key === 'catalog_ids' || key === 'catalog' || key === 'catalog_id') {
+        pushCsv(catalogs, v);
+        continue;
+      }
+      if (key === 'currency') {
         currency = String(v || '').toUpperCase();
+        continue;
+      }
+      if (key === 'search_text' || key === 'text') {
+        if (!searchText) searchText = normText(v);
       }
     }
-    // Also support CSV variants (e.g., brand_ids=1,2,3; catalog_ids=...; size_ids=...; status_ids=...; catalog=...)
-    const csv = (key) => String(params.get(key) || '')
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-    // Normalize arrays: merge catalog variants into a single logical field
-    const brands = normalizeArray([
-      ...allowArrKeys.get('brand_ids[]'),
-      ...csv('brand_ids'),
-    ]);
-    const catsA = normalizeArray(allowArrKeys.get('catalog[]'));
-    const catsB = normalizeArray(allowArrKeys.get('catalog_ids[]'));
-    const catsCsv = normalizeArray(csv('catalog_ids').length ? csv('catalog_ids') : csv('catalog'));
-    const catalogs = normalizeArray([...(catsA || []), ...(catsB || []), ...(catsCsv || [])]);
-    const sizes = normalizeArray([
-      ...allowArrKeys.get('size_ids[]'),
-      ...csv('size_ids'),
-    ]);
-    const statuses = normalizeArray([
-      ...allowArrKeys.get('status_ids[]'),
-      ...csv('status_ids'),
-    ]);
+
     const parts = [];
-    if (brands.length) parts.push(`brand_ids[]=${brands.join(',')}`);
-    if (catalogs.length) parts.push(`catalog[]=${catalogs.join(',')}`); else parts.push('no_catalog=1');
-    if (sizes.length) parts.push(`size_ids[]=${sizes.join(',')}`);
-    if (statuses.length) parts.push(`status_ids[]=${statuses.join(',')}`);
+    if (brands.size) parts.push(`brand_ids[]=${normalizeArray([...brands]).join(',')}`);
+    if (catalogs.size) parts.push(`catalog[]=${normalizeArray([...catalogs]).join(',')}`); else parts.push('no_catalog=1');
     if (currency) parts.push(`currency=${currency}`);
+    if (searchText) parts.push(`search_text=${searchText}`);
     return `${u.host}${u.pathname}?${parts.join('&')}`;
   } catch { return String(rawUrl || ''); }
 }
