@@ -382,9 +382,10 @@ const selectNewArticles = (items, processedStore, channel) => {
   try {
     const defaultMaxItemAge = Math.max(0, RECENT_MAX_MIN) * 60_000 || 60_000;
     const MAX_ITEM_AGE_MS = Math.max(0, Number(process.env.MAX_ITEM_AGE_MS || defaultMaxItemAge));
-    const CAP_BASE = Math.max(1, Number(process.env.CAP_BASE || 999));
-    const CAP_WHEN_Q_HIGH = Math.max(1, Number(process.env.CAP_WHEN_Q_HIGH || 15));
-    const Q_HIGH_THRESHOLD = Math.max(0, Number(process.env.Q_HIGH_THRESHOLD || 800));
+    const CAP_BASE = Math.max(1, Number(process.env.CAP_BASE || 12));
+    const CAP_WHEN_Q_HIGH = Math.max(1, Number(process.env.CAP_WHEN_Q_HIGH || 5));
+    const Q_HIGH_THRESHOLD = Math.max(0, Number(process.env.Q_HIGH_THRESHOLD || 200));
+    const BOOTSTRAP_CAP = Math.max(1, Number(process.env.BOOTSTRAP_CAP || 6));
     // filter by max item age (created_at or photo timestamp)
     const nowTs = Date.now();
     const ageOk = filteredArticles.filter(it => {
@@ -395,7 +396,11 @@ const selectNewArticles = (items, processedStore, channel) => {
     });
     // determine queue depth
     let totalQ = 0; try { totalQ = Number(metrics.discord_queue_depth?.get?.() || 0); } catch {}
-    const cap = totalQ >= Q_HIGH_THRESHOLD ? CAP_WHEN_Q_HIGH : CAP_BASE;
+    let cap = totalQ >= Q_HIGH_THRESHOLD ? CAP_WHEN_Q_HIGH : CAP_BASE;
+    if (!state.lastPostAt) {
+      // During bootstrap, clamp fanout to avoid flooding Discord with backlogs
+      cap = Math.min(cap, BOOTSTRAP_CAP);
+    }
     // sort newest first by created timestamp
     const sorted = ageOk.slice().sort((a,b) => {
       const ac = createdAtMsOf(a);
