@@ -201,18 +201,38 @@ async function fetchJson(url, { signal, locale } = {}) {
 }
 
 async function withHardDeadline(fn, hardMs, label) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => {
-    try {
-      controller.abort(new Error('HARD_DEADLINE_EXCEEDED'));
-    } catch {}
-  }, hardMs);
   const start = Date.now();
+  const parsed = Number(hardMs);
+  const deadlineMs = Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+  const controller = new AbortController();
+  let timeoutId = null;
+  let timedOut = false;
+  const timeoutErr = new Error('HARD_DEADLINE_EXCEEDED');
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      try { controller.abort(timeoutErr); } catch {}
+      reject(timeoutErr);
+    }, deadlineMs);
+  });
+  const fnPromise = (async () => {
+    try {
+      return await fn(controller.signal);
+    } catch (err) {
+      if (timedOut && (err === timeoutErr || err?.name === 'AbortError' || err?.message === timeoutErr.message)) {
+        throw timeoutErr;
+      }
+      throw err;
+    }
+  })();
   try {
-    return await fn(controller.signal);
+    return await Promise.race([fnPromise, timeoutPromise]);
   } finally {
-    clearTimeout(timer);
-    metrics.observe(label, Date.now() - start);
+    if (timeoutId !== null) clearTimeout(timeoutId);
+    try { metrics.observe(label, Date.now() - start); } catch {}
+    if (timedOut) {
+      fnPromise.catch(() => {});
+    }
   }
 }
 
