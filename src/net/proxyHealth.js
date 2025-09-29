@@ -15,14 +15,14 @@ const CHECK_TIMEOUT_MS = PROXY_TEST_TIMEOUT_MS > 0 ? Math.max(1000, PROXY_TEST_T
 const PROXY_TEST_RETRIES = Math.max(0, Number(process.env.PROXY_TEST_RETRIES || 0));
 const PROXY_TEST_BACKOFF_MS = Math.max(100, Number(process.env.PROXY_TEST_BACKOFF_MS || 1000));
 const PROXY_TEST_BACKOFF_MAX_MS = Math.max(PROXY_TEST_BACKOFF_MS, Number(process.env.PROXY_TEST_BACKOFF_MAX_MS || 10000));
-const COOLDOWN_MIN = Number(process.env.PROXY_COOLDOWN_MIN || process.env.COOLDOWN_MIN || 30);
-const FAIL_MAX = Number(process.env.PROXY_FAIL_MAX || 3);
-const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 40);
-const REQUESTS_PER_PROXY_PER_MIN = Number(process.env.REQUESTS_PER_PROXY_PER_MIN || 8);
-const SCORE_DECAY_SEC = Number(process.env.PROXY_SCORE_DECAY_SEC || 900);
-const FAIL_RATE_WINDOW_MS = Math.max(30_000, Number(process.env.PROXY_FAIL_WINDOW_MS || 60_000));
-const FAIL403_RATE_THR = Math.min(1, Math.max(0, Number(process.env.PROXY_FAIL403_RATE_THR || 0.2)));
-const FAILTLS_RATE_THR = Math.min(1, Math.max(0, Number(process.env.PROXY_FAILTLS_RATE_THR || 0.1)));
+const COOLDOWN_MIN = Number(process.env.PROXY_COOLDOWN_MIN || process.env.COOLDOWN_MIN || 15);
+const FAIL_MAX = Number(process.env.PROXY_FAIL_MAX || 4);
+const WARMUP_MIN = Number(process.env.PROXY_WARMUP_MIN || 25);
+const REQUESTS_PER_PROXY_PER_MIN = Number(process.env.REQUESTS_PER_PROXY_PER_MIN || 12);
+const SCORE_DECAY_SEC = Number(process.env.PROXY_SCORE_DECAY_SEC || 600);
+const FAIL_RATE_WINDOW_MS = Math.max(30_000, Number(process.env.PROXY_FAIL_WINDOW_MS || 45_000));
+const FAIL403_RATE_THR = Math.min(1, Math.max(0, Number(process.env.PROXY_FAIL403_RATE_THR || 0.3)));
+const FAILTLS_RATE_THR = Math.min(1, Math.max(0, Number(process.env.PROXY_FAILTLS_RATE_THR || 0.15)));
 
 function boolEnv(name, def = false) {
   const raw = process.env[name];
@@ -34,11 +34,14 @@ function boolEnv(name, def = false) {
 }
 
 const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-  "Mozilla/5.0 (X11; Linux x86_64; rv:126.0) Gecko/20100101 Firefox/126.0",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0"
 ];
-function pickUserAgent() {
+export function pickUserAgent() {
   if (!USER_AGENTS.length) return "Mozilla/5.0";
   const idx = Math.floor(Math.random() * USER_AGENTS.length);
   return USER_AGENTS[idx] || USER_AGENTS[0];
@@ -615,5 +618,6 @@ export function getProxyScores() {
   for (const [p, st] of healthyMap.entries()) out[p] = st?.score || 0;
   return out;
 }
+
 
 

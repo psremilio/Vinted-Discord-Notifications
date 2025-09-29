@@ -1,5 +1,5 @@
 import { fetchRule, hedgedGet } from "../net/http.js";
-import { buildHeaders } from "../net/headers.js";
+import { getHeaders } from "../net/headers.js";
 import { handleParams } from "./handle-params.js";
 import { dedupeKeyForChannel, ttlMs } from "../utils/dedupe.js";
 import { buildFamilyKeyFromURL, canonicalizeUrl } from "../rules/urlNormalizer.js";
@@ -125,7 +125,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             // Enable hedged requests by default to cut tail latency across proxies
             const USE_HEDGE = String(process.env.SEARCH_HEDGE || '1') === '1';
             // Build headers lazily so each request reuses the proxied session (no legacy tokens.ensure())
-            const requestConfig = () => ({ headers: buildHeaders(undefined, channel.url, `https://${url.host}`) });
+            const requestConfig = () => ({ headers: getHeaders(url.host, { referer: channel.url, origin: `https://${url.host}` }) });
             let result;
             if (USE_HEDGE) {
               try {
@@ -145,7 +145,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
             }
             if (result?.skipped) return [];
             if (result?.softFail) {
-              // soft failure counted by controller → no retry within this page
+              // soft failure counted by controller -> no retry within this page
               try { recordSoftFail(channel.channelName); } catch {}
               return [];
             }
@@ -161,7 +161,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
               markFetchSuccess(dur, res.status);
               // Optional bypass to test posting end-to-end
               if (String(process.env.DEBUG_ALLOW_ALL || '0') === '1') {
-                d(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 → bypass filters`);
+                d(`[debug][rule:${channel.channelName}] DEBUG_ALLOW_ALL=1 -> bypass filters`);
                 return items;
               }
               let filtered = selectNewArticles(items, processedStore, channel);
@@ -233,7 +233,7 @@ export const vintedSearch = async (channel, processedStore, { backfillPages = 1 
                 stats.s4xx += 1;
                 throw new Error(`HTTP ${res.status}`);
             } else {
-                // Server errors (5xx) or other issues → count & retry
+                // Server errors (5xx) or other issues -> count & retry
                 stats.s5xx += 1;
                 throw new Error(`HTTP ${res.status}`);
             }
