@@ -1,0 +1,20 @@
+services:
+  bot:
+    environment:
+      CHANNELS_PATH: /data/channels.json
+      # Optional toggles for smoke-testing; comment out when not needed.
+      # RECENT_MODE: relaxed
+      # RECENT_MAX_MIN: "10"
+      # DEBUG_ALLOW_ALL: "1"
+      # FETCH_TIMEOUT_MS: "3500"
+      # HEDGE_REQUESTS: "2"
+      # HEDGE_DELAY_MS: "200"
+      # SEARCH_SCHED_CONCURRENCY: "24"
+    volumes:
+      - botdata:/data
+      - ./config/channels.json:/config/channels.json:ro
+    restart: unless-stopped
+
+volumes:
+  botdata:
+    external: true
