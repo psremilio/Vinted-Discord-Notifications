@@ -47,8 +47,15 @@ import { scheduleEnsureLoop } from './src/discord/webhookEnsure.js';
 import { startLocalPoster } from './src/poster/localPoster.js';
 import { buildChannelsStore } from './src/bootstrap/channels.js';
 import { ensureBucket as ensureSearchBucket } from './src/utils/limiter.js';
+import { startPushIngest } from './src/ingest/index.js';
 
 dotenv.config();
+const __INGEST_MODE = String(process.env.INGEST_MODE || 'polling').trim().toLowerCase();
+const MODE = ['push', 'polling', 'hybrid'].includes(__INGEST_MODE) ? __INGEST_MODE : 'polling';
+const PUSH_ENABLED = MODE === 'push' || MODE === 'hybrid';
+const POLLING_ENABLED = MODE === 'polling' || MODE === 'hybrid';
+try { console.log('[mode] ingest=' + MODE); } catch {}
+
 
 // Boot marker: verify correct entry file is running
 try { console.log('[BOOT] entry', import.meta.url, 'ts=', new Date().toISOString()); } catch {}
@@ -61,7 +68,7 @@ function logEnvReadiness() {
     const proxyViaFile = !!process.env.PROXY_LIST_FILE;
     const proxyViaPS = !!(process.env.PS_API_KEY && process.env.SERVICE_ID);
     const proxyMode = proxyViaUrl ? 'URL' : proxyViaFile ? 'FILE' : proxyViaPS ? 'PS_API' : 'NONE';
-    console.log(`[env] BOT_TOKEN=${hasToken ? 'set' : 'missing'} | proxies=${proxyMode}`);
+    console.log(`[env] BOT_TOKEN=${hasToken ? 'set' : 'missing'} | proxies=${proxyMode} | ingest=${MODE}`);
   } catch {}
 }
 logEnvReadiness();
@@ -249,7 +256,11 @@ async function startMonitorsOnce(where = 'unknown'){
   if (monitorsStarted) return;
   if (!clientReady) return;
   monitorsStarted = true;
-  console.log(`[start] launching monitors/search… (from=${where}, healthy=${healthyCount?.() ?? 'n/a'})`);
+  console.log(`[start] mode=${MODE} launching ingest (from=${where}, healthy=${healthyCount?.() ?? 'n/a'})`);
+  if (!POLLING_ENABLED) {
+    console.log('[start] polling pipeline disabled (INGEST_MODE=push)');
+    return;
+  }
   try {
     const WAIT = String(process.env.WAIT_HEALTHY_START || '1') === '1';
     if (WAIT) {
@@ -333,6 +344,9 @@ async function onClientReady() {
   } catch (e) {
     console.warn('[localPoster.init] failed:', e?.message || e);
   }
+  if (PUSH_ENABLED) {
+    try { startPushIngest(client); } catch (e) { console.warn('[push.ingest.init] failed:', e?.message || e); }
+  }
 }
 const readyEvent = Events?.ClientReady ?? 'ready';
 client.once(readyEvent, onClientReady);
@@ -348,23 +362,28 @@ client.on('interactionCreate',interaction=>{
 
 (async function boot(){
   // Kick off proxy setup in parallel to avoid long pre-login stalls
-  try { await whitelistCurrentEgressIP(); } catch {}
-  try {
-    const list = await ensureProxyPool(console);
-    const min = Math.max(0, Number(process.env.MIN_PROXIES_AT_BOOT || 5));
-    if (Array.isArray(list)) {
-      console.log(`[proxy.boot] pool ready: ${list.length} proxies`);
-      if (min > 0 && list.length < min) {
-        console.error(`[proxy.boot] insufficient proxies (${list.length} < ${min}) — check PROXY_LIST_URL(S) or provider; refusing DIRECT fallback`);
-        process.exit(1);
+  let poolInit = Promise.resolve();
+  if (POLLING_ENABLED) {
+    try { await whitelistCurrentEgressIP(); } catch {}
+    try {
+      const list = await ensureProxyPool(console);
+      const min = Math.max(0, Number(process.env.MIN_PROXIES_AT_BOOT || 5));
+      if (Array.isArray(list)) {
+        console.log(`[proxy.boot] pool ready: ${list.length} proxies`);
+        if (min > 0 && list.length < min) {
+          console.error(`[proxy.boot] insufficient proxies (${list.length} < ${min}) — check PROXY_LIST_URL(S) or provider; refusing DIRECT fallback`);
+          process.exit(1);
+        }
       }
-    }
-  } catch (e) { console.error('[proxy.boot] failed:', e?.message || e); process.exit(1); }
-  try { scheduleProxyRefresh(console); } catch {}
-  const poolInit = initProxyPool().catch(err => {
-    console.error('[proxy.init] failed:', err?.message || err);
-    process.exit(1);
-  });
+    } catch (e) { console.error('[proxy.boot] failed:', e?.message || e); process.exit(1); }
+    try { scheduleProxyRefresh(console); } catch {}
+    poolInit = initProxyPool().catch(err => {
+      console.error('[proxy.init] failed:', err?.message || err);
+      process.exit(1);
+    });
+  } else {
+    try { console.log(`[proxy.boot] skipping proxy init (INGEST_MODE=${MODE})`); } catch {}
+  }
   const DEADLINE_SEC = Number(process.env.STARTUP_DEADLINE_SEC || 60);
   const t0 = Date.now();
 
@@ -390,7 +409,7 @@ client.on('interactionCreate',interaction=>{
     }
   }, DEADLINE_SEC * 1000);
   try { startLoopLagMonitor(1000); } catch {}
-  startStallDetector();
+  if (POLLING_ENABLED) { startStallDetector(); }
 })();
 
 function isHealthy() {
